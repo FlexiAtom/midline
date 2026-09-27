@@ -110,7 +110,8 @@ pub struct Battle {
     pub starter_pile: u32,
     pub discard_pile: Vec<CardInst>,
     pub enemy_hand: Vec<CardInst>,
-    pub enemy_pile: Vec<CardDef>,
+    pub enemy_pile: Vec<CardInst>,
+    pub e_discard: Vec<CardInst>,
 
     pub pf: SideFlags,
     pub ef: SideFlags,
@@ -166,8 +167,11 @@ impl Battle {
                 draw_pile.extend(pool.into_iter().take(need).map(|d| mk(&mut id, &mut rng, d, true)));
             }
         }
-        let mut enemy_pile: Vec<CardDef> = faction_cards(enemy_faction)[1..].to_vec();
-        rng.shuffle(&mut enemy_pile);
+        let mut enemy_pile: Vec<CardInst> = {
+            let mut defs: Vec<CardDef> = faction_cards(enemy_faction)[1..].to_vec();
+            rng.shuffle(&mut defs);
+            defs.into_iter().map(|d| mk(&mut id, &mut rng, d, true)).collect()
+        };
 
         let p_starter = mk(&mut id, &mut rng, faction_cards(player_faction)[0], false);
         let e_starter = mk(&mut id, &mut rng, faction_cards(enemy_faction)[0], false);
@@ -175,15 +179,14 @@ impl Battle {
         let mut hand = vec![p_starter];
         for _ in 0..3 {
             if !draw_pile.is_empty() {
-                let i = rng.below(draw_pile.len());
-                hand.push(draw_pile.remove(i));
+                hand.push(draw_pile.remove(0)); // 开局手牌按继承堆顺序取（裁定11）
             }
         }
         let mut enemy_hand = vec![e_starter];
         for _ in 0..3 {
             if !enemy_pile.is_empty() {
                 let i = rng.below(enemy_pile.len());
-                enemy_hand.push(mk(&mut id, &mut rng, enemy_pile.remove(i), true));
+                enemy_hand.push(enemy_pile.remove(i));
             }
         }
 
@@ -213,6 +216,7 @@ impl Battle {
             discard_pile: Vec::new(),
             enemy_hand,
             enemy_pile,
+            e_discard: Vec::new(),
             pf: SideFlags { manual_draws: 2, starter_draws: 1, ..Default::default() },
             ef: SideFlags { manual_draws: 2, starter_draws: 1, ..Default::default() },
             karma_penalty_next: 0,
@@ -243,8 +247,12 @@ impl Battle {
         self.hand.push(c);
         while self.hand.len() > HAND_LIMIT {
             let old = self.hand.remove(0);
-            self.log.push(format!("手牌溢出8张，弃置最早的 {}", short_card(&old)));
-            self.discard_pile.push(old);
+            if old.crafted {
+                self.log.push(format!("手牌溢出8张：自造牌 {} 被弃永久消失", short_card(&old)));
+            } else {
+                self.log.push(format!("手牌溢出8张，弃置最早的 {}（弃牌堆，下关回归）", short_card(&old)));
+                self.discard_pile.push(old);
+            }
         }
     }
 
@@ -259,8 +267,7 @@ impl Battle {
         }
         self.karma_penalty_next = 0;
         if !self.draw_pile.is_empty() {
-            let i = self.rng.below(self.draw_pile.len());
-            let mut c = self.draw_pile.remove(i);
+            let mut c = self.draw_pile.remove(0); // 堆顶抽取，继承堆顺序有意义（裁定11）
             if c.skills.is_empty() && !c.is_starter() {
                 let pool = Skill::list();
                 let s = pool[self.rng.below(pool.len())];
@@ -318,8 +325,7 @@ impl Battle {
                 return Err("继承堆已空，只能从开端堆抽牌".into());
             }
             self.pf.manual_draws -= 1;
-            let i = self.rng.below(self.draw_pile.len());
-            let mut c = self.draw_pile.remove(i);
+            let mut c = self.draw_pile.remove(0); // 堆顶抽取（裁定11）
             if c.skills.is_empty() && !c.is_starter() {
                 let pool = Skill::list();
                 let s = pool[self.rng.below(pool.len())];
@@ -349,10 +355,18 @@ impl Battle {
         Ok(())
     }
 
-    /// 手牌献祭：不受在场限制、不消耗每回合献祭次数（§四 手牌献祭）。
+    /// 手牌献祭：不受在场限制；次数豁免**只适用开端**（裁定10，人裁定 2026-09-28）——
+    /// 普通手牌献祭仍占每回合1次额度。
     pub fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {
         if idx >= self.hand.len() {
             return Err("手牌下标越界".into());
+        }
+        let is_starter = self.hand[idx].is_starter();
+        if !is_starter {
+            if self.pf.sacrifice_used {
+                return Err("本回合献祭次数已用完（每回合最多1次，开端手牌献祭除外）".into());
+            }
+            self.pf.sacrifice_used = true;
         }
         let c = self.hand.remove(idx);
         self.pf.sacrificed_names.push(c.def.name);
@@ -586,7 +600,7 @@ impl Battle {
                     self.over = Some(Outcome::PlayerWin);
                 }
             }
-            self.attacker_aftermath(&mut atk, col, SideK::Player);
+            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Player);
             let atk_dead = atk.hp <= 0;
             self.p_front[col] = Some(atk);
             if let Some(dcol) = target {
@@ -609,9 +623,7 @@ impl Battle {
     fn enemy_turn(&mut self) {
         if !self.enemy_pile.is_empty() {
             let i = self.rng.below(self.enemy_pile.len());
-            let def = self.enemy_pile[i];
-            self.enemy_pile.remove(i);
-            let c = self.make_card(def, true);
+            let c = self.enemy_pile.remove(i);
             self.enemy_hand.push(c);
         }
         self.ef.sacrifice_used = false;
@@ -649,7 +661,7 @@ impl Battle {
                     candle_d += dmg;
                 }
             }
-            self.attacker_aftermath(&mut atk, col, SideK::Enemy);
+            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Enemy);
             let atk_dead = atk.hp <= 0;
             self.e_front[col] = Some(atk);
             if atk_dead {
@@ -802,6 +814,9 @@ impl Battle {
 
     // ---------- 死亡统一入口 ----------
 
+    /// 死亡统一入口。去向路由（裁定7）：
+    /// 开端 → 离场（每关固定发放，永不入堆）；自造牌 → 永久消失（§十372）；
+    /// 其余基础牌 → 弃牌堆，本关不再使用，下关并入继承堆（使返还递减跨关可达）。
     pub fn on_death(&mut self, mut c: CardInst, side: SideK, col: Option<usize>, cause: DeathCause) {
         let gain = match cause {
             DeathCause::Sacrifice => {
@@ -837,6 +852,20 @@ impl Battle {
             }
         }
         c.flame = 0;
+        c.seq = 0;
+        c.placed_turn = i64::MIN;
+        c.triggered_turn = i64::MIN;
+        let recycle = !c.is_starter() && !c.crafted;
+        match (side, recycle) {
+            (SideK::Player, true) => self.discard_pile.push(c),
+            (SideK::Enemy, true) => self.e_discard.push(c),
+            (SideK::Player, false) => {
+                if c.crafted {
+                    self.log.push(format!("  自造牌 {} 永久消失", c.def.name));
+                }
+            }
+            (SideK::Enemy, false) => {}
+        }
         self.check_all_triggers();
     }
 
@@ -926,6 +955,7 @@ impl Battle {
         self.attack_power(side, atk_id, acol, None, base)
     }
 
+    /// 攻击后追加结算。`col` = 目标列（直击中线时回退为攻击者列）——§八"攻击后对同列+1"锚定目标列。
     fn attacker_aftermath(&mut self, atk: &mut CardInst, col: usize, side: SideK) {
         match atk.def.tr {
             TraitKind::SelfFlameOnAttack1 => atk.flame += 1,
@@ -1074,11 +1104,13 @@ impl Battle {
 
     // ---------- 对外视图（CLI/AI） ----------
 
-    /// 跨关继承 = 上一关剩余：未阵亡的场上卡 + 手牌 + 牌堆未抽部分。
+    /// 跨关继承 = 上一关剩余：场上未阵亡 + 手牌 + 牌堆未抽 + 弃牌堆基础牌；开端不入堆（§五185/§十382）。
     pub fn battle_survivors(&mut self) -> Vec<CardInst> {
         let mut v = std::mem::take(&mut self.draw_pile);
         v.extend(std::mem::take(&mut self.hand));
         v.extend(self.p_front.iter_mut().map(|s| s.take()).flatten());
+        v.extend(std::mem::take(&mut self.discard_pile));
+        v.retain(|c| !c.is_starter());
         v
     }
 }
@@ -1198,5 +1230,92 @@ mod rule_tests {
         let f = b.p_front[1].as_ref().unwrap();
         assert_eq!(f.flame, 6, "12-6=6 溢出保留，本回合不再触发");
         assert_eq!(f.triggered_turn, b.turn);
+    }
+
+    #[test]
+    fn death_ladder_observable_via_recycle() {
+        let mut b = fresh_battle();
+        let c = CardInst::new(911, faction_cards(Faction::Ember)[8]); // 雷烬 4费
+        b.on_death(c, SideK::Player, Some(0), DeathCause::Battle);
+        assert_eq!(b.p_karma, 4, "第一次死亡 100%");
+        let returned = b.discard_pile.pop().expect("基础牌阵亡应进弃牌堆");
+        assert_eq!(returned.deaths, 1);
+        assert_eq!(returned.flame, 0, "死亡业火清零");
+        let before = b.p_karma;
+        b.on_death(returned, SideK::Player, Some(0), DeathCause::Battle);
+        assert_eq!(b.p_karma - before, 2, "同一实例第二次死亡→50%（§三91行）");
+        assert_eq!(b.discard_pile.pop().unwrap().deaths, 2);
+    }
+
+    #[test]
+    fn starter_and_crafted_never_recycle() {
+        let mut b = fresh_battle();
+        b.on_death(CardInst::new(912, crate::model::STARTER), SideK::Player, Some(0), DeathCause::Battle);
+        assert_eq!(b.p_karma, 2, "开端死亡定额2");
+        assert!(b.discard_pile.is_empty(), "开端离场不入任何堆");
+        let mut fused = CardInst::new(913, faction_cards(Faction::Ember)[3]);
+        fused.crafted = true;
+        let k0 = b.p_karma;
+        b.on_death(fused, SideK::Player, Some(0), DeathCause::Battle);
+        assert_eq!(b.p_karma, k0 + 3, "自造牌死亡返还照给（3费100%）");
+        assert!(b.discard_pile.is_empty(), "自造牌阵亡永久消失（§十372）");
+    }
+
+    #[test]
+    fn sacrifice_recycles_without_decay() {
+        let mut b = fresh_battle();
+        let mut c = CardInst::new(914, faction_cards(Faction::Ember)[8]);
+        c.deaths = 1;
+        let k0 = b.p_karma;
+        b.on_death(c, SideK::Player, None, DeathCause::Sacrifice);
+        assert_eq!(b.p_karma - k0, 4, "献祭全额");
+        let d = &b.discard_pile[0];
+        assert_eq!(d.deaths, 1, "献祭不使死亡计数+1（返还互斥递减，§三100行）");
+    }
+
+    #[test]
+    fn hand_sacrifice_quota_only_starter_exempt() {
+        let mut b = fresh_battle();
+        let st = b.hand.iter().position(|c| c.is_starter()).expect("手牌应有开端");
+        assert!(b.player_sacrifice_hand(st).is_ok());
+        assert!(!b.pf.sacrifice_used, "开端手牌献祭不占额度（裁定10）");
+        b.hand.push(CardInst::new(950, faction_cards(Faction::Ember)[1]));
+        let i = b.hand.len() - 1;
+        assert!(b.player_sacrifice_hand(i).is_ok());
+        assert!(b.pf.sacrifice_used, "普通手牌献祭占每回合1次额度");
+        b.hand.push(CardInst::new(951, faction_cards(Faction::Ember)[2]));
+        let j = b.hand.len() - 1;
+        assert!(b.player_sacrifice_hand(j).is_err(), "额度用尽后普通手牌献祭应被拒");
+        b.hand.push(CardInst::new(952, crate::model::STARTER));
+        assert!(b.player_sacrifice_hand(b.hand.len() - 1).is_ok(), "开端豁免不受额度影响");
+    }
+
+    #[test]
+    fn draw_is_from_top_of_pile() {
+        let mut b = fresh_battle();
+        let expect_id = b.draw_pile[0].id;
+        b.pf.manual_draws = 1;
+        b.action_draw(false).unwrap();
+        assert_eq!(b.hand.last().unwrap().id, expect_id, "继承堆顺序决定抽牌（裁定11）");
+    }
+
+    #[test]
+    fn adjacent_attack_flame_skill_follows_target_col() {
+        // §八技能2（292行）：攻击后**目标**同列+1业火（s06-24 修复回归）
+        let mut b = fresh_battle();
+        let mut atk = CardInst::new(960, faction_cards(Faction::Ember)[2]); // 引燃者 可攻击相邻列
+        atk.skills.push(Skill::AtkSameColFlame1);
+        atk.seq = b.seq;
+        b.seq += 1;
+        b.p_front[0] = Some(atk); // hp3，col0 无敌前排 → 相邻列攻击 col1
+        let mut guard = CardInst::new(961, faction_cards(Faction::Frost)[1]);
+        guard.seq = b.seq;
+        b.seq += 1;
+        guard.hp = 9;
+        b.e_front[1] = Some(guard);
+        b.player_attack_phase();
+        let g = b.e_front[1].as_ref().expect("守卫应存活");
+        assert_eq!(g.flame, 3 + 1, "伤害3 + 技能2对目标列+1");
+        assert_eq!(b.p_front[0].as_ref().unwrap().flame, 0, "攻击者自身列不应吃到+1");
     }
 }

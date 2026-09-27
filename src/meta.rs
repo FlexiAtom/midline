@@ -136,8 +136,9 @@ fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) {
     }
 }
 
-/// 准备/结算阶段命令循环：查看/融合/升级（结算限定）/弃置/go。
+/// 准备/结算阶段命令循环：查看/融合/升级（结算限定，每通关限1张）/弃置/排序/go。
 fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool) {
+    let mut up_used = false;
     loop {
         println!("继承堆（{}张）：", inherit.len());
         for (i, c) in inherit.iter().enumerate() {
@@ -150,9 +151,12 @@ fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool)
             );
         }
         if post_battle {
-            println!("（可保留业力 {karma}：fuse <主> <副>；up <idx> power|thr|skill；drop <idx>；go）");
+            println!(
+                "（可保留业力 {karma}：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张{}）；drop <idx>；move <从> <到>；go）",
+                if up_used { "已用完" } else { "余1" }
+            );
         } else {
-            println!("（准备阶段：可 fuse/drop 后 go；go 直接开战）");
+            println!("（准备阶段：可 fuse/drop/move 后 go；go 直接开战）");
         }
         print!("> ");
         use std::io::Write;
@@ -178,13 +182,30 @@ fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool)
                     println!("✖ 下标无效");
                 }
             }
+            "move" if parts.len() == 3 => {
+                let (from, to) = (parse_idx(parts[1]), parse_idx(parts[2]));
+                if from < inherit.len() && to < inherit.len() {
+                    let c = inherit.remove(from);
+                    inherit.insert(to, c);
+                    println!("✓ 排序：第{from}位 → 第{to}位（抽牌从堆顶起）");
+                } else {
+                    println!("✖ 下标无效");
+                }
+            }
             "up" if parts.len() == 3 => {
                 if !post_battle {
                     println!("✖ 升级是通关奖励，仅结算阶段可用");
                     continue;
                 }
+                if up_used {
+                    println!("✖ 每次通关只能升级1张（§十一/§廿二1004）");
+                    continue;
+                }
                 match upgrade_card(inherit, parse_idx(parts[1]), parts[2]) {
-                    Ok(msg) => println!("✓ {msg}"),
+                    Ok(msg) => {
+                        up_used = true;
+                        println!("✓ {msg}");
+                    }
                     Err(e) => println!("✖ {e}"),
                 }
             }
@@ -216,6 +237,7 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
     for sk in s.skills {
         m.skills.push(sk); // 同名技能叠加
     }
+    m.crafted = true; // 自造牌：任何离场永久消失（§十372）
     Ok(format!("{} 吸收副牌「{}」的{n}个技能 → {}", m.def.name, s.def.name, short_card(m)))
 }
 
@@ -228,7 +250,10 @@ fn upgrade_card(inherit: &mut Vec<CardInst>, idx: usize, kind: &str) -> Result<S
         return Err("该牌已达升级上限3次".into());
     }
     match kind {
-        "power" => c.def.power += 1,
+        "power" => {
+            c.def.power += 1;
+            c.hp = c.def.power; // 升级即时可见（每关本就重置满格）
+        }
         "thr" => c.def.threshold = (c.def.threshold - 1).max(1),
         "skill" => {
             let pool = Skill::list();
@@ -362,7 +387,7 @@ mod meta_tests {
     }
 
     #[test]
-    fn survivors_are_all_undefeated_cards() {
+    fn survivors_are_all_undefeated_cards_no_starters() {
         let mut b = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
         for i in 0..4u64 {
             let mut c = CardInst::new(50 + i, faction_cards(Faction::Ember)[1]);
@@ -371,8 +396,14 @@ mod meta_tests {
         }
         let hand_before = b.hand.len();
         let pile_before = b.draw_pile.len();
+        b.discard_pile.push(CardInst::new(70, faction_cards(Faction::Ember)[2]));
         let survivors = b.battle_survivors();
-        assert_eq!(survivors.len(), 4 + hand_before + pile_before, "剩余 = 场上+手牌+牌堆");
-        assert!(b.hand.is_empty() && b.draw_pile.is_empty());
+        assert_eq!(
+            survivors.len(),
+            4 + (hand_before - 1) + pile_before + 1,
+            "剩余 = 场上+手牌+牌堆+弃牌堆，开端被过滤（-1），弃牌堆回归（+1）"
+        );
+        assert!(survivors.iter().all(|c| !c.is_starter()), "§五185：开端不入继承堆");
+        assert!(b.hand.is_empty() && b.draw_pile.is_empty() && b.discard_pile.is_empty());
     }
 }
