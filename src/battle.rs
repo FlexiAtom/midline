@@ -38,6 +38,13 @@ pub enum DeathCause {
     Sacrifice,
 }
 
+/// 击持业者的两种入口（文案不同：直击 / 超额分配）。
+#[derive(Clone, Copy)]
+enum HolderHit {
+    Direct,
+    Excess(i32),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Difficulty {
     Easy,
@@ -149,7 +156,18 @@ pub struct Battle {
     pub attack_order: Vec<u64>,
     pub pending_candle_d: i32,
     pub pending_card_d: Vec<(usize, i32)>,
+
+    // ---------- Boss 遭遇轴（与难度档正交；None ⇒ 下面各项全为默认，普通对局零影响） ----------
+    /// 本局 Boss（脚本 + 特殊规则的真值来源）。
+    pub boss: Option<crate::boss::BossId>,
+    /// Some ⇒ 双持业者（炎与冰）；`e_candle` 恒为 1 号。
+    pub e_candle2: Option<i32>,
+    /// 持业者称呼（render / 直击文案用），默认 ["敌方持业者", ""]。
+    pub holder_names: [&'static str; 2],
+    /// 回合上限（默认 30；字段留给后续模式，Boss 不改）。
+    pub turn_limit: i64,
 }
+
 
 impl Battle {
     pub fn new(
@@ -254,9 +272,44 @@ impl Battle {
             attack_order: Vec::new(),
             pending_candle_d: 0,
             pending_card_d: Vec::new(),
+            boss: None,
+            e_candle2: None,
+            holder_names: ["敌方持业者", ""],
+            turn_limit: TURN_LIMIT,
         };
         b.player_turn_start();
         b
+    }
+
+    /// Boss 战构造器（不改 `new` 签名 ⇒ 既有调用点与测试零改动）。
+    pub fn new_boss(rng_seed: u64, player_faction: Faction, boss: crate::boss::BossId, inherit: Vec<CardInst>, level: u32) -> Self {
+        let p = boss.profile();
+        let mut b = Battle::new(rng_seed, player_faction, p.faction, Difficulty::Normal, inherit, level);
+        b.boss = Some(boss);
+        b.e_candle = p.holder_hp;
+        b.e_candle2 = p.holder_hp2;
+        b.holder_names = p.holder_names;
+        b.turn_limit = TURN_LIMIT;
+        b.e_karma = p.start_karma;
+        b.log.push(format!("— Boss 登场：{}·{} —", p.name, p.title));
+        b.log.push(format!("特殊规则【{}】：{}", p.rule.label(), p.rule_text));
+        b
+    }
+
+    pub fn boss_profile(&self) -> Option<&'static crate::boss::BossProfile> {
+        self.boss.map(|b| b.profile())
+    }
+
+    pub fn boss_rule(&self) -> crate::boss::BossRule {
+        self.boss_profile().map_or(crate::boss::BossRule::None, |p| p.rule)
+    }
+
+    /// 敌方"较长的那根蜡烛"（30 回合判定、我方烛尽是否翻成平局都用它；双烛取和会形同必败，故取 max）。
+    pub fn enemy_candle_ref(&self) -> i32 {
+        match self.e_candle2 {
+            None => self.e_candle,
+            Some(c2) => self.e_candle.max(c2),
+        }
     }
 
     fn make_card(&mut self, def: CardDef, with_skill: bool) -> CardInst {
@@ -445,7 +498,8 @@ impl Battle {
 
     // ---------- 放置 ----------
 
-    /// 通用放置核心（我方/敌方共用）。挤压越线死亡仅我方适用（AI 不挤线）。
+    /// 通用放置核心（我方/敌方共用）。压上已占用格 → 原占位卡越线死亡；
+    /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
     fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
         let cost = if card.is_starter() { 0 } else { card.def.cost };
         match side {
@@ -521,26 +575,43 @@ impl Battle {
         Ok(())
     }
 
-    pub fn enemy_place(&mut self, hand_idx: usize, col: usize, row: Row) -> Result<(), String> {
-        if hand_idx >= self.enemy_hand.len() {
-            return Err("敌方手牌越界".into());
+    /// 敌方放置的全部合法性检查（业力 / 同名禁回置 / 格位占用）。
+    /// 影长「暗渡」例外：允许压上已占用的前排，复用 `place_side` 既有的越线死亡 + 递减返还路径。
+    fn enemy_place_legal(&self, c: &CardInst, col: usize, row: Row) -> Result<(), String> {
+        if col >= 4 {
+            return Err("格位为 E1-E8（列 0-3）".into());
         }
-        let starter = self.enemy_hand[hand_idx].is_starter();
-        let cost = if starter { 0 } else { self.enemy_hand[hand_idx].def.cost };
+        let cost = if c.is_starter() { 0 } else { c.def.cost };
         if self.e_karma < cost {
             return Err("敌方业力不足".into());
         }
-        if self.ef.sacrificed_names.contains(&self.enemy_hand[hand_idx].def.name) {
+        if self.ef.sacrificed_names.contains(&c.def.name) {
             return Err("敌方同名牌限制".into());
         }
         let occupied = match row {
             Row::Front => self.e_front[col].is_some(),
             Row::Back => self.e_back[col].is_some(),
         };
-        if occupied {
+        let squeeze = self.boss_rule() == crate::boss::BossRule::ShadowPush && row == Row::Front;
+        if occupied && !squeeze {
             return Err("AI 不挤压（不会主动挤越线）".into());
         }
+        Ok(())
+    }
+
+    pub fn enemy_place(&mut self, hand_idx: usize, col: usize, row: Row) -> Result<(), String> {
+        if hand_idx >= self.enemy_hand.len() {
+            return Err("敌方手牌越界".into());
+        }
+        self.enemy_place_legal(&self.enemy_hand[hand_idx], col, row)?;
         let c = self.enemy_hand.remove(hand_idx);
+        self.place_side(SideK::Enemy, c, col, row);
+        Ok(())
+    }
+
+    /// 放置一个现成实例（Boss 脚本直放：不经敌方手牌/牌堆、技能由脚本声明）。
+    pub fn enemy_place_inst(&mut self, c: CardInst, col: usize, row: Row) -> Result<(), String> {
+        self.enemy_place_legal(&c, col, row)?;
         self.place_side(SideK::Enemy, c, col, row);
         Ok(())
     }
@@ -558,13 +629,15 @@ impl Battle {
             self.enemy_turn();
         }
         if self.over.is_none() {
-            if self.turn >= TURN_LIMIT {
-                self.over = Some(match self.p_candle.cmp(&self.e_candle) {
+            if self.turn >= self.turn_limit {
+                let foe = self.enemy_candle_ref();
+                self.over = Some(match self.p_candle.cmp(&foe) {
                     std::cmp::Ordering::Greater => Outcome::PlayerWin,
                     std::cmp::Ordering::Less => Outcome::PlayerLose,
                     std::cmp::Ordering::Equal => Outcome::Draw,
                 });
-                self.log.push(format!("{TURN_LIMIT}回合终：蜡烛 {} vs {} → {:?}", self.p_candle, self.e_candle, self.over.unwrap()));
+                let twin = if self.e_candle2.is_some() { "（敌方取两根较长值）" } else { "" };
+                self.log.push(format!("{}回合终：蜡烛 {} vs {}{twin} → {:?}", self.turn_limit, self.p_candle, foe, self.over.unwrap()));
                 return;
             }
             self.player_turn_start();
@@ -576,6 +649,18 @@ impl Battle {
             (SideK::Player, _) => &self.p_front[col],
             (SideK::Enemy, Row::Front) => &self.e_front[col],
             (SideK::Enemy, Row::Back) => &self.e_back[col],
+        }
+    }
+
+    /// 敌方某格（Boss 脚本按名找献祭目标用）。
+    pub(crate) fn enemy_slot(&self, row: Row, col: usize) -> Option<&CardInst> {
+        self.slot(SideK::Enemy, row, col).as_ref()
+    }
+
+    pub(crate) fn enemy_slot_mut(&mut self, row: Row, col: usize) -> Option<&mut CardInst> {
+        match row {
+            Row::Front => self.e_front[col].as_mut(),
+            Row::Back => self.e_back[col].as_mut(),
         }
     }
 
@@ -618,7 +703,7 @@ impl Battle {
             let target = self.pick_target(SideK::Player, col, tr);
             self.log.push(format!("⚔ 我方 {} 攻击", short_card(&atk)));
             let dmg = match target {
-                Some(dcol) => self.card_hit_damage(SideK::Player, id, col, dcol, base),
+                Some(dcol) => self.card_hit_damage(SideK::Player, id, col, dcol, base, atk.is_starter()),
                 None => self.holder_hit_damage(SideK::Player, id, col, base),
             };
             if let Some(dcol) = target {
@@ -630,13 +715,8 @@ impl Battle {
                 self.dealt_this_turn += dmg;
                 self.log.push(format!("  → 敌第{}列受{dmg}", dcol + 1));
             } else {
-                self.e_candle -= dmg;
                 self.dealt_this_turn += dmg;
-                self.log.push(format!("  → 直击中线，敌方蜡烛 -{dmg}（剩 {}）", self.e_candle));
-                if self.e_candle <= 0 {
-                    self.log.push("敌方烛尽！".into());
-                    self.over = Some(Outcome::PlayerWin);
-                }
+                self.damage_enemy_holder(dmg, Some(col), HolderHit::Direct);
             }
             self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Player);
             let atk_dead = atk.hp <= 0;
@@ -659,7 +739,8 @@ impl Battle {
         self.in_player_attack_phase = false;
     }
 
-    fn enemy_turn(&mut self) {
+    pub(crate) fn enemy_turn(&mut self) {
+        crate::boss::on_enemy_turn_start(self);
         if !self.enemy_pile.is_empty() {
             let i = self.rng.below(self.enemy_pile.len());
             let c = self.enemy_pile.remove(i);
@@ -667,7 +748,11 @@ impl Battle {
         }
         self.ef.sacrifice_used = false;
         self.ef.sacrificed_names.clear();
-        crate::ai::run(self);
+        if self.boss.is_some() {
+            crate::boss::run(self);
+        } else {
+            crate::ai::run(self);
+        }
         self.enemy_resolve_turn_end();
     }
 
@@ -698,7 +783,7 @@ impl Battle {
             match target {
                 Some(dcol) => {
                     // 伤害累积（攻击时点即时计算攻击+受伤修正，不立即扣血/业火）
-                    let dmg = self.card_hit_damage(SideK::Enemy, id, col, dcol, base);
+                    let dmg = self.card_hit_damage(SideK::Enemy, id, col, dcol, base, atk.is_starter());
                     card_d.push((dcol, dmg));
                 }
                 None => {
@@ -742,7 +827,7 @@ impl Battle {
             }
             if self.p_candle <= 0 && self.over.is_none() {
                 self.log.push("我方烛尽…".into());
-                self.over = Some(if self.e_candle <= 0 { Outcome::Draw } else { Outcome::PlayerLose });
+                self.over = Some(if self.enemy_candle_ref() <= 0 { Outcome::Draw } else { Outcome::PlayerLose });
             }
         }
         // 统一结算累积卡牌伤害：先数值降低，后业火增加
@@ -806,17 +891,51 @@ impl Battle {
                         self.on_death(dd, SideK::Enemy, Some(col), DeathCause::Battle);
                     }
                 } else {
-                    self.e_candle -= give;
-                    self.log.push(format!("  超额分配{give} → 敌方持业者（剩 {}）", self.e_candle));
-                    if self.e_candle <= 0 {
-                        self.over = Some(Outcome::PlayerWin);
-                    }
+                    self.damage_enemy_holder(give, Some(col), HolderHit::Excess(give));
                 }
             }
             if !progressed {
                 self.log.push(format!("超额伤害{excess}无可分配攻击者，消散"));
                 break;
             }
+        }
+    }
+
+    /// 对敌方持业者造成伤害。单烛＝原文案（逐字不变）；双烛（炎冰同源）＝按列分区落到对应那根，
+    /// 另一根同步承受 ⌊dmg/2⌋，两根皆尽才判胜（model.rs 裁定19）。
+    fn damage_enemy_holder(&mut self, dmg: i32, col: Option<usize>, how: HolderHit) {
+        let Some(c2) = self.e_candle2 else {
+            self.e_candle -= dmg;
+            match how {
+                HolderHit::Direct => {
+                    self.log.push(format!("  → 直击中线，敌方蜡烛 -{dmg}（剩 {}）", self.e_candle));
+                    if self.e_candle <= 0 {
+                        self.log.push("敌方烛尽！".into());
+                        self.over = Some(Outcome::PlayerWin);
+                    }
+                }
+                HolderHit::Excess(g) => {
+                    self.log.push(format!("  超额分配{g} → 敌方持业者（剩 {}）", self.e_candle));
+                    if self.e_candle <= 0 {
+                        self.over = Some(Outcome::PlayerWin);
+                    }
+                }
+            }
+            return;
+        };
+        let (n0, n1) = (self.holder_names[0], self.holder_names[1]);
+        let mirror = dmg / 2;
+        let hit_first = crate::boss::holder_index(col) == 0;
+        self.e_candle -= if hit_first { dmg } else { mirror };
+        self.e_candle2 = Some(c2 - if hit_first { mirror } else { dmg });
+        let (head, shown) = match how {
+            HolderHit::Direct => (format!("  → 直击中线「{}」持业者", if hit_first { n0 } else { n1 }), dmg),
+            HolderHit::Excess(g) => (format!("  超额分配{g} → 「{}」持业者", if hit_first { n0 } else { n1 }), g),
+        };
+        self.log.push(format!("{head} -{shown}（{n0}{} {n1}{}·同源-{mirror}）", self.e_candle, self.e_candle2.unwrap()));
+        if crate::boss::both_holders_out(self) {
+            self.log.push("双烛皆尽！".into());
+            self.over = Some(Outcome::PlayerWin);
         }
     }
 
@@ -866,9 +985,22 @@ impl Battle {
     /// 开端 → 离场（每关固定发放，永不入堆）；自造牌 → 永久消失（§十372）；
     /// 其余基础牌 → 弃牌堆，本关不再使用，下关并入继承堆（使返还递减跨关可达）。
     pub fn on_death(&mut self, mut c: CardInst, side: SideK, col: Option<usize>, cause: DeathCause) {
+        let devour = cause == DeathCause::Sacrifice
+            && side == SideK::Player
+            && self.boss_rule() == crate::boss::BossRule::DevourName;
         let gain = match cause {
             DeathCause::Sacrifice => {
-                if c.is_starter() { 2 } else { c.def.cost }
+                if c.is_starter() {
+                    2
+                } else if devour {
+                    // 终影「吞名」：我方主动献祭改按**当前**死亡返还档位计。
+                    // 不推进 deaths——速查:1088「主动献祭…不触发死亡返还递减」；推进档位会让单场惩罚
+                    // 顺着裁定7 的跨关台账永久压低该实例后续的自然返还，那是第二重未授权的罚。
+                    let pct = refund_pct(c.deaths);
+                    c.def.cost * pct / 100
+                } else {
+                    c.def.cost
+                }
             }
             DeathCause::Battle | DeathCause::Cross => {
                 if c.is_starter() {
@@ -884,8 +1016,9 @@ impl Battle {
             SideK::Player => self.p_karma += gain,
             SideK::Enemy => self.e_karma += gain,
         }
+        let tag = if devour { "（吞名·按死亡返还递减）" } else { "" };
         self.log.push(format!(
-            "💀 {} 死亡（{cause:?}）→ {}业力+{gain}",
+            "💀 {} 死亡（{cause:?}）→ {}业力+{gain}{tag}",
             short_card(&c),
             if side == SideK::Player { "我方" } else { "敌方" }
         ));
@@ -986,7 +1119,7 @@ impl Battle {
         (dmg - debuff).max(0)
     }
 
-    pub(crate) fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32) -> i32 {
+    pub(crate) fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32, atk_is_starter: bool) -> i32 {
         let mut d = self.attack_power(side, atk_id, acol, base);
         let allies_of_def = self.col_cards(side.other(), dcol);
         let mut reduce = 0;
@@ -999,7 +1132,8 @@ impl Battle {
         let buffs_of_atk = self.col_cards(side, dcol);
         d -= reduce;
         d += Self::skill_count(&buffs_of_atk, Skill::EnemyColDmgTakenP1); // 含持有者自身（§八"同列敌方受伤+1"）
-        d.max(0)
+        // Boss 特殊规则（霜封）；业火按减免后伤害计（调用方用本函数返回值加业火）
+        crate::boss::card_damage_adjust(self, side, atk_is_starter, d.max(0))
     }
 
     pub(crate) fn holder_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
@@ -1192,7 +1326,7 @@ impl Battle {
             if self.pick_target(foe, acol, a.def.tr) != Some(col) {
                 continue;
             }
-            worst = worst.max(self.card_hit_damage(foe, a.id, acol, col, a.hp));
+            worst = worst.max(self.card_hit_damage(foe, a.id, acol, col, a.hp, a.is_starter()));
         }
         worst
     }
@@ -1493,7 +1627,7 @@ mod rule_tests {
         b.seq += 1;
         b.p_front[0] = Some(atk);
         b.e_front[0] = Some(def);
-        assert_eq!(b.card_hit_damage(SideK::Player, 976, 0, 0, 2), 3, "持有者自己吃+1");
+        assert_eq!(b.card_hit_damage(SideK::Player, 976, 0, 0, 2, false), 3, "持有者自己吃+1");
     }
 
     #[test]
@@ -1541,5 +1675,209 @@ mod rule_tests {
         b.check_all_triggers();
         assert_eq!(b.e_front[0].as_ref().unwrap().hp, 6, "整列3伤");
         assert_eq!(b.dealt_this_turn, 3, "攻击阶段内的敌方伤害计入A");
+    }
+}
+
+/// Boss 五条特殊规则 + 双烛 + 30 回合判定的单元测试。
+/// 与 `rule_tests` 分开：这里全部以 `Battle::new_boss` 构造，普通对局的零影响由 `boss::rule_tests` 守。
+#[cfg(test)]
+mod boss_rule_tests {
+    use super::*;
+    use crate::boss::{BossId, BossRule, LEVELS_PER_CHAPTER};
+
+    fn boss_battle(id: BossId) -> Battle {
+        Battle::new_boss(2026, Faction::Ember, id, Vec::new(), id.chapter() * LEVELS_PER_CHAPTER)
+    }
+
+    /// 造一张场上卡实例（自增 seq，与真实放置同构），由调用方放进目标格。按卡名取，免数下标。
+    fn card_of(b: &mut Battle, f: Faction, name: &str) -> CardInst {
+        let mut c = CardInst::new(b.seq + 500, crate::model::card_by_name(f, name).expect("脚本卡名须可解析"));
+        c.seq = b.seq;
+        b.seq += 1;
+        c
+    }
+
+    #[test]
+    fn furnace_heat_flames_every_enemy_card_and_pays_no_karma() {
+        let mut b = boss_battle(BossId::Luzhu);
+        assert_eq!(b.boss_rule(), BossRule::FurnaceHeat);
+        let mut m = card_of(&mut b, Faction::Ember, "火苗");
+        m.flame = 2;
+        b.e_front[0] = Some(m);
+        let karma0 = b.e_karma;
+        crate::boss::on_enemy_turn_start(&mut b);
+        assert_eq!(b.e_front[0].as_ref().unwrap().flame, 3, "在场卡业火+1");
+        assert!(
+            b.log.iter().any(|l| l.contains("【炉温】敌方在场 1 张卡业火+1")),
+            "炉温须留痕：{:?}",
+            b.log.last()
+        );
+        assert_eq!(b.e_karma, karma0, "脚本自养：回合开始不发业力（裁定20）");
+    }
+
+    #[test]
+    fn frost_brand_shaves_one_off_card_damage_but_not_starter() {
+        let mut b = boss_battle(BossId::Xuejue);
+        b.e_front[0] = Some(card_of(&mut b, Faction::Frost, "初霜")); // tr None，不会减攻
+        assert_eq!(b.card_hit_damage(SideK::Player, 1, 0, 0, 2, false), 1, "霜封：伤害-1");
+        assert_eq!(b.card_hit_damage(SideK::Player, 1, 0, 0, 1, true), 1, "开端不豁免就会归零 ⇒ 不可解");
+        // 真走一遍攻击阶段：业火按**减免后**伤害计
+        b.p_front[0] = Some(card_of(&mut b, Faction::Ember, "火苗")); // power2
+        b.dealt_this_turn = 0;
+        b.player_attack_phase();
+        let d = b.e_front[0].as_ref().unwrap();
+        assert_eq!(d.hp, 1, "初霜 power2 受 1 伤");
+        assert_eq!(d.flame, 1, "业火累的是减免后的 1，不是原始 2");
+        assert_eq!(b.dealt_this_turn, 1, "减免后伤害才进口径 A");
+    }
+
+    #[test]
+    fn shadow_push_squeezes_own_occupied_front_and_refunds_cross() {
+        let mut b = boss_battle(BossId::Yingzhang);
+        let victim = card_of(&mut b, Faction::Shadow, "影仆"); // cost1
+        let victim_id = victim.id;
+        b.e_front[0] = Some(victim);
+        let karma0 = b.e_karma;
+        let push = card_of(&mut b, Faction::Shadow, "暗哨"); // cost2
+        b.enemy_place_inst(push, 0, Row::Front).expect("暗渡放行压已占前排");
+        assert_eq!(b.e_front[0].as_ref().unwrap().def.name, "暗哨");
+        assert!(
+            b.log.iter().any(|l| l.contains("挤压：") && l.contains("越线死亡")),
+            "被压卡须走越线死亡路径"
+        );
+        assert_eq!(b.e_karma, karma0 - 2 + 1, "付暗哨2费；影仆新实例100%返还=1（裁定20后果）");
+        let dead = b.e_discard.last().expect("基础牌离场进弃牌堆");
+        assert_eq!(dead.id, victim_id, "被挤的是影仆本人");
+        assert_eq!(dead.deaths, 1);
+    }
+
+    #[test]
+    fn squeeze_needs_the_boss_rule_control_group_is_ordinary_battle() {
+        // 无 Boss 的普通对局：同一手放置必须被拒，且棋盘一格不动。
+        let mut b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
+        let keeper = card_of(&mut b, Faction::Frost, "初霜");
+        let keeper_id = keeper.id;
+        b.e_front[0] = Some(keeper);
+        b.e_karma = 99; // 排除"业力不足"这条先撞的检查
+        let karma0 = b.e_karma;
+        let push = card_of(&mut b, Faction::Frost, "望哨");
+        let err = b.enemy_place_inst(push, 0, Row::Front).unwrap_err();
+        assert!(err.contains("AI 不挤压"), "普通 AI 不该主动挤越线：{err}");
+        assert_eq!(b.e_front[0].as_ref().unwrap().id, keeper_id, "拒绝即无副作用");
+        assert_eq!(b.e_karma, karma0, "拒绝即不扣费");
+    }
+
+    #[test]
+    fn twin_candles_route_by_column_and_mirror_half() {
+        let mut b = boss_battle(BossId::YanBing);
+        assert_eq!((b.e_candle, b.e_candle2), (20, Some(20)), "炎/冰各20");
+        b.damage_enemy_holder(3, Some(0), HolderHit::Direct); // 第1列 → 冰
+        assert_eq!(b.e_candle2, Some(17), "冰吃直击3");
+        assert_eq!(b.e_candle, 19, "炎吃同源⌊3/2⌋=1");
+        assert!(b.over.is_none(), "只削一根不算胜");
+        assert!(
+            b.log
+                .iter()
+                .any(|l| l == "  → 直击中线「冰」持业者 -3（炎19 冰17·同源-1）"),
+            "文案须同时报两根与同源折损"
+        );
+        b.damage_enemy_holder(4, Some(3), HolderHit::Excess(4)); // 第4列 → 炎
+        assert_eq!(b.e_candle, 15, "炎吃直击4");
+        assert_eq!(b.e_candle2, Some(15), "冰吃同源⌊4/2⌋=2");
+    }
+
+    #[test]
+    fn twin_victory_requires_both_candles_out() {
+        let mut b = boss_battle(BossId::YanBing);
+        b.e_candle = 1;
+        b.e_candle2 = Some(6);
+        b.damage_enemy_holder(3, Some(3), HolderHit::Direct); // 炎先尽
+        assert!(b.e_candle <= 0 && b.e_candle2.unwrap() > 0);
+        assert_eq!(b.over, None, "一根烛尽仍在战（皆尽才胜，裁定19）");
+        b.damage_enemy_holder(9, Some(0), HolderHit::Direct); // 冰先尽 → 两根皆尽
+        assert_eq!(b.over, Some(Outcome::PlayerWin));
+        assert!(b.log.iter().any(|l| l == "双烛皆尽！"));
+    }
+
+    #[test]
+    fn single_candle_holder_keeps_the_original_wording() {
+        let mut b = boss_battle(BossId::Luzhu);
+        assert_eq!(b.e_candle, 20);
+        b.damage_enemy_holder(20, Some(0), HolderHit::Direct);
+        assert!(
+            b.log
+                .iter()
+                .any(|l| l == "  → 直击中线，敌方蜡烛 -20（剩 0）"),
+            "单烛路径逐字不变，Boss 不改普通文案"
+        );
+        assert_eq!(b.over, Some(Outcome::PlayerWin));
+    }
+
+    #[test]
+    fn turn_limit_compares_against_the_longer_candle() {
+        let mut b = boss_battle(BossId::YanBing);
+        b.e_candle = 3;
+        b.e_candle2 = Some(8);
+        assert_eq!(b.enemy_candle_ref(), 8, "取较长值：既非首根3，也非和11");
+        b.e_candle = 8;
+        b.e_candle2 = Some(3);
+        assert_eq!(b.enemy_candle_ref(), 8, "较长值与哪一根在场无关");
+
+        // 接线验证：30 回合判定确实读这个引用，并把口径写进日志。
+        b.e_candle = 3;
+        b.e_candle2 = Some(8);
+        b.p_candle = 100_000; // 沙包：只问判定口径，不让脚本提前把我方打爆
+        b.hand.clear();
+        for i in 0..4 {
+            b.p_front[i] = None;
+        }
+        let mut guard = 0;
+        while b.over.is_none() && guard < 40 {
+            b.end_player_turn();
+            guard += 1;
+        }
+        let line = b.log.iter().find(|l| l.contains("回合终：")).expect("应有回合终判定行");
+        assert!(line.contains("vs 8（敌方取两根较长值）"), "判定值/口径不符：{line}");
+        assert_eq!(b.over, Some(Outcome::PlayerWin), "10万烛 vs 较长值8 → 我方胜");
+    }
+
+    #[test]
+    fn devour_name_reprices_player_sacrifice_only() {
+        let mut b = boss_battle(BossId::ZhongYing);
+        assert_eq!(b.boss_rule(), BossRule::DevourName);
+        let shadow_shard = crate::model::card_by_name(Faction::Shadow, "蚀").unwrap(); // cost3
+        let mut yi = CardInst::new(800, shadow_shard);
+        yi.deaths = 1;
+        let k0 = b.p_karma;
+        b.on_death(yi, SideK::Player, None, DeathCause::Sacrifice);
+        assert_eq!(b.p_karma - k0, 1, "吞名：献祭改按死亡递减 3×50%=1（原本全额3）");
+        assert_eq!(b.discard_pile.last().unwrap().deaths, 1, "吞名只改本手收益，不推进死亡档位（速查:1088 献祭不触发递减）");
+        assert!(b.log.iter().any(|l| l.contains("（吞名·按死亡返还递减）")));
+
+        let k1 = b.p_karma;
+        b.on_death(CardInst::new(801, crate::model::STARTER), SideK::Player, None, DeathCause::Sacrifice);
+        assert_eq!(b.p_karma - k1, 2, "开端献祭仍是定额2（裁定1/10）");
+
+        let k2 = b.e_karma;
+        b.on_death(CardInst::new(802, shadow_shard), SideK::Enemy, None, DeathCause::Sacrifice);
+        assert_eq!(b.e_karma - k2, 3, "吞名只咬我方，敌方脚本仍全额返还");
+
+        let mut hu = CardInst::new(803, shadow_shard);
+        hu.deaths = 1;
+        let k3 = b.p_karma;
+        b.on_death(hu, SideK::Player, None, DeathCause::Battle);
+        assert_eq!(b.p_karma - k3, 1, "战斗死亡本就递减，不该被吞名二次打折");
+    }
+
+    #[test]
+    fn final_boss_is_thirty_candle_and_announces_its_rule() {
+        let b = boss_battle(BossId::ZhongYing);
+        assert_eq!(b.e_candle, 30, "终影蜡烛30");
+        assert!(b.e_candle2.is_none());
+        assert_eq!(b.enemy_candle_ref(), 30);
+        assert_eq!(b.holder_names, ["终影", ""]);
+        assert_eq!(b.e_karma, b.boss_profile().unwrap().start_karma, "开场业力＝一次性预算");
+        assert!(b.log.iter().any(|l| l.contains("— Boss 登场：终影")));
+        assert!(b.log.iter().any(|l| l.contains("特殊规则【吞名】")));
     }
 }

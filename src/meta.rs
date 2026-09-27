@@ -34,52 +34,151 @@ pub fn enemy_faction_for(level: u32) -> Faction {
     }
 }
 
+/// 主线一关的遭遇（§二十一）：章末＝该章 Boss（阵营取 Boss 自己的），其余＝三阵营轮转。
+pub fn encounter_for(level: u32) -> (Faction, Option<crate::boss::BossId>) {
+    match crate::boss::boss_for_level(level) {
+        Some(id) => (id.profile().faction, Some(id)),
+        None => (enemy_faction_for(level), None),
+    }
+}
+
+/// 一局的可变成状态：跨关继承堆 + 结转业力 + 后面还有没有关。
+/// `has_next=false` ＝单关跳打（`boss <id>`）：胜了也没有下一关可走。
+struct RunState {
+    inherit: Vec<CardInst>,
+    carry_karma: i32,
+    has_next: bool,
+}
+
+/// 主线 60 关＝5 章，章末 Boss。通关/终结即返回；**存档不在本包**（progress.kv 归 meta-main）。
+pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty) {
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true };
+    let mut level = 1u32;
+    loop {
+        let out = one_level(seed, faction, diff, level, &mut st, encounter_for);
+        match out {
+            Outcome::PlayerWin if crate::boss::is_mainline_end(level) => {
+                println!("终影已灭 —— 主线通关（60/60）。seed={seed} 可复现整局。");
+                return;
+            }
+            Outcome::PlayerWin => {
+                if level.is_multiple_of(crate::boss::LEVELS_PER_CHAPTER) {
+                    let ch = crate::boss::chapter_of(level);
+                    println!("第{ch}章通关（Boss「{}」已灭）→ 第{}章解锁。", crate::boss::BossId::all()[ch as usize - 1].name(), ch + 1);
+                }
+                level += 1;
+            }
+            _ => {
+                println!("本局终结于第{level}关。seed={seed} 可复现整局。");
+                return;
+            }
+        }
+    }
+}
+
 pub fn interactive_run(seed: u64) {
     interactive_run_with(seed, Faction::Ember, Difficulty::Normal);
 }
 
 pub fn interactive_run_with(seed: u64, faction: Faction, diff: Difficulty) {
-    let mut inherit: Vec<CardInst> = Vec::new();
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true };
     let mut level = 1u32;
-    let mut carry_karma = 0i32;
     loop {
-        println!("\n===== 第 {level} 关 · 准备阶段 =====");
-        settle_phase(&mut inherit, &mut carry_karma, false);
-        let mut b = Battle::new(seed, faction, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
-        loop {
-            print!("\n{}", crate::render::render(&b));
-            if let Some(out) = b.over {
-                println!("{}", crate::render::log_tail(&b, 12));
-                match out {
-                    Outcome::PlayerWin => println!("胜：敌方烛尽（或蜡烛优势）。"),
-                    Outcome::PlayerLose => println!("败：我方烛尽，人亡。阵亡自造牌永久消失。"),
-                    Outcome::Draw => println!("平局（30回合蜡烛判定/双烛尽）。"),
-                }
-                collect_survivors(&mut b, &mut inherit);
-                carry_karma = b.p_karma.max(0);
-                match out {
-                    Outcome::PlayerWin => {
-                        println!("\n===== 第 {level} 关 · 结算阶段 =====（融合/升级/弃置，go 进入下一关）");
-                        settle_phase(&mut inherit, &mut carry_karma, true);
-                        level += 1;
-                        break;
-                    }
-                    _ => {
-                        println!("本局终结。seed={seed} 可复现整局。");
-                        return;
-                    }
-                }
-            }
-            print!("\n> ");
-            use std::io::Write;
-            std::io::stdout().flush().ok();
-            let mut line = String::new();
-            if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-                println!("输入结束，退出。");
+        let out = one_level(seed, faction, diff, level, &mut st, |l| {
+            (enemy_faction_for(l), None)
+        });
+        match out {
+            Outcome::PlayerWin => level += 1,
+            _ => {
+                println!("本局终结。seed={seed} 可复现整局。");
                 return;
             }
-            execute_player_command(&mut b, &line);
         }
+    }
+}
+
+/// `boss <id>` / `play --boss <id>`：单关跳打某章末 Boss。
+/// 主线 60 关的挂载与存档（`mainline_level`/`boss_down`/`progress.kv`）属 meta-main 包，此处不建第二套真值。
+pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::BossId) {
+    use crate::boss::LEVELS_PER_CHAPTER;
+    let level = id.chapter() * LEVELS_PER_CHAPTER;
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false };
+    let out = one_level(seed, faction, diff, level, &mut st, |_| {
+        (id.profile().faction, Some(id))
+    });
+    match out {
+        Outcome::PlayerWin if id == crate::boss::BossId::ZhongYing => {
+            println!("终影已灭 —— 主线通关（60/60）。seed={seed} 可复现整局。")
+        }
+        Outcome::PlayerWin => println!("击败第{}章 Boss「{}」。seed={seed} 可复现整局。", id.chapter(), id.name()),
+        _ => println!(
+            "Boss「{}」未被击败：{}同样不解锁下一章（裁定22）。",
+            id.name(),
+            if out == Outcome::Draw { "平局" } else { "败北" }
+        ),
+    }
+}
+
+/// 一关的外围：头报 → 准备阶段 → 战斗 → 收尸 →（胜且还有下一关时）结算阶段。返回战斗结果。
+/// `enc` 是本关遭遇（普通关＝阵营轮转，章末关＝Boss）；主线与跳打 Boss 共用这一份循环，不开第二套。
+fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
+    seed: u64,
+    faction: Faction,
+    diff: Difficulty,
+    level: u32,
+    st: &mut RunState,
+    enc: F,
+) -> Outcome {
+    let has_next = st.has_next;
+    let inherit = &mut st.inherit;
+    let carry_karma = &mut st.carry_karma;
+    let (foe, boss) = enc(level);
+    let head = match boss {
+        Some(id) => format!(
+            "主线 第{}章 第{level}关 · Boss「{}」· {}",
+            crate::boss::chapter_of(level),
+            id.name(),
+            id.profile().title
+        ),
+        None => format!("第 {level} 关"),
+    };
+    println!("\n===== {head} · 准备阶段 =====");
+    settle_phase(inherit, carry_karma, false);
+    let mut b = match boss {
+        Some(id) => Battle::new_boss(seed, faction, id, std::mem::take(inherit), level),
+        None => Battle::new(seed, faction, foe, diff, std::mem::take(inherit), level),
+    };
+    loop {
+        print!("\n{}", crate::render::render(&b));
+        if let Some(out) = b.over {
+            println!("{}", crate::render::log_tail(&b, 12));
+            match out {
+                Outcome::PlayerWin => println!("胜：敌方烛尽（或蜡烛优势）。"),
+                Outcome::PlayerLose => println!(
+                    "败：我方烛尽，人亡。{}",
+                    if has_next { "阵亡自造牌永久消失。" } else { "本局到此为止。" }
+                ),
+                Outcome::Draw => println!("平局（30回合蜡烛判定/双烛尽）。"),
+            }
+            if has_next {
+                collect_survivors(&mut b, inherit);
+                *carry_karma = b.p_karma.max(0);
+                if out == Outcome::PlayerWin {
+                    println!("\n===== {head} · 结算阶段 =====（融合/升级/弃置，go 进入下一关）");
+                    settle_phase(inherit, carry_karma, true);
+                }
+            }
+            return out;
+        }
+        print!("\n> ");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+            println!("输入结束，退出。");
+            std::process::exit(0);
+        }
+        execute_player_command(&mut b, &line);
     }
 }
 
@@ -102,12 +201,16 @@ fn execute_player_command(b: &mut Battle, line: &str) {
             println!("{}", crate::render::log_tail(b, 40));
             Ok(())
         }
+        "b" => {
+            println!("{}", crate::boss::dossier(b));
+            Ok(())
+        }
         "q" => {
             println!("弃局退出。");
             std::process::exit(0);
         }
         "h" | "help" => {
-            println!("p <手牌idx> <P1-P4> 放置 | s <Pn> 场上献祭 | sh <idx> 手牌献祭 | di/ds 抽继承/开端 | e 结束回合 | l 日志 | q 退出");
+            println!("p <手牌idx> <P1-P4> 放置 | s <Pn> 场上献祭 | sh <idx> 手牌献祭 | di/ds 抽继承/开端 | e 结束回合 | l 日志 | b Boss档案 | q 退出");
             Ok(())
         }
         _ => Err(format!("未知命令：{}（h 看帮助）", parts[0])),
@@ -327,68 +430,91 @@ fn auto_play(b: &mut Battle) {
     let mut guard = 0;
     while b.over.is_none() && guard < 300 {
         guard += 1;
-        if b.p_karma == 0 {
-            if let Some(i) = b.hand.iter().position(|c| c.is_starter()) {
-                let _ = b.player_sacrifice_hand(i);
-            }
-        }
-        for _ in 0..8 {
-            let idx = (0..b.hand.len())
-                .filter(|i| {
-                    let c = &b.hand[*i];
-                    (if c.is_starter() { 0 } else { c.def.cost }) <= b.p_karma
-                        && !b.pf.sacrificed_names.contains(&c.def.name)
-                })
-                .max_by_key(|i| b.hand[*i].hp);
-            if let Some(idx) = idx {
-                let free_slot = (0..4).find(|c| b.p_front[*c].is_none());
-                let slot = free_slot.unwrap_or_else(|| b.rng.below(4));
-                if b.player_place(idx, slot).is_ok() {
-                    continue;
-                }
-            }
-            // 献祭仅当"献祭后能放上更强的卡"时才做，避免烧掉唯一输出
-            let mut sac: Option<usize> = None;
-            if !b.pf.sacrifice_used {
-                for col in 0..4 {
-                    let Some((gain, v_cost, v_hp)) = b.p_front[col].as_ref().map(|v| {
-                        (if v.is_starter() { 2 } else { v.def.cost }, v.def.cost, v.hp)
-                    }) else {
-                        continue;
-                    };
-                    if b.turn - b.p_front[col].as_ref().unwrap().placed_turn < 1 {
-                        continue;
-                    }
-                    let better = b.hand.iter().any(|c| {
-                        let cost = if c.is_starter() { 0 } else { c.def.cost };
-                        cost <= b.p_karma + gain
-                            && !b.pf.sacrificed_names.contains(&c.def.name)
-                            && (c.hp > v_hp || cost > v_cost)
-                    });
-                    if better {
-                        sac = Some(col);
-                        break;
-                    }
-                }
-            }
-            if let Some(col) = sac {
-                if b.player_sacrifice_field(col).is_ok() {
-                    continue;
-                }
-            }
-            break;
-        }
-        if b.pf.manual_draws > 0 && b.hand.len() < crate::battle::HAND_LIMIT && !b.draw_pile.is_empty() {
-            let _ = b.action_draw(false);
-        }
-        b.end_player_turn();
+        auto_turn(b);
     }
+}
+
+/// 我方托管的一个回合（`auto` 与 Boss 冒烟共用同一驱动）。
+pub(crate) fn auto_turn(b: &mut Battle) {
+    if b.over.is_some() {
+        return;
+    }
+    if b.p_karma == 0 {
+        if let Some(i) = b.hand.iter().position(|c| c.is_starter()) {
+            let _ = b.player_sacrifice_hand(i);
+        }
+    }
+    for _ in 0..8 {
+        let idx = (0..b.hand.len())
+            .filter(|i| {
+                let c = &b.hand[*i];
+                (if c.is_starter() { 0 } else { c.def.cost }) <= b.p_karma
+                    && !b.pf.sacrificed_names.contains(&c.def.name)
+            })
+            .max_by_key(|i| b.hand[*i].hp);
+        if let Some(idx) = idx {
+            let free_slot = (0..4).find(|c| b.p_front[*c].is_none());
+            let slot = free_slot.unwrap_or_else(|| b.rng.below(4));
+            if b.player_place(idx, slot).is_ok() {
+                continue;
+            }
+        }
+        // 献祭仅当"献祭后能放上更强的卡"时才做，避免烧掉唯一输出
+        let mut sac: Option<usize> = None;
+        if !b.pf.sacrifice_used {
+            for col in 0..4 {
+                let Some((gain, v_cost, v_hp)) = b.p_front[col].as_ref().map(|v| {
+                    (if v.is_starter() { 2 } else { v.def.cost }, v.def.cost, v.hp)
+                }) else {
+                    continue;
+                };
+                if b.turn - b.p_front[col].as_ref().unwrap().placed_turn < 1 {
+                    continue;
+                }
+                let better = b.hand.iter().any(|c| {
+                    let cost = if c.is_starter() { 0 } else { c.def.cost };
+                    cost <= b.p_karma + gain
+                        && !b.pf.sacrificed_names.contains(&c.def.name)
+                        && (c.hp > v_hp || cost > v_cost)
+                });
+                if better {
+                    sac = Some(col);
+                    break;
+                }
+            }
+        }
+        if let Some(col) = sac {
+            if b.player_sacrifice_field(col).is_ok() {
+                continue;
+            }
+        }
+        break;
+    }
+    if b.pf.manual_draws > 0 && b.hand.len() < crate::battle::HAND_LIMIT && !b.draw_pile.is_empty() {
+        let _ = b.action_draw(false);
+    }
+    b.end_player_turn();
 }
 
 #[cfg(test)]
 mod meta_tests {
     use super::*;
+    use crate::boss::BossId;
     use crate::model::{faction_cards, Skill};
+
+    #[test]
+    fn encounter_for_mounts_boss_only_on_chapter_ends() {
+        // 普通关：三阵营轮转、无 Boss（与既有 enemy_faction_for 同一套真值，不开第二套）
+        for lvl in [1u32, 11, 13, 23, 59] {
+            assert_eq!(encounter_for(lvl), (enemy_faction_for(lvl), None), "第{lvl}关不该有 Boss");
+        }
+        // 章末：该章 Boss，阵营取 Boss 自己的（炎与冰主场是烬火，霜誓只作第二身份）
+        assert_eq!(encounter_for(12), (Faction::Ember, Some(BossId::Luzhu)));
+        assert_eq!(encounter_for(24), (Faction::Frost, Some(BossId::Xuejue)));
+        assert_eq!(encounter_for(36), (Faction::Shadow, Some(BossId::Yingzhang)));
+        assert_eq!(encounter_for(48), (Faction::Ember, Some(BossId::YanBing)));
+        assert_eq!(encounter_for(60), (Faction::Shadow, Some(BossId::ZhongYing)));
+    }
 
     #[test]
     fn fuse_moves_skills_keeps_main_and_costs_sub_minus_one() {
