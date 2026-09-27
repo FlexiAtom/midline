@@ -1,3 +1,18 @@
+// midline - 《中线》核心规则引擎 CLI
+// Copyright (C) 2026 FlexiAtom
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //! 确定性 PRNG（splitmix64 播种 + xoshiro128++ 推进）。
 //! 骨架不引入依赖；同种子同结果，覆盖"每日挑战本地种子"需求。
 
