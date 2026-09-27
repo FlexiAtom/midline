@@ -15,13 +15,19 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //! ASCII 棋盘渲染（§二 布局基线）。
 
-use crate::battle::Battle;
+use crate::battle::{Battle, SideK};
 use crate::model::short_card;
 
 fn cell(b: &Battle, side_front: bool, col: usize) -> String {
     let c = if side_front { b.p_front[col].as_ref() } else { b.e_front[col].as_ref() };
     match c {
-        Some(x) => format!("{:<12}", format!("{}·{}/{}焰{}", x.def.name, x.hp, x.base_threshold(), x.flame)),
+        Some(x) => {
+            let side = if side_front { SideK::Player } else { SideK::Enemy };
+            format!(
+                "{:<12}",
+                format!("{}·{}/{}焰{}", x.def.name, x.hp, b.effective_threshold(side, col, x), x.flame)
+            )
+        }
         None => format!("{:<12}", "·"),
     }
 }
@@ -29,7 +35,10 @@ fn cell(b: &Battle, side_front: bool, col: usize) -> String {
 fn ecell(b: &Battle, back: bool, col: usize) -> String {
     let c = if back { b.e_back[col].as_ref() } else { b.e_front[col].as_ref() };
     match c {
-        Some(x) => format!("{:<12}", format!("{}·{}/{}焰{}", x.def.name, x.hp, x.base_threshold(), x.flame)),
+        Some(x) => format!(
+            "{:<12}",
+            format!("{}·{}/{}焰{}", x.def.name, x.hp, b.effective_threshold(SideK::Enemy, col, x), x.flame)
+        ),
         None => format!("{:<12}", "·"),
     }
 }
@@ -37,7 +46,7 @@ fn ecell(b: &Battle, back: bool, col: usize) -> String {
 pub fn candle_bar(hp: i32) -> String {
     let hp = hp.max(0);
     let filled = (hp * 10 / 20).min(10) as usize;
-    format!("🕯️[{:<10}]{}", "#".repeat(filled), if hp == 0 { "烛尽" } else { "" })
+    format!("🕯️[{:<10}]{}{}/20", "#".repeat(filled), if hp == 0 { "烛尽 " } else { "" }, hp)
 }
 
 pub fn render(b: &Battle) -> String {

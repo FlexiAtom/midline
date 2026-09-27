@@ -119,6 +119,9 @@ pub struct Battle {
     pub karma_penalty_next: i32,
     pub rollback_left: i32,
     pub dealt_this_turn: i32,
+    pub in_player_attack_phase: bool,
+    /// 守夜人式"本回合友方累积+N"增益窗口：(阵营, 生效回合, 增量)。
+    pub boosts: Vec<(SideK, i64, i32)>,
     pub attack_order: Vec<u64>,
     pub pending_candle_d: i32,
     pub pending_card_d: Vec<(usize, i32)>,
@@ -222,6 +225,8 @@ impl Battle {
             karma_penalty_next: 0,
             rollback_left: 2,
             dealt_this_turn: 0,
+            in_player_attack_phase: false,
+            boosts: Vec::new(),
             attack_order: Vec::new(),
             pending_candle_d: 0,
             pending_card_d: Vec::new(),
@@ -566,6 +571,7 @@ impl Battle {
     fn player_attack_phase(&mut self) {
         let order = self.row_seq_order(SideK::Player, Row::Front);
         self.attack_order = order.clone();
+        self.in_player_attack_phase = true;
         for sq in order {
             if self.over.is_some() {
                 break;
@@ -585,9 +591,10 @@ impl Battle {
                 None => self.holder_hit_damage(SideK::Player, id, col, base),
             };
             if let Some(dcol) = target {
+                let eb = self.boost_for(SideK::Enemy);
                 if let Some(def) = self.e_front[dcol].as_mut() {
                     def.hp -= dmg;
-                    def.flame += dmg;
+                    def.flame += dmg + eb;
                 }
                 self.dealt_this_turn += dmg;
                 self.log.push(format!("  → 敌第{}列受{dmg}", dcol + 1));
@@ -618,6 +625,7 @@ impl Battle {
             }
             self.check_all_triggers();
         }
+        self.in_player_attack_phase = false;
     }
 
     fn enemy_turn(&mut self) {
@@ -668,6 +676,7 @@ impl Battle {
                 let a = self.e_front[col].take().unwrap();
                 self.on_death(a, SideK::Enemy, Some(col), DeathCause::Battle);
             }
+            self.check_all_triggers();
         }
         self.pending_card_d = card_d;
         self.pending_candle_d = candle_d;
@@ -707,9 +716,10 @@ impl Battle {
                 self.log.push(format!("  结算：{} 受{dmg} → hp {}", def.def.name, def.hp));
             }
         }
+        let pb = self.boost_for(SideK::Player);
         for (col, dmg) in &card_d {
             if let Some(def) = self.p_front[*col].as_mut() {
-                def.flame += dmg;
+                def.flame += dmg + pb;
             }
         }
         for col in 0..4 {
@@ -727,6 +737,7 @@ impl Battle {
     /// 超额伤害：按我方攻击顺序轮转，每名存活攻击者至多分配其当前数值点。
     fn distribute_excess(&mut self, mut excess: i32) {
         let order = self.attack_order.clone();
+        let eb = self.boost_for(SideK::Enemy);
         loop {
             if excess <= 0 || self.over.is_some() {
                 break;
@@ -750,7 +761,7 @@ impl Battle {
                 if self.e_front[col].is_some() {
                     if let Some(def) = self.e_front[col].as_mut() {
                         def.hp -= give;
-                        def.flame += give;
+                        def.flame += give + eb;
                         self.log.push(format!("  超额分配{give} → {}", short_card(def)));
                     }
                     if self.e_front[col].as_ref().is_some_and(|d| d.hp <= 0) {
@@ -919,46 +930,50 @@ impl Battle {
         v
     }
 
-    fn attack_power(&self, side: SideK, atk_id: u64, acol: usize, dcol: Option<usize>, base: i32) -> i32 {
+    /// §九354：同名技能/特性效果按出现次数叠加（特性计1层）。
+    fn skill_count(cards: &[&CardInst], sk: Skill) -> i32 {
+        cards.iter().filter(|x| x.hp > 0).flat_map(|x| x.skills.iter()).filter(|s| **s == sk).count() as i32
+    }
+
+    fn attack_power(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
         let mut dmg = base;
-        for a in self.col_cards(side, acol) {
-            if a.id != atk_id && a.hp > 0 && a.skills.contains(&Skill::AllyColAtk1) {
-                dmg += 1;
+        dmg += Self::skill_count(&self.col_cards(side, acol).into_iter().filter(|a| a.id != atk_id).collect::<Vec<_>>(), Skill::AllyColAtk1);
+        let foes = self.col_cards(side.other(), acol);
+        let mut debuff = 0;
+        for f in &foes {
+            if f.hp > 0 && f.def.tr == TraitKind::EnemyColAttackMinus1 {
+                debuff += 1;
             }
         }
-        if let Some(dc) = dcol {
-            for f in self.col_cards(side.other(), dc) {
-                if f.hp > 0 && (f.skills.contains(&Skill::EnemyColAtkM1) || f.def.tr == TraitKind::EnemyColAttackMinus1) {
-                    dmg -= 1;
-                }
-            }
-        }
-        dmg.max(0)
+        debuff += Self::skill_count(&foes, Skill::EnemyColAtkM1);
+        (dmg - debuff).max(0)
     }
 
     fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32) -> i32 {
-        let mut d = self.attack_power(side, atk_id, acol, Some(dcol), base);
-        for f in self.col_cards(side.other(), dcol) {
-            if f.hp > 0 && (f.def.tr == TraitKind::AllyColDamageTakenMinus1 || f.skills.contains(&Skill::AllyColDmgTakenM1)) {
-                d -= 1;
+        let mut d = self.attack_power(side, atk_id, acol, base);
+        let allies_of_def = self.col_cards(side.other(), dcol);
+        let mut reduce = 0;
+        for f in &allies_of_def {
+            if f.hp > 0 && f.def.tr == TraitKind::AllyColDamageTakenMinus1 {
+                reduce += 1;
             }
         }
-        for a in self.col_cards(side, dcol) {
-            if a.id != atk_id && a.hp > 0 && a.skills.contains(&Skill::EnemyColDmgTakenP1) {
-                d += 1;
-            }
-        }
+        reduce += Self::skill_count(&allies_of_def, Skill::AllyColDmgTakenM1);
+        let buffs_of_atk = self.col_cards(side, dcol);
+        d -= reduce;
+        d += Self::skill_count(&buffs_of_atk, Skill::EnemyColDmgTakenP1); // 含持有者自身（§八"同列敌方受伤+1"）
         d.max(0)
     }
 
     fn holder_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
-        self.attack_power(side, atk_id, acol, None, base)
+        self.attack_power(side, atk_id, acol, base)
     }
 
     /// 攻击后追加结算。`col` = 目标列（直击中线时回退为攻击者列）——§八"攻击后对同列+1"锚定目标列。
     fn attacker_aftermath(&mut self, atk: &mut CardInst, col: usize, side: SideK) {
+        let bo = self.boost_for(side);
         match atk.def.tr {
-            TraitKind::SelfFlameOnAttack1 => atk.flame += 1,
+            TraitKind::SelfFlameOnAttack1 => atk.flame += 1 + bo,
             TraitKind::SelfDmgOnAttack => {
                 atk.hp -= 1; // 自损不触发业火
                 if atk.hp <= 0 {
@@ -970,7 +985,7 @@ impl Battle {
         let skills = atk.skills.clone();
         for s in skills {
             match s {
-                Skill::AtkSelfFlame1 => atk.flame += 1,
+                Skill::AtkSelfFlame1 => atk.flame += 1 + bo,
                 Skill::AtkSameColFlame1 => self.add_flame_col(side, col, 1, None),
                 Skill::AtkAdjColFlame1 => {
                     for ac in adj_cols(col) {
@@ -983,12 +998,15 @@ impl Battle {
     }
 
     pub fn add_flame_col(&mut self, side: SideK, col: usize, amt: i32, except: Option<u64>) {
+        let pb = self.boost_for(SideK::Player);
+        let eb = self.boost_for(SideK::Enemy);
         for s in [side, side.other()] {
+            let bo = if s == SideK::Player { pb } else { eb };
             for c in self.col_cards_mut(s, col) {
                 if Some(c.id) == except {
                     continue;
                 }
-                c.flame += amt;
+                c.flame += (amt + bo).max(0);
             }
         }
     }
@@ -997,24 +1015,29 @@ impl Battle {
 
     pub fn effective_threshold(&self, side: SideK, col: usize, c: &CardInst) -> i32 {
         let mut thr = c.base_threshold();
-        for a in self.col_cards(side, col) {
-            if a.id != c.id && a.skills.contains(&Skill::AllyColThreshM1) {
-                thr -= 1;
-            }
-        }
-        for f in self.col_cards(side.other(), col) {
-            if f.skills.contains(&Skill::EnemyColThreshP1) {
-                thr += 1;
-            }
-        }
+        let allies: Vec<&CardInst> = self.col_cards(side, col).into_iter().filter(|a| a.id != c.id).collect();
+        thr -= Self::skill_count(&allies, Skill::AllyColThreshM1);
+        thr += Self::skill_count(&self.col_cards(side.other(), col), Skill::EnemyColThreshP1);
         thr.max(1)
+    }
+
+    /// 阵营本回合的"友方累积+N"增益（守夜人窗口，裁定5 literal 化）。
+    fn boost_for(&self, side: SideK) -> i32 {
+        let t = self.turn;
+        self.boosts.iter().filter(|(s, tt, _)| *s == side && *tt == t).map(|(_, _, v)| *v).sum()
     }
 
     pub fn check_all_triggers(&mut self) {
         let turn = self.turn;
-        for col in 0..4 {
-            self.try_trigger_col(SideK::Player, col, turn);
-            self.try_trigger_col(SideK::Enemy, col, turn);
+        for _round in 0..12 {
+            let before = self.log.len();
+            for col in 0..4 {
+                self.try_trigger_col(SideK::Player, col, turn);
+                self.try_trigger_col(SideK::Enemy, col, turn);
+            }
+            if self.log.len() == before {
+                return;
+            }
         }
     }
 
@@ -1042,13 +1065,14 @@ impl Battle {
             }
             let tr = snap.def.tr;
             let id = snap.id;
+            let bo = self.boost_for(side);
             self.log.push(format!("🔥 {} 业火爆发 → {}", snap.def.name, tr.label()));
             match tr {
                 TraitKind::ThresholdSameColFlame2 => self.add_flame_col(side, col, 2, Some(id)),
                 TraitKind::ThresholdAllyColFlame2 => {
                     for a in self.col_cards_mut(side, col) {
                         if a.id != id {
-                            a.flame += 2;
+                            a.flame += 2 + bo;
                         }
                     }
                 }
@@ -1060,6 +1084,9 @@ impl Battle {
                 TraitKind::ThresholdFullColDamage3 => {
                     let mut hits: Vec<(SideK, usize, u64)> = Vec::new();
                     for s in [SideK::Player, SideK::Enemy] {
+                        let sb = self.boost_for(s);
+                        let counts = s == SideK::Enemy && self.in_player_attack_phase;
+                        let mut dealt = 0i32;
                         let srows = match s {
                             SideK::Player => vec![Row::Front],
                             SideK::Enemy => vec![Row::Back, Row::Front],
@@ -1070,11 +1097,15 @@ impl Battle {
                                     continue;
                                 }
                                 card.hp -= 3;
-                                card.flame += 3; // 伤害即业火（三位一体）
+                                card.flame += 3 + sb; // 伤害即业火（三位一体）
+                                dealt += 3;
                                 if card.hp <= 0 {
                                     hits.push((s, col, card.id));
                                 }
                             }
+                        }
+                        if counts {
+                            self.dealt_this_turn += dealt; // §十二：攻击阶段内造成的伤害计入 A
                         }
                     }
                     for (s, c, cid) in hits {
@@ -1091,11 +1122,9 @@ impl Battle {
                     }
                 }
                 TraitKind::ThresholdAllyTurnFlame2 => {
-                    for cc in 0..4 {
-                        for a in self.col_cards_mut(side, cc) {
-                            a.flame += 2;
-                        }
-                    }
+                    // §十"本回合友方累积+2"＝回合内增益窗口：本回合该侧每次业火获得事件额外 +2（非瞬时发放）
+                    self.boosts.push((side, turn, 2));
+                    self.log.push(format!("  守夜人：本回合{side}友方每次累积业火 +2", side = if side == SideK::Player { "我方" } else { "敌方" }));
                 }
                 _ => {}
             }
@@ -1317,5 +1346,118 @@ mod rule_tests {
         let g = b.e_front[1].as_ref().expect("守卫应存活");
         assert_eq!(g.flame, 3 + 1, "伤害3 + 技能2对目标列+1");
         assert_eq!(b.p_front[0].as_ref().unwrap().flame, 0, "攻击者自身列不应吃到+1");
+    }
+
+    #[test]
+    fn stacked_skills_count_per_copy() {
+        // 裁定12（§九"技能可叠加"）：被动光环按出现次数计层
+        let mut b = fresh_battle();
+        let mut atk = CardInst::new(970, faction_cards(Faction::Ember)[1]); // 火苗 数值2
+        atk.seq = b.seq;
+        b.seq += 1;
+        let mut buddy = CardInst::new(971, faction_cards(Faction::Ember)[1]);
+        buddy.skills = vec![Skill::AllyColAtk1, Skill::AllyColAtk1];
+        buddy.seq = b.seq;
+        b.seq += 1;
+        b.e_front[0] = Some(atk);
+        b.e_back[0] = Some(buddy);
+        assert_eq!(b.attack_power(SideK::Enemy, 970, 0, 2), 4, "双份同列友方攻击+1 → +2");
+    }
+
+    #[test]
+    fn stacked_threshold_reduction_counts_and_floors_at_one() {
+        let mut b = fresh_battle();
+        let mut tgt = CardInst::new(972, faction_cards(Faction::Ember)[11]); // 守夜人 阈值6
+        tgt.seq = b.seq;
+        b.seq += 1;
+        let mut holder = CardInst::new(973, faction_cards(Faction::Ember)[1]);
+        holder.skills = vec![Skill::AllyColThreshM1; 2];
+        holder.seq = b.seq;
+        b.seq += 1;
+        b.e_front[0] = Some(tgt);
+        b.e_back[0] = Some(holder);
+        let t = b.e_front[0].as_ref().unwrap();
+        assert_eq!(b.effective_threshold(SideK::Enemy, 0, t), 4, "双份阈值-1 → −2");
+        b.e_back[0].as_mut().unwrap().skills = vec![Skill::AllyColThreshM1; 10];
+        let t = b.e_front[0].as_ref().unwrap();
+        assert_eq!(b.effective_threshold(SideK::Enemy, 0, t), 1, "阈值下限1");
+    }
+
+    #[test]
+    fn holder_hit_damage_is_debuffed_by_same_column_enemy() {
+        // §八技能6 锚攻击者列：直击持业者时同列敌方"攻击-1"仍生效（s06-28）
+        let mut b = fresh_battle();
+        let mut atk = CardInst::new(974, faction_cards(Faction::Ember)[3]); // 焚稿人 数值4
+        atk.seq = b.seq;
+        b.seq += 1;
+        b.p_front[0] = Some(atk);
+        let mut wall = CardInst::new(975, faction_cards(Faction::Frost)[4]); // 寒哨
+        wall.seq = b.seq;
+        b.seq += 1;
+        b.e_back[0] = Some(wall);
+        assert_eq!(b.holder_hit_damage(SideK::Player, 974, 0, 4), 3, "后排寒哨削弱直击");
+    }
+
+    #[test]
+    fn skill8_holder_self_adds_to_own_damage() {
+        // 裁定13：同列敌方受伤+1 不排除持有者自身
+        let mut b = fresh_battle();
+        let mut atk = CardInst::new(976, faction_cards(Faction::Ember)[1]);
+        atk.skills = vec![Skill::EnemyColDmgTakenP1];
+        atk.seq = b.seq;
+        b.seq += 1;
+        let mut def = CardInst::new(977, faction_cards(Faction::Frost)[1]);
+        def.seq = b.seq;
+        b.seq += 1;
+        b.p_front[0] = Some(atk);
+        b.e_front[0] = Some(def);
+        assert_eq!(b.card_hit_damage(SideK::Player, 976, 0, 0, 2), 3, "持有者自己吃+1");
+    }
+
+    #[test]
+    fn night_watch_boost_window_amplifies_later_flame_gains() {
+        // 裁定5 字面化：守夜人＝本回合该侧每次业火获得事件额外+2
+        let mut b = fresh_battle();
+        let mut watch = CardInst::new(978, faction_cards(Faction::Ember)[11]);
+        watch.flame = watch.base_threshold();
+        watch.seq = b.seq;
+        b.seq += 1;
+        b.p_front[0] = Some(watch);
+        let mut gain = CardInst::new(979, faction_cards(Faction::Ember)[1]);
+        gain.seq = b.seq;
+        b.seq += 1;
+        b.p_front[1] = Some(gain);
+        let mut foe = CardInst::new(980, faction_cards(Faction::Frost)[1]);
+        foe.seq = b.seq;
+        b.seq += 1;
+        b.e_front[1] = Some(foe);
+        b.check_all_triggers();
+        assert_eq!(b.boost_for(SideK::Player), 2, "增益窗口已开启");
+        assert_eq!(b.boost_for(SideK::Enemy), 0, "敌方不受益");
+        b.add_flame_col(SideK::Player, 1, 1, None);
+        assert_eq!(b.p_front[1].as_ref().unwrap().flame, 3, "我方后续+1实得+3");
+        assert_eq!(b.e_front[1].as_ref().unwrap().flame, 1, "敌方无窗口，按原值");
+        b.turn += 1;
+        assert_eq!(b.boost_for(SideK::Player), 0, "窗口只在触发当回合有效");
+    }
+
+    #[test]
+    fn full_col_damage3_in_attack_phase_counts_into_rollback_a() {
+        // §十二：攻击阶段内造成的敌方伤害计入回滚口径 A（s12-12）
+        let mut b = fresh_battle();
+        let mut blaze = CardInst::new(981, faction_cards(Faction::Ember)[10]); // 山火
+        blaze.flame = blaze.base_threshold();
+        blaze.seq = b.seq;
+        b.seq += 1;
+        b.p_front[0] = Some(blaze);
+        let mut foe = CardInst::new(982, faction_cards(Faction::Frost)[1]);
+        foe.hp = 9;
+        foe.seq = b.seq;
+        b.seq += 1;
+        b.e_front[0] = Some(foe);
+        b.in_player_attack_phase = true;
+        b.check_all_triggers();
+        assert_eq!(b.e_front[0].as_ref().unwrap().hp, 6, "整列3伤");
+        assert_eq!(b.dealt_this_turn, 3, "攻击阶段内的敌方伤害计入A");
     }
 }
