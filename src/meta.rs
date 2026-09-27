@@ -232,7 +232,8 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
     }
     *karma -= price;
     let s = inherit.remove(sub);
-    let m = &mut inherit[main];
+    // 先按原下标校正主牌位置：sub 被摘除后，其后的下标整体前移一位
+    let m = &mut inherit[if main > sub { main - 1 } else { main }];
     let n = s.skills.len();
     for sk in s.skills {
         m.skills.push(sk); // 同名技能叠加
@@ -241,7 +242,7 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
     Ok(format!("{} 吸收副牌「{}」的{n}个技能 → {}", m.def.name, s.def.name, short_card(m)))
 }
 
-fn upgrade_card(inherit: &mut Vec<CardInst>, idx: usize, kind: &str) -> Result<String, String> {
+pub fn upgrade_card(inherit: &mut Vec<CardInst>, idx: usize, kind: &str) -> Result<String, String> {
     if idx >= inherit.len() {
         return Err("下标无效".into());
     }
@@ -266,29 +267,59 @@ fn upgrade_card(inherit: &mut Vec<CardInst>, idx: usize, kind: &str) -> Result<S
 }
 
 /// 自动对局冒烟：玩家侧也走贪心，验证规则闭环不 panic、能分胜负。
-pub fn auto_battles(n: u32) {
+/// `diff` 是敌方 AI 档位；专家档额外让托管侧（有继承堆的一侧）在结算阶段由 AI 决策融合/升级。
+pub fn auto_battles(n: u32, diff: Difficulty) {
     for i in 0..n {
         let seed = 1000 + i as u64;
         let mut inherit: Vec<CardInst> = Vec::new();
         let mut level = 1u32;
         let mut last = Outcome::Draw;
         for _ in 0..5 {
-            let mut b = Battle::new(seed, Faction::Ember, enemy_faction_for(level), Difficulty::Normal, std::mem::take(&mut inherit), level);
+            let mut b = Battle::new(seed, Faction::Ember, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
             auto_play(&mut b);
             last = b.over.unwrap_or(Outcome::Draw);
             match last {
                 Outcome::PlayerWin => {
                     collect_survivors(&mut b, &mut inherit);
-                    // 自动融合最强两牌，验证融合路径
-                    let (m, s) = if inherit.len() >= 2 { (0, 1usize) } else { break };
+                    // 融合/升级：验证跨关持有与 meta 决策路径
                     let mut k = b.p_karma.max(0);
-                    let _ = fuse_cards(&mut inherit, m, s, &mut k);
+                    apply_meta_plan(&mut inherit, &mut k, diff, 1);
                     level += 1;
                 }
                 _ => break,
             }
         }
-        println!("auto#{i} seed={seed} → {last:?} 到达第{level}关");
+        println!("auto#{i} [{}] seed={seed} → {last:?} 到达第{level}关", diff.label());
+    }
+}
+
+/// 战斗外（准备/结算阶段）的托管决策落地（§二十「专家含融合决策」；时机按 §九 融合时机表）。
+/// 只把 `ai::plan_meta` 的意图回灌既有规则函数执行，AI 不自开一套结算。
+/// 非专家档保持既有冒烟行为：固定融合前两牌、不代管升级。
+fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, diff: Difficulty, upgrades_left: u8) {
+    if diff != Difficulty::Expert {
+        if inherit.len() >= 2 {
+            let _ = fuse_cards(inherit, 0, 1, karma);
+        }
+        return;
+    }
+    // plan 的下标基于同一快照；先执行不改长度的升级，再执行会摘牌的融合
+    let plan = crate::ai::plan_meta(inherit, *karma, upgrades_left);
+    let mut run = |m: &crate::ai::MetaMove| match m {
+        crate::ai::MetaMove::Upgrade { idx, kind } => match upgrade_card(inherit, *idx, kind) {
+            Ok(msg) => println!("AI·升级[{kind}] {msg}"),
+            Err(e) => println!("✖ AI·升级 {e}"),
+        },
+        crate::ai::MetaMove::Fuse { main, sub } => match fuse_cards(inherit, *main, *sub, karma) {
+            Ok(msg) => println!("AI·融合 {msg}"),
+            Err(e) => println!("✖ AI·融合 {e}"),
+        },
+    };
+    for m in plan.iter().filter(|m| matches!(m, crate::ai::MetaMove::Upgrade { .. })) {
+        run(m);
+    }
+    for m in plan.iter().filter(|m| matches!(m, crate::ai::MetaMove::Fuse { .. })) {
+        run(m);
     }
 }
 

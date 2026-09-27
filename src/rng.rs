@@ -16,6 +16,7 @@
 //! 确定性 PRNG（splitmix64 播种 + xoshiro128++ 推进）。
 //! 骨架不引入依赖；同种子同结果，覆盖"每日挑战本地种子"需求。
 
+#[derive(Clone, Copy)]
 pub struct Rng {
     s: [u32; 4],
 }
@@ -29,6 +30,12 @@ fn splitmix64(x: &mut u64) -> u64 {
 }
 
 impl Rng {
+    /// 只读状态（AI 搜索的 rng 中性断言用，见 ai.rs 的 I-2 测试）。
+    #[cfg(test)]
+    pub fn state(&self) -> [u32; 4] {
+        self.s
+    }
+
     pub fn seeded(seed: u64) -> Self {
         let mut x = seed;
         let mut s = [0u32; 4];

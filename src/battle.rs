@@ -42,6 +42,29 @@ pub enum DeathCause {
 pub enum Difficulty {
     Easy,
     Normal,
+    Hard,
+    Expert,
+}
+
+impl Difficulty {
+    pub fn parse(s: &str) -> Option<Difficulty> {
+        match s {
+            "easy" => Some(Difficulty::Easy),
+            "normal" => Some(Difficulty::Normal),
+            "hard" => Some(Difficulty::Hard),
+            "expert" => Some(Difficulty::Expert),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Difficulty::Easy => "简单",
+            Difficulty::Normal => "普通",
+            Difficulty::Hard => "困难",
+            Difficulty::Expert => "专家",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,7 +91,7 @@ fn refund_pct(deaths_before: u32) -> i32 {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SideFlags {
     pub sacrifice_used: bool,
     pub sacrificed_names: Vec<&'static str>,
@@ -85,6 +108,7 @@ pub enum Row {
     Back,
 }
 
+#[derive(Clone)]
 pub struct Battle {
     pub rng: Rng,
     pub next_id: u64,
@@ -405,6 +429,13 @@ impl Battle {
         if idx >= self.enemy_hand.len() {
             return Err("敌方手牌越界".into());
         }
+        let is_starter = self.enemy_hand[idx].is_starter();
+        if !is_starter {
+            if self.ef.sacrifice_used {
+                return Err("敌方本回合献祭次数已用完（开端手牌献祭除外）".into());
+            }
+            self.ef.sacrifice_used = true;
+        }
         let c = self.enemy_hand.remove(idx);
         self.ef.sacrificed_names.push(c.def.name);
         self.log.push(format!("敌方献祭（手牌）{}", c.def.name));
@@ -637,6 +668,12 @@ impl Battle {
         self.ef.sacrifice_used = false;
         self.ef.sacrificed_names.clear();
         crate::ai::run(self);
+        self.enemy_resolve_turn_end();
+    }
+
+    /// 敌方回合尾段（攻击→统一结算→推进→开端回合末）。AI 搜索的叶子推进与实战共用同一实现。
+    /// 路径内不消耗 rng（除抽牌外的 rng 消费点为零），因此克隆推进是 rng 中性的。
+    pub fn enemy_resolve_turn_end(&mut self) {
         self.enemy_attack_phase();
         self.enemy_settle();
         self.enemy_advance();
@@ -882,7 +919,7 @@ impl Battle {
 
     // ---------- 目标/伤害计算 ----------
 
-    fn pick_target(&self, side: SideK, col: usize, tr: TraitKind) -> Option<usize> {
+    pub(crate) fn pick_target(&self, side: SideK, col: usize, tr: TraitKind) -> Option<usize> {
         let def_front_empty = |c: usize| match side {
             SideK::Player => self.e_front[c].is_none(),
             SideK::Enemy => self.p_front[c].is_none(),
@@ -900,7 +937,7 @@ impl Battle {
         None
     }
 
-    fn col_cards(&self, side: SideK, col: usize) -> Vec<&CardInst> {
+    pub(crate) fn col_cards(&self, side: SideK, col: usize) -> Vec<&CardInst> {
         let mut v = Vec::new();
         if let Some(c) = self.slot(side, Row::Front, col).as_ref() {
             v.push(c);
@@ -935,7 +972,7 @@ impl Battle {
         cards.iter().filter(|x| x.hp > 0).flat_map(|x| x.skills.iter()).filter(|s| **s == sk).count() as i32
     }
 
-    fn attack_power(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
+    pub(crate) fn attack_power(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
         let mut dmg = base;
         dmg += Self::skill_count(&self.col_cards(side, acol).into_iter().filter(|a| a.id != atk_id).collect::<Vec<_>>(), Skill::AllyColAtk1);
         let foes = self.col_cards(side.other(), acol);
@@ -949,7 +986,7 @@ impl Battle {
         (dmg - debuff).max(0)
     }
 
-    fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32) -> i32 {
+    pub(crate) fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32) -> i32 {
         let mut d = self.attack_power(side, atk_id, acol, base);
         let allies_of_def = self.col_cards(side.other(), dcol);
         let mut reduce = 0;
@@ -965,7 +1002,7 @@ impl Battle {
         d.max(0)
     }
 
-    fn holder_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
+    pub(crate) fn holder_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
         self.attack_power(side, atk_id, acol, base)
     }
 
@@ -1132,6 +1169,51 @@ impl Battle {
     }
 
     // ---------- 对外视图（CLI/AI） ----------
+
+    /// 搜索用克隆：完整局面 + 丢弃日志（克隆只服务评估，落地时仍用原局）。
+    pub fn clone_for_search(&self) -> Battle {
+        let mut s = self.clone();
+        s.log = Vec::new();
+        s
+    }
+
+    /// 某格**下一次被攻击**会吃到的最大伤害（可达性感知：只有前排可被直接攻击，
+    /// 敌方后排须先推进到前排才挨打 → 记 0，见 §二 布局与 ai.rs 献祭条件3）。
+    pub fn threat_to(&self, side: SideK, row: Row, col: usize) -> i32 {
+        if row != Row::Front {
+            return 0;
+        }
+        let foe = side.other();
+        let mut worst = 0i32;
+        for acol in 0..4 {
+            let Some(a) = self.slot(foe, Row::Front, acol).as_ref().filter(|c| c.hp > 0) else {
+                continue;
+            };
+            if self.pick_target(foe, acol, a.def.tr) != Some(col) {
+                continue;
+            }
+            worst = worst.max(self.card_hit_damage(foe, a.id, acol, col, a.hp));
+        }
+        worst
+    }
+
+    /// 只读谓词：敌方场上献祭此刻是否合法（镜像 enemy_sacrifice_field 的校验，不复制结算）。
+    pub fn enemy_sac_field_allowed(&self, row: Row, col: usize) -> bool {
+        if self.ef.sacrifice_used {
+            return false;
+        }
+        self.slot(SideK::Enemy, row, col)
+            .as_ref()
+            .is_some_and(|c| self.turn - c.placed_turn >= 1)
+    }
+
+    /// 只读谓词：敌方手牌献祭此刻是否合法（开端豁免每回合额度，裁定10）。
+    pub fn enemy_sac_hand_allowed(&self, idx: usize) -> bool {
+        match self.enemy_hand.get(idx) {
+            None => false,
+            Some(c) => c.is_starter() || !self.ef.sacrifice_used,
+        }
+    }
 
     /// 跨关继承 = 上一关剩余：场上未阵亡 + 手牌 + 牌堆未抽 + 弃牌堆基础牌；开端不入堆（§五185/§十382）。
     pub fn battle_survivors(&mut self) -> Vec<CardInst> {
