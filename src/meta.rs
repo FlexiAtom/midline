@@ -17,6 +17,8 @@
 
 use crate::battle::{Battle, Difficulty, Outcome};
 use crate::model::{CardInst, Faction, Skill, short_card};
+use crate::save::{self, Progress};
+use std::path::PathBuf;
 
 /// §廿二:969 每日挑战＝本地种子，基于日期生成（`epoch秒/86400` ⇒ 日界是 UTC 零点，不是本地零点）。
 /// 诚实缺口：md:922 说每日挑战还有「固定卡组+特殊规则」，文档**一字未定义**两者，
@@ -45,23 +47,122 @@ pub fn encounter_for(level: u32) -> (Faction, Option<crate::boss::BossId>) {
     }
 }
 
-/// 一局的可变成状态：跨关继承堆 + 结转业力 + 后面还有没有关。
-/// `has_next=false` ＝单关跳打（`boss <id>`）：胜了也没有下一关可走。
+/// 一局的可变成状态：跨关继承堆 + 结转业力 + 后面还有没有关 + 落盘槽（`None`＝纯跳打，不落盘）。
 struct RunState {
     inherit: Vec<CardInst>,
     carry_karma: i32,
     has_next: bool,
+    save: Option<SaveSlot>,
 }
 
-/// 主线 60 关＝5 章，章末 Boss。通关/终结即返回；**存档不在本包**（progress.kv 归 meta-main）。
-pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty) {
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true };
-    let mut level = 1u32;
+/// `one_level` 唯一认识的存档形态：它不需要知道这是主线还是每日，只需要知道**要不要按关写快照**。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveUse {
+    /// 主线：每次进关写「本关入口」快照（`裁定27`）。
+    Progress,
+    /// 每日：只由调用方写 `daily_done`，关卡与继承堆一个字节都不动——每日挑战跑的是无 Boss 无限爬梯，
+    /// 把它写进主线进度会凭空造出一条没人打过的"主线进度"。
+    DailyDoneOnly,
+}
+
+/// 落盘槽：路径 + 内存里的档。内存档在战斗期间可能落后于现实，所以写入一律以当场的 `inherit` 为准。
+struct SaveSlot {
+    path: PathBuf,
+    progress: Progress,
+    kind: SaveUse,
+}
+
+impl SaveSlot {
+    /// 开局读盘。**坏档一律 `exit 2`**（裁定28）：读不懂就当空档会撞上 `Battle::new` 的空堆兜底分支，
+    /// 玩家以为在续第N关、实际拿到第1关牌序——那是比丢进度更糟的失真。
+    /// 全新档（文件不存在）⇒ 用默认值继续，第一次快照就会建文件。
+    fn open(path: PathBuf, faction: Faction, diff: Difficulty, resume: bool, kind: SaveUse) -> SaveSlot {
+        let loaded = match save::load_if_any(&path) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("✖ 存档打不开：{e}\n处置：`midline progress --save {}` 先看，确认要弃档再 `progress recover`（它改名留证，不删）。", path.display());
+                std::process::exit(2);
+            }
+        };
+        let Some(loaded) = loaded else {
+            return SaveSlot { path, progress: Progress::new(faction, diff), kind };
+        };
+        if !resume {
+            // 冷启动只接历史（通关标记/每日记录），不接进度：接了就是玩家没要求的续关。
+            // "不接进度"在内存里是无害的，在盘上是覆盖写——所以只要档上真有进度就必须先说出来，
+            // 不能让人以为 `--resume` 只是礼貌用语。每日槽不警告：它一个进度字节都不写，"覆盖原档"对它是假话。
+            if kind == SaveUse::Progress && (loaded.level != 1 || !loaded.inherit.is_empty()) {
+                let swap = if loaded.faction != faction {
+                    format!("档上是 {}，本次是 {}——换阵营请另开一个 --save 文件。", loaded.faction.name(), faction.name())
+                } else {
+                    String::new()
+                };
+                println!(
+                    "⚠ 档上已有主线进度：第{}关·继承堆{}张·结转业力{}。未给 --resume ⇒ 本次从第1关重开，第一次快照就覆盖它（通关与每日记录保留）。{swap}",
+                    loaded.level,
+                    loaded.inherit.len(),
+                    loaded.carry_karma,
+                );
+            }
+            let fresh = Progress::new(faction, diff);
+            return SaveSlot {
+                path,
+                progress: Progress { completed: loaded.completed, daily_done: loaded.daily_done, ..fresh },
+                kind,
+            };
+        }
+        if let Some(msg) = loaded.faction_conflict(faction) {
+            println!("✖ {msg}");
+            std::process::exit(2);
+        }
+        if loaded.completed {
+            println!("⚠ 档上已有主线通关标记 ⇒ 续档无进行中主线，本次从第1关重开（通关记录保留）。");
+            return SaveSlot {
+                path,
+                progress: Progress { completed: true, daily_done: loaded.daily_done, ..Progress::new(faction, diff) },
+                kind,
+            };
+        }
+        if let Some(w) = loaded.load_warning() {
+            println!("⚠ {w}");
+        }
+        // 难度以**本次命令行**为准（阵营不行：卡名只在原阵营表里存在，换了＝牌面错误，不是口味问题）。
+        println!(
+            "续档：第{}关 · {} · 继承堆{}张 · 结转业力{}（难度取本次 {}）",
+            loaded.level,
+            faction.name(),
+            loaded.inherit.len(),
+            loaded.carry_karma,
+            diff.label()
+        );
+        SaveSlot {
+            path,
+            progress: Progress { diff, ..loaded },
+            kind,
+        }
+    }
+}
+
+/// 主线 60 关＝5 章，章末 Boss。通关/终结即返回。落点由调用方定死（定不出位置时 `main.rs` 直接报错退出，
+/// 不存在"带着默认路径悄悄不落盘"这一条路）。
+pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf, resume: bool) {
+    let mut st = RunState {
+        inherit: Vec::new(),
+        carry_karma: 0,
+        has_next: true,
+        save: Some(SaveSlot::open(path, faction, diff, resume, SaveUse::Progress)),
+    };
+    let mut level = st.save.as_ref().map_or(1, |s| s.progress.level);
+    if let Some(s) = st.save.as_ref() {
+        st.inherit = s.progress.inherit.clone();
+        st.carry_karma = s.progress.carry_karma;
+    }
     loop {
         let out = one_level(seed, faction, diff, level, &mut st, encounter_for);
         match out {
             Outcome::PlayerWin if crate::boss::is_mainline_end(level) => {
                 println!("终影已灭 —— 主线通关（60/60）。seed={seed} 可复现整局。");
+                mark_completed(&mut st);
                 return;
             }
             Outcome::PlayerWin => {
@@ -79,19 +180,54 @@ pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty) {
     }
 }
 
-pub fn interactive_run(seed: u64) {
-    interactive_run_with(seed, Faction::Ember, Difficulty::Normal);
+/// 通关历史落盘：只翻 `completed`，关卡与牌维持第60关入口那份快照（`is_mainline_end` 是 `>=`，
+/// 把 level 写成 61 会让下一次续档"赢一关就再报一次通关"，那是伪造进度）。
+fn mark_completed(st: &mut RunState) {
+    let Some(slot) = st.save.as_mut() else { return };
+    if slot.progress.completed {
+        return;
+    }
+    slot.progress.completed = true;
+    persist(slot, "通关标记");
 }
 
-pub fn interactive_run_with(seed: u64, faction: Faction, diff: Difficulty) {
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true };
+/// 唯一的落盘口：失败就明说并摘掉存档槽（本次运行不再尝试写），**内存进度照常继续**。
+/// 把写盘失败当成致命错误退出去，等于让"存不进去"毁掉一局已经打完的游戏。
+fn persist(slot: &mut SaveSlot, what: &str) -> bool {
+    match slot.progress.save_to(&slot.path) {
+        Ok(()) => true,
+        Err(e) => {
+            println!("✖ {what}写入失败：{e}（本次运行不再落盘，内存进度继续）");
+            false
+        }
+    }
+}
+
+/// 每日挑战：文档要求「完成后记录日期，防止重复完成」（§廿一:926），但**从未定义"完成"的边界**
+/// （裁定29）。这里取最小可核读法——本局**第一次打赢一关**就算完成，只记 `daily_done`，不动主线进度。
+/// 诚实缺口：md:922 还要「固定卡组+特殊规则」，文档一字未定义 ⇒ 现在的 daily 只是"换日期种子的 play"。
+pub fn daily_run(path: PathBuf) {
+    let seed = daily_seed();
+    println!("每日挑战 seed={seed}");
+    let save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::DailyDoneOnly);
+    if save.progress.daily_done == seed {
+        println!("今天的每日挑战已经打过了（记录日种子={seed}）。想再来一局换个档就行：daily --save /tmp/another.kv");
+        return;
+    }
+    ladder(seed, Faction::Ember, Difficulty::Normal, Some(save));
+}
+
+/// 无 Boss、无 60 关上限的爬梯（`play` 与 `daily` 共用；`save=None` 时就是原来的纯跳打）。
+fn ladder(seed: u64, faction: Faction, diff: Difficulty, save: Option<SaveSlot>) {
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true, save };
     let mut level = 1u32;
     loop {
-        let out = one_level(seed, faction, diff, level, &mut st, |l| {
-            (enemy_faction_for(l), None)
-        });
+        let out = one_level(seed, faction, diff, level, &mut st, |l| (enemy_faction_for(l), None));
         match out {
-            Outcome::PlayerWin => level += 1,
+            Outcome::PlayerWin => {
+                mark_daily_done(&mut st);
+                level += 1;
+            }
             _ => {
                 println!("本局终结。seed={seed} 可复现整局。");
                 return;
@@ -100,12 +236,28 @@ pub fn interactive_run_with(seed: u64, faction: Faction, diff: Difficulty) {
     }
 }
 
+/// 每日完成标记（§廿一:926）。只在 `DailyDoneOnly` 槽上生效；已记过就不再重写盘。
+fn mark_daily_done(st: &mut RunState) {
+    let Some(slot) = st.save.as_mut() else { return };
+    if slot.kind != SaveUse::DailyDoneOnly || slot.progress.daily_done == daily_seed() {
+        return;
+    }
+    slot.progress.daily_done = daily_seed();
+    persist(slot, "每日完成记录");
+}
+
+/// `play`：无限爬梯、无 Boss、不落盘。`--save/--resume` 在这儿没有意义，由 `main.rs` 直接拒（裁定28）。
+pub fn play_run(seed: u64, faction: Faction, diff: Difficulty) {
+    ladder(seed, faction, diff, None);
+}
+
 /// `boss <id>` / `play --boss <id>`：单关跳打某章末 Boss。
-/// 主线 60 关的挂载与存档（`mainline_level`/`boss_down`/`progress.kv`）属 meta-main 包，此处不建第二套真值。
+/// 跳打是"试一把"，不是"走一遍主线"：把它的 level/牌写进 `progress.kv`，就会凭空多出一段没人打过的进度，
+/// 而解锁本来就能由 level 推导（`boss.rs`），另存一份＝第二套真值。所以本函数**永远不落盘**。
 pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::BossId) {
     use crate::boss::LEVELS_PER_CHAPTER;
     let level = id.chapter() * LEVELS_PER_CHAPTER;
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false };
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: None };
     let out = one_level(seed, faction, diff, level, &mut st, |_| {
         (id.profile().faction, Some(id))
     });
@@ -138,6 +290,46 @@ pub(crate) fn level_head(level: u32, boss: Option<crate::boss::BossId>) -> Strin
     }
 }
 
+/// 存档的唯一按关写入口＝**关隘入口快照**（裁定27）。
+/// 为什么是这个时刻：`Battle::new` 会用 `std::mem::take` 把继承堆搬空，战斗进行中的 `st.inherit` 恒为空数组，
+/// 那时候写盘＝把"10张遗产"写成"0张"。所以只在堆还完整、且准备阶段编辑已经做完的那一刻写，
+/// 并且直接读传入的活堆——不留"改了内存忘了同步槽"这种缝。
+/// 由此得到的语义是闭合的：败/平/弃局都不动盘 ⇒ 下一次续上的就是**这一关的入口**，
+/// 阵亡的牌跟着重来一遍（它们没在"已通关的关"里死掉）。写失败的处置见 `persist`。
+fn snapshot_entry(save: &mut Option<SaveSlot>, level: u32, faction: Faction, diff: Difficulty, inherit: &[CardInst], karma: i32) {
+    let Some(slot) = save.as_mut() else { return };
+    if slot.kind != SaveUse::Progress {
+        return;
+    }
+    slot.progress.level = level;
+    slot.progress.faction = faction;
+    slot.progress.diff = diff;
+    slot.progress.carry_karma = karma;
+    slot.progress.inherit = inherit.to_vec();
+    // 写失败就摘掉存档槽：不摘＝每一关都再喷一次同样的错误，把游戏界面变成磁盘报错回放。
+    if persist(slot, "进度快照") {
+        return;
+    }
+    *save = None;
+}
+
+/// 打赢一关之后的落盘＝**下一关的入口**快照。第60关不写"第61关入口"：那是越界值，
+/// `is_mainline_end` 是 `>=`，写了就是伪造进度（下一次续档会立刻再报一次通关）。
+/// 闸写在函数里而不是调用点，是为了让"记得判一下"这个会漏的步骤没有地方可漏。
+fn persist_next_entry(
+    save: &mut Option<SaveSlot>,
+    level: u32,
+    faction: Faction,
+    diff: Difficulty,
+    inherit: &[CardInst],
+    karma: i32,
+) {
+    if crate::boss::is_mainline_end(level) {
+        return;
+    }
+    snapshot_entry(save, level + 1, faction, diff, inherit, karma);
+}
+
 /// 一关的外围：头报 → 准备阶段 → 战斗 → 收尸 →（胜且还有下一关时）结算阶段。返回战斗结果。
 /// `enc` 是本关遭遇（普通关＝阵营轮转，章末关＝Boss）；主线与跳打 Boss 共用这一份循环，不开第二套。
 fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
@@ -155,6 +347,8 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     let head = level_head(level, boss);
     println!("\n===== {head} · 准备阶段 =====");
     settle_phase(inherit, carry_karma, false);
+    // 准备阶段的 fuse/drop/move 是玩家的真实决策，写盘必须在它们之后、`take` 之前。
+    snapshot_entry(&mut st.save, level, faction, diff, inherit, *carry_karma);
     // Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）；
     // 普通关走 `new_mainline`＝构造即强化，省掉"记得再补一刀"这个会漏的步骤。
     let mut b = match boss {
@@ -181,6 +375,9 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
                 if out == Outcome::PlayerWin {
                     println!("\n===== {head} · 结算阶段 =====（融合/升级/弃置，go 进入下一关）");
                     settle_phase(inherit, carry_karma, true);
+                    // 通关奖励一发完就落一次盘：结算阶段的 `q` 走 `process::exit`，回到不了调用方，
+                    // 只靠下一关入口那次写会把刚赢的等级与 fuse/up 成果全丢掉。
+                    persist_next_entry(&mut st.save, level, faction, diff, inherit, *carry_karma);
                 }
             }
             return out;
@@ -627,6 +824,85 @@ mod meta_tests {
             let s = Battle::chapter_strength(level);
             let tag = if st { format!("强化+{s}") } else { "未强化  ".into() };
             println!("  第{level:>2}关（第{ch}章）敌{} {d:<3} {tag} → {out:?}，{turn} 回合", foe.name());
+        }
+    }
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SAVE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// 存档写入落点：`/tmp` 下按 pid+计数器取唯一路径，绝不碰真实 `$HOME`。
+    fn snap_path(tag: &str) -> PathBuf {
+        let n = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("midline-snap-{}-{n}-{tag}.kv", std::process::id()))
+    }
+
+    fn slot(path: PathBuf, kind: SaveUse) -> Option<SaveSlot> {
+        Some(SaveSlot { path, progress: Progress::new(Faction::Ember, Difficulty::Normal), kind })
+    }
+
+    /// 快照写入的是**这一次当场传进来的东西**，不是内存里那份可能落后的档——五个字段少同步一个，
+    /// 续档就拿回旧等级或旧牌堆，而这在 play 现场看不出来。
+    #[test]
+    fn snapshot_writes_every_argument_not_the_stale_memory_copy() {
+        let path = snap_path("full");
+        let mut save = slot(path.clone(), SaveUse::Progress);
+        let pile = vec![
+            CardInst::new(3, faction_cards(Faction::Ember)[1]),
+            CardInst::new(9, faction_cards(Faction::Ember)[9]),
+        ];
+        snapshot_entry(&mut save, 7, Faction::Ember, Difficulty::Hard, &pile, 3);
+        let got = Progress::load_from(&path).expect("快照应能被校验器读回");
+        assert_eq!((got.level, got.carry_karma, got.diff), (7, 3, Difficulty::Hard));
+        assert_eq!(got.inherit.len(), 2, "牌堆按当场传入的那份写，不按内存");
+        assert_eq!(got.inherit[1].id, 9, "id 是战斗输入，快照不得重编号");
+        assert!(save.is_some(), "写成功 ⇒ 存档槽留着");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 每日槽只许动 `daily_done`。让它顺手写进度就等于凭空造出一条没人打过的"主线进度"——
+    /// 这个门禁是纯字段判断，一旦有人把 `daily` 改成共用 `Progress` 槽，全靠这条响。
+    #[test]
+    fn daily_slot_never_records_progress() {
+        let path = snap_path("daily");
+        let mut save = slot(path.clone(), SaveUse::DailyDoneOnly);
+        snapshot_entry(&mut save, 5, Faction::Ember, Difficulty::Normal, &[], 9);
+        assert!(!path.exists(), "每日槽不该建主线档");
+        assert_eq!(save.unwrap().progress.level, 1, "内存档也不该被推进");
+    }
+
+    /// 存不进去 ⇒ 摘槽并明说，**本局照打**。让写盘失败终止一局已经打完的游戏是反向的取舍。
+    #[test]
+    fn write_failure_detaches_the_slot_and_keeps_playing() {
+        // 用一个"同名普通文件"堵死父目录：create_dir_all 必然失败，且不需要权限技巧。
+        let blocker = snap_path("blocked");
+        std::fs::write(&blocker, b"x").unwrap();
+        let path = blocker.join("nested").join("progress.kv");
+        let mut save = slot(path.clone(), SaveUse::Progress);
+        snapshot_entry(&mut save, 2, Faction::Ember, Difficulty::Normal, &[], 0);
+        assert!(save.is_none(), "写失败后不再重复尝试");
+        assert!(!path.exists());
+        // 摘槽之后就是纯内存模式：再快照既不 panic 也不落盘。
+        snapshot_entry(&mut save, 3, Faction::Ember, Difficulty::Normal, &[], 0);
+        std::fs::remove_file(&blocker).ok();
+    }
+
+    /// 章末（第12关）要照常推进，第60关必须不写：`is_mainline_end` 是 `>=`，
+    /// 写下"第61关入口"就是伪造进度——下一次续档会赢一关就再报一次通关。
+    #[test]
+    fn next_entry_advances_chapter_ends_and_stops_at_sixty() {
+        for (level, want) in [(11u32, Some(12)), (12, Some(13)), (59, Some(60)), (60, None), (61, None)] {
+            let path = snap_path(&format!("next-{level}"));
+            let mut save = slot(path.clone(), SaveUse::Progress);
+            persist_next_entry(&mut save, level, Faction::Ember, Difficulty::Normal, &[], 0);
+            match want {
+                Some(next) => assert_eq!(
+                    Progress::load_from(&path).expect("非终关应落盘").level,
+                    next,
+                    "第{level}关赢完应记成第{next}关入口"
+                ),
+                None => assert!(!path.exists(), "第{level}关赢完不该建档（越界等级＝伪造进度）"),
+            }
+            std::fs::remove_file(&path).ok();
         }
     }
 }

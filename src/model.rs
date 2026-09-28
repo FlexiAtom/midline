@@ -682,7 +682,11 @@ mod anchor_tests {
             let src = std::fs::read_to_string(&fp).unwrap();
             for l in src.lines() {
                 let t = l.trim_start();
-                if t.starts_with("mod anchor_tests") {
+                // 排除②：**测试代码自身**。断言文案里的 `md:945` 和 `//!` 一样是叙述，算进来＝
+                //        谁都能在测试里补一句行号，把没实现的行判成已覆盖（本轮实测踩过一次：
+                //        存档模块的 `///` 文档写了 §廿二 排除行的行号，机检立刻红在"排除表过期"上）。
+                //        判据取 `#[cfg(test)]` 而不是猜 `mod *_tests` 的名字：整块测试代码都在它之后。
+                if t.starts_with("#[cfg(test)]") || t.starts_with("mod anchor_tests") {
                     break;
                 }
                 // 裁定登记区的 `//!` 行里也写行号，但那是**叙述**不是实现锚点——算进来的话，
