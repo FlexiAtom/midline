@@ -646,6 +646,27 @@ mod save_tests {
         }
     }
 
+    /// 传输层的四种坏法。空文件是"缺必填键"的极端形态，必须响；后三种**不是**破坏——手改、
+    /// Windows 搬运、`echo` 少个换行都会造出它们，读不懂就等于把好档误判成坏档。
+    #[test]
+    fn empty_is_refused_but_line_endings_and_missing_final_newline_survive() {
+        assert!(Progress::from_kv("").is_err(), "空文件不是空档，是没写全的档");
+        assert!(Progress::from_kv("\n\n#只有注释\n").is_err(), "全空行/全注释也读不出必填键");
+        let good = sample().to_kv();
+        let crlf = Progress::from_kv(&good.replace("\n", "\r\n")).expect("CRLF 是合法换行，不是损坏");
+        assert_eq!(crlf.inherit.len(), good.matches("card=").count(), "换行风格不该改变牌堆数");
+        let no_nl = Progress::from_kv(good.trim_end()).expect("末尾无换行是常见形态，要读得懂");
+        assert_eq!(no_nl.level, 17);
+        // 非 UTF-8 响在**读盘**那一层，不是解析那一层：两者都得响，但报错要说清是谁响的。
+        let dir = temp_path("not-utf8");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE);
+        std::fs::write(&path, [good.as_bytes(), &[0xFF, 0xFE]].concat()).unwrap();
+        let err = Progress::load_from(&path).expect_err("非 UTF-8 字节必须拒");
+        assert!(err.contains("读档失败"), "应报读盘失败而非解析失败：{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn level_one_with_a_pile_is_refused_but_empty_high_level_warns() {
         // level==1 且堆非空 ⇒ `Battle::new` 整包丢弃继承堆（静默丢牌）⇒ 拒载。
