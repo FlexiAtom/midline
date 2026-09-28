@@ -150,6 +150,7 @@ pub struct Battle {
     pub ef: SideFlags,
 
     pub karma_penalty_next: i32,
+    /// §廿二:955 伤害回滚每局最多触发2次（我方每局独立计数，不跨关累积）。
     pub rollback_left: i32,
     pub dealt_this_turn: i32,
     pub in_player_attack_phase: bool,
@@ -193,6 +194,9 @@ impl Battle {
             c
         };
         let mut draw_pile: Vec<CardInst>;
+        // §廿二:966 开局手牌来源：第1关从基础牌堆抽，第2关起从继承堆抽。
+        // `inherit.is_empty()` 这一支是**静默回落**——跳关/新开打第2关以上时，头报写着第N关、牌序却是第1关的。
+        // 存档包（meta-main）因此要求载入端先校验阵营与关卡一致性，不许拿空堆假装续关。
         if level <= 1 || inherit.is_empty() {
             let mut pool: Vec<CardDef> = faction_cards(player_faction)[1..].to_vec();
             rng.shuffle(&mut pool);
@@ -320,36 +324,63 @@ impl Battle {
         (crate::boss::chapter_of(level) - 1).min(CHAPTER_STRENGTH_CAP)
     }
 
-    /// 把章强化落到敌方牌面上：三档累积，逐档对应 §十一:403 的三种升级效果
-    /// （数值+1 / 阈值-1 / 技能强化）。开端卡不吃——持业者是蜡烛本体，强化它会顺带动到烛尽判定。
-    /// **不掷 rng**：技能按卡片序取，与玩家侧 `upgrade_card` 同一索引法 ⇒ 同 seed 逐帧复现不破，
-    /// 第1章强化量为 0 时整函数是空操作 ⇒ 首关与旧行为逐字节相同。
+    /// 把章强化落到敌方牌面上：三档累积，逐档对应 §十一:403 的三种升级效果。
+    /// 开端卡不吃——持业者是蜡烛本体，强化它会顺带动到烛尽判定。
+    /// 阈值档只对 `is_threshold_trait` 的卡生效：每阵营 12 张里只有 5 张带阈值特性，
+    /// 无门控时另外 7 张改的是行为读取点（`battle.rs:1265`）永不看的字段，属空转。
+    /// 技能档取"给该卡已有技能再叠一层"：不按 `c.id` 索引技能池——id 随 `next_id` 分配漂移，
+    /// 同一张牌换一关就会拿到不同技能，那不是强化而是换身份。
+    /// 幂等：`upgrades` 记为已强化档数，重复调用不再叠加（§十一:404 的计数器由此真正生效）。
+    /// **不掷 rng** ⇒ 同 seed 逐帧复现不破；第1章强化量为 0 时整函数是空操作 ⇒ 首关与旧行为逐字节相同。
     pub fn apply_chapter_strengthening(&mut self, level: u32) {
         let s = Self::chapter_strength(level);
         if s == 0 {
             return;
         }
-        let pool = Skill::list();
         let mut touched = 0usize;
+        let (mut dp, mut dt, mut ds) = (0usize, 0usize, 0usize);
         for c in self.enemy_hand.iter_mut().chain(self.enemy_pile.iter_mut()) {
-            if c.is_starter() {
+            if c.is_starter() || c.upgrades >= s as u8 {
                 continue;
             }
             if s >= 1 {
                 c.def.power += 1;
                 c.hp = c.def.power;
+                dp += 1;
             }
-            if s >= 2 {
+            if s >= 2 && is_threshold_trait(c.def.tr) {
                 c.def.threshold = (c.def.threshold - 1).max(1);
+                dt += 1;
             }
-            if s >= 3 {
-                c.skills.push(pool[c.id as usize % pool.len()]);
+            if s >= 3 && let Some(sk) = c.skills.first().copied() {
+                c.skills.push(sk);
+                ds += 1;
             }
+            c.upgrades = s as u8;
             touched += 1;
         }
+        if touched == 0 {
+            return;
+        }
         let ch = crate::boss::chapter_of(level);
-        self.log
-            .push(format!("— 第{ch}章强化：敌方 {touched} 张各 +{s} 档 —"));
+        self.log.push(format!(
+            "— 第{ch}章·敌方强化 {touched} 张：数值+1 共{dp}｜阈值-1 共{dt}｜技能+1层 共{ds} —"
+        ));
+    }
+
+    /// 主线/普通爬关的构造函数：建好即应用章强化，调用点不必记得单独调一次。
+    /// Boss 关不走这里（豁免理由见 `meta::one_level`）。
+    pub fn new_mainline(
+        rng_seed: u64,
+        player_faction: Faction,
+        enemy_faction: Faction,
+        difficulty: Difficulty,
+        inherit: Vec<CardInst>,
+        level: u32,
+    ) -> Self {
+        let mut b = Self::new(rng_seed, player_faction, enemy_faction, difficulty, inherit, level);
+        b.apply_chapter_strengthening(level);
+        b
     }
 
     fn make_card(&mut self, def: CardDef, with_skill: bool) -> CardInst {
@@ -365,6 +396,8 @@ impl Battle {
 
     // ---------- 抽牌 ----------
 
+    /// §廿二:948 手牌上限 8 张，超出弃置**最早进入手牌**的牌（`hand` 尾插 ⇒ 堆头即最早）；
+    /// §廿二:949 弃的牌进弃牌堆、本关不再使用（自造牌例外：任何离场永久消失，§十:372）。
     fn push_hand(&mut self, c: CardInst) {
         self.hand.push(c);
         while self.hand.len() > HAND_LIMIT {
@@ -406,11 +439,13 @@ impl Battle {
         self.pf.sacrificed_names.clear();
         self.dealt_this_turn = 0;
         self.attack_order.clear();
+        // §廿二:951 手牌为0且场上无卡 → 免费补1张开端（走 `grant_free_starter`，不占 `manual_draws` 额度）。
         if self.hand.is_empty() && self.p_front.iter().all(|s| s.is_none()) {
             self.grant_free_starter();
         }
     }
 
+    /// §廿二:951 保底补开端；§廿二:952 开端堆为空时自动生成1张临时开端（不退还堆计数）。
     fn grant_free_starter(&mut self) {
         if self.starter_pile > 0 {
             self.starter_pile -= 1;
@@ -423,6 +458,8 @@ impl Battle {
         self.push_hand(c);
     }
 
+    /// §廿二:968 继承堆耗尽 → `di` 只能失败，牌仍可走 `ds` 从开端堆抽；
+    /// §廿二:952 开端堆为空 → 自动生成1张临时开端（不扣堆计数）。
     pub fn action_draw(&mut self, from_starter_pile: bool) -> Result<(), String> {
         if self.pf.manual_draws <= 0 {
             return Err("本回合主动抽牌次数已用完（每回合2次，可混合来源）".into());
@@ -461,6 +498,8 @@ impl Battle {
     // ---------- 献祭 ----------
 
     /// 场上献祭（P 格 0..3）：每回合1次、在场≥1回合、全额不递减、禁同名牌回置。
+    /// §廿二:964 的"阵营限制"（§四:160 不能献祭敌方阵营的卡）由 API 形状保证：只有我方 `p_front`
+    /// 与 `hand` 可寻址，敌方卡传不进来，故无需运行期检查。
     pub fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {
         if self.pf.sacrifice_used {
             return Err("本回合献祭次数已用完（每回合最多1次）".into());
@@ -540,6 +579,7 @@ impl Battle {
 
     /// 通用放置核心（我方/敌方共用）。压上已占用格 → 原占位卡越线死亡；
     /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
+    /// §廿二:944 越线死亡统一走 `on_death(.., DeathCause::Cross)`：触发亡语、按死亡返还递减获得业力。
     fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
         let cost = if card.is_starter() { 0 } else { card.def.cost };
         match side {
@@ -669,6 +709,8 @@ impl Battle {
             self.enemy_turn();
         }
         if self.over.is_none() {
+            // §廿二:958 满 30 回合未分胜负 → 比蜡烛长度，长者胜、相等平局。
+            // 敌方有双烛时比"较长的那根"（`enemy_candle_ref`），取和会形同必败（裁定19）。
             if self.turn >= self.turn_limit {
                 let foe = self.enemy_candle_ref();
                 self.over = Some(match self.p_candle.cmp(&foe) {
@@ -712,6 +754,7 @@ impl Battle {
         }
     }
 
+    /// §廿二:962 攻击顺序＝按卡牌入场顺序（`seq` 单调递增，见 `place_side`），不按列位。
     fn row_seq_order(&self, side: SideK, row: Row) -> Vec<u64> {
         let mut v: Vec<u64> = (0..4)
             .filter_map(|c| self.slot(side, row, c).as_ref().filter(|x| x.hp > 0).map(|x| x.seq))
@@ -844,6 +887,12 @@ impl Battle {
         self.pending_candle_d = candle_d;
     }
 
+    /// 我方回合末的敌方伤害统一结算。四条形径都钉在这一个函数里，改动会同时破坏多条边界条款：
+    /// §廿二:954 回滚消耗来源 A＝本回合攻击阶段已打出的伤害总和（`dealt_this_turn`）；
+    /// §廿二:956 代价＝A 全额抵掉这一发 D，另记下回合业力-1（`karma_penalty_next`）；
+    /// §廿二:957 顺序＝先回滚判定 → 后蜡烛减短 → 后业火增加（下面严格按此三段排列）；
+    /// §廿二:953 超额部分按我方攻击顺序分配，优先攻击敌方卡牌、无卡则攻击敌方持业者（`distribute_excess`）；
+    /// §廿二:943 我方烛尽的同一结算里敌方烛也已尽 → 平局（双方同时致命不判一方胜）。
     fn enemy_settle(&mut self) {
         let d = std::mem::take(&mut self.pending_candle_d);
         if d > 0 && self.over.is_none() {
@@ -979,6 +1028,7 @@ impl Battle {
         }
     }
 
+    /// §廿二:963 推进＝单卡、按列独立：只有前排空的列才把该列后排顶上来，每列每次至多1张。
     fn enemy_advance(&mut self) {
         for col in 0..4 {
             if self.e_front[col].is_none() {
@@ -1022,8 +1072,10 @@ impl Battle {
     // ---------- 死亡统一入口 ----------
 
     /// 死亡统一入口。去向路由（裁定7）：
-    /// 开端 → 离场（每关固定发放，永不入堆）；自造牌 → 永久消失（§十372）；
-    /// 其余基础牌 → 弃牌堆，本关不再使用，下关并入继承堆（使返还递减跨关可达）。
+    /// 开端 → 离场（每关固定发放，永不入堆）；自造牌 → 永久消失（§十:372）；
+    /// 其余基础牌 → 弃牌堆，本关不再使用，下关并入继承堆（§廿二:949 使返还递减跨关可达）。
+    /// §廿二:961 亡语在本函数内即刻结算，调用方的 `check_all_triggers` 在其后 ⇒ 亡语先于特性。
+    /// §廿二:960 业火跨回合保留（没有任何按回合清空的路径），只在死亡这一处清零。
     pub fn on_death(&mut self, mut c: CardInst, side: SideK, col: Option<usize>, cause: DeathCause) {
         let devour = cause == DeathCause::Sacrifice
             && side == SideK::Player
@@ -1252,6 +1304,7 @@ impl Battle {
         }
     }
 
+    /// §廿二:959 每张卡每回合至多触发1次特性（`triggered_turn` 记账）。
     fn try_trigger_col(&mut self, side: SideK, col: usize, turn: i64) {
         let rows = match side {
             SideK::Player => vec![Row::Front],
@@ -1262,6 +1315,9 @@ impl Battle {
                 Some(c) => c.clone(),
                 None => continue,
             };
+            // §廿二:945 死亡后业火达阈值 → **不触发**特性（业火由 `on_death` 清零）。
+            // 这裁定了文档自身的序冲突：§十三:547「业火≥阈值 → 触发特性」排在 §十三:548「数值≤0 → 死亡」之前，
+            // 按字面顺序读会得出"致命一击仍先触发特性"；§廿二 边界表明写不触发，采边界表读法（裁定26）。
             if snap.hp <= 0 || snap.triggered_turn == turn || !is_threshold_trait(snap.def.tr) {
                 continue;
             }
@@ -2010,12 +2066,24 @@ mod chapter_strength_tests {
             let (bp, bt) = base_power(Faction::Frost, c.def.name);
             seen += 1;
             assert_eq!(c.def.power, bp + 1, "{}：第4章＝三档 ⇒ 数值+1", c.def.name);
-            assert_eq!(c.def.threshold, (bt - 1).max(1), "{}：第4章＝三档 ⇒ 阈值-1", c.def.name);
+            let exp_thr = if is_threshold_trait(c.def.tr) { (bt - 1).max(1) } else { bt };
+            assert_eq!(c.def.threshold, exp_thr, "{}：阈值档只该动带阈值特性的卡", c.def.name);
             assert_eq!(c.skills.len(), 2, "{}：第4章＝三档 ⇒ 技能强化（构造1 + 追加1）", c.def.name);
+            assert!(
+                c.skills[0] == c.skills[1],
+                "{}：技能档是给已有技能叠层，不是换一个新技能",
+                c.def.name
+            );
             assert_eq!(c.hp, c.def.power, "强化后血量须跟着定义重置满格");
         }
         // 每阵营 13 张定义（1 开端 + 12 普通）；敌方 4 在手、9 在堆。
         assert_eq!((seen, b.enemy_hand.len() + b.enemy_pile.len(), b.enemy_hand.len(), b.enemy_pile.len()), (12, 13, 4, 9));
+        // 日志必须报**实际效果**而不是"+3 档"这种含糊说法（阈值只有 5 张命中）。
+        assert!(
+            b.log.iter().any(|l| l.contains("数值+1 共12｜阈值-1 共5｜技能+1层 共12")),
+            "强化日志与牌面不符：{:?}",
+            b.log.last()
+        );
     }
 
     /// 同一关内「强化后 - 强化前」的逐牌差值，按卡名归档。
@@ -2035,16 +2103,54 @@ mod chapter_strength_tests {
         v
     }
 
+    /// 该卡名的阈值档真实差值：带阈值特性才 -1，阈值已是 1 时不动。
+    fn thr_delta(f: Faction, name: &str) -> i32 {
+        let d = faction_cards(f).iter().find(|d| d.name == name).unwrap();
+        if is_threshold_trait(d.tr) { (d.threshold - 1).max(1) - d.threshold } else { 0 }
+    }
+
     #[test]
     fn chapter_five_plateaus_at_chapter_four() {
         let c4 = deltas(37);
         let c5 = deltas(49);
         assert_eq!(c4.len(), 12);
+        let gated: Vec<&str> = c4.iter().filter(|(_, _, dt, _)| *dt != 0).map(|(n, ..)| *n).collect();
         assert!(
-            c4.iter().all(|(_, dp, dt, ds)| (*dp, *dt, *ds) == (1, -1, 1)),
-            "第4章＝三档：每张非开端牌 +1/-1/+1，实际差值 {c4:?}"
+            c4.iter().all(|(n, dp, dt, ds)| (*dp, *ds) == (1, 1) && *dt == thr_delta(Faction::Frost, n)),
+            "第4章＝三档：每张 +1 数值、+1 技能层，阈值仅带特性的卡 -1，实际差值 {c4:?}"
         );
+        assert_eq!(gated.len(), 5, "每阵营 12 张里恰有 5 张带阈值特性，其余 7 张阈值档必须空转");
         assert_eq!(c4, c5, "第4章起按 §十一:404 封顶：第5章的逐牌差值不得再涨");
+    }
+
+    /// 幂等：主线循环里"建好即强化"和调用点再补一次，不该叠成 2 倍强化。
+    #[test]
+    fn applying_twice_equals_applying_once() {
+        for level in [13u32, 25, 37] {
+            let once = Battle::new_mainline(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), level);
+            let mut twice = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), level);
+            twice.apply_chapter_strengthening(level);
+            twice.apply_chapter_strengthening(level);
+            assert_eq!(enemy_snap(&twice), enemy_snap(&once), "第{level}关二次调用不得再改牌面");
+            assert_eq!(twice.log.len(), once.log.len(), "第二次调用不该再叠一条强化日志");
+        }
+    }
+
+    /// 构造即强化（`new_mainline`）与"构造后手动强化"必须是同一件事，且与不强化有区别。
+    #[test]
+    fn new_mainline_wraps_new_plus_strengthening_and_chapter_one_stays_raw() {
+        let manual = {
+            let mut b = Battle::new(9, Faction::Ember, Faction::Shadow, Difficulty::Hard, Vec::new(), 25);
+            b.apply_chapter_strengthening(25);
+            b
+        };
+        let wrapped = Battle::new_mainline(9, Faction::Ember, Faction::Shadow, Difficulty::Hard, Vec::new(), 25);
+        assert_eq!(enemy_snap(&wrapped), enemy_snap(&manual));
+        let raw = Battle::new(9, Faction::Ember, Faction::Shadow, Difficulty::Hard, Vec::new(), 5);
+        let wrapped1 = Battle::new_mainline(9, Faction::Ember, Faction::Shadow, Difficulty::Hard, Vec::new(), 5);
+        assert_eq!(enemy_snap(&wrapped1), enemy_snap(&raw), "第1章 new_mainline 必须等价于 new");
+        let ramped = Battle::new_mainline(9, Faction::Ember, Faction::Shadow, Difficulty::Hard, Vec::new(), 25);
+        assert_ne!(enemy_snap(&ramped), enemy_snap(&raw), "反向对照：非第1章确实变了（防空实现假绿）");
     }
 
     #[test]

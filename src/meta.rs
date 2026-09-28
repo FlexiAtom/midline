@@ -18,6 +18,9 @@
 use crate::battle::{Battle, Difficulty, Outcome};
 use crate::model::{CardInst, Faction, Skill, short_card};
 
+/// §廿二:969 每日挑战＝本地种子，基于日期生成（`epoch秒/86400` ⇒ 日界是 UTC 零点，不是本地零点）。
+/// 诚实缺口：md:922 说每日挑战还有「固定卡组+特殊规则」，文档**一字未定义**两者，
+/// 所以当前 `daily` 只是"换日期种子的 play"，不是文档意义上的每日挑战。
 pub fn daily_seed() -> u64 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -152,14 +155,12 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     let head = level_head(level, boss);
     println!("\n===== {head} · 准备阶段 =====");
     settle_phase(inherit, carry_karma, false);
+    // Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）；
+    // 普通关走 `new_mainline`＝构造即强化，省掉"记得再补一刀"这个会漏的步骤。
     let mut b = match boss {
         Some(id) => Battle::new_boss(seed, faction, id, std::mem::take(inherit), level),
-        None => Battle::new(seed, faction, foe, diff, std::mem::take(inherit), level),
+        None => Battle::new_mainline(seed, faction, foe, diff, std::mem::take(inherit), level),
     };
-    // Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）。
-    if boss.is_none() {
-        b.apply_chapter_strengthening(level);
-    }
     loop {
         print!("\n{}", crate::render::render(&b));
         if let Some(out) = b.over {
@@ -174,6 +175,8 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
             }
             if has_next {
                 collect_survivors(&mut b, inherit);
+                // §廿二:967 保留战斗结束时的业力进结算阶段（融合定价花它）；下一关的战斗业力由 `Battle::new`
+                // 重新起算＝"进入下一关重置为0"。本行只在这两个用途之间传递，不做跨关战斗业力累积。
                 *carry_karma = b.p_karma.max(0);
                 if out == Outcome::PlayerWin {
                     println!("\n===== {head} · 结算阶段 =====（融合/升级/弃置，go 进入下一关）");
@@ -240,6 +243,7 @@ fn parse_slot(s: &str) -> usize {
         .unwrap_or(9)
 }
 
+/// §廿二:947 继承堆上限 10 张，超出弃最早入堆的牌（永久消失）。
 /// 幸存者回继承堆（手牌+堆底+场上），上限10，超出弃最早。
 fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) {
     let mut survivors = b.battle_survivors();
@@ -334,6 +338,8 @@ fn parse_idx(s: &str) -> usize {
     s.parse().unwrap_or(99)
 }
 
+/// §廿二:946 融合后新牌费用＝主牌费用（副牌只贡献技能，不贡献费用）。
+/// §廿二:950 副牌直接消失——**不进弃牌堆**，故也不会有死亡返还、不会再被抽到。
 pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &mut i32) -> Result<String, String> {
     if main >= inherit.len() || sub >= inherit.len() || main == sub {
         return Err("下标无效".into());
@@ -390,10 +396,10 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
         let mut level = 1u32;
         let mut last = Outcome::Draw;
         for _ in 0..5 {
-            let mut b = Battle::new(seed, Faction::Ember, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
-            // 与 one_level 同一套敌方构造：本循环当前最多到第5关（第1章，强化量 0），加上来是为了
-            // 将来把轮数拉长读章节曲线时，托管冒烟与主线玩的不是两种游戏。
-            b.apply_chapter_strengthening(level);
+            // 与 one_level 同一套敌方构造（`new_mainline`＝构造即章强化）：本循环当前最多到第5关
+            // （第1章，强化量 0），加上来是为了将来把轮数拉长读章节曲线时，托管冒烟与主线玩的不是两种游戏。
+            let mut b =
+                Battle::new_mainline(seed, Faction::Ember, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
             auto_play(&mut b);
             last = b.over.unwrap_or(Outcome::Draw);
             match last {
@@ -590,34 +596,37 @@ mod meta_tests {
         assert!(!boss.contains("强化"), "Boss 关豁免章强化，头报不该谎称有");
     }
 
-    /// 裁定24 的**读数**（不是断言平衡）：每章首关 × 三个难度档，各打「未强化」与「已强化」两场贪心托管。
+    /// 裁定24 的**读数**（不是断言平衡）：每章首关 × **三个敌方阵营** × 三个难度档，各打「未强化」与「已强化」两场贪心托管。
+    /// 阵营这一轴是补的窟窿：章首关 `[1,13,25,37,49]` 全部 `% 3 == 1` ⇒ 只取 `encounter_for`
+    /// 会五章打一味的霜阵营，而阵营差（霜 0.00% vs 烬 5.21%）比强化效应还大，读数只描述一种敌人。
     /// 断言只锁"能分出结果、不越回合闸、不 panic"；对照与实验同 seed，读数随
     /// `cargo test -- --nocapture` 打印并回填 pool/chapter-strengthening.md §2。
     #[test]
     fn chapter_ramp_matrix_reaches_a_decision() {
         let mut rows = Vec::new();
         for level in [1u32, 13, 25, 37, 49] {
-            for d in [Difficulty::Normal, Difficulty::Hard, Difficulty::Expert] {
-                let (foe, boss) = encounter_for(level);
-                assert!(boss.is_none(), "第{level}关不该是 Boss 章末");
-                for strengthen in [false, true] {
-                    let mut b = Battle::new(4242, Faction::Ember, foe, d, Vec::new(), level);
-                    if strengthen {
-                        b.apply_chapter_strengthening(level);
+            assert!(encounter_for(level).1.is_none(), "第{level}关不该是 Boss 章末");
+            for foe in [Faction::Ember, Faction::Frost, Faction::Shadow] {
+                for d in [Difficulty::Normal, Difficulty::Hard, Difficulty::Expert] {
+                    for strengthen in [false, true] {
+                        let mut b = Battle::new(4242, Faction::Ember, foe, d, Vec::new(), level);
+                        if strengthen {
+                            b.apply_chapter_strengthening(level);
+                        }
+                        auto_play(&mut b);
+                        let out = b.over.expect("每章首关都必须分出结果（不得卡在 300 步护栏里）");
+                        assert!(b.turn <= b.turn_limit, "第{level}关 [{}] 越回合闸：turn={}", d.label(), b.turn);
+                        rows.push((level, foe, d.label(), strengthen, out, b.turn));
                     }
-                    auto_play(&mut b);
-                    let out = b.over.expect("每章首关都必须分出结果（不得卡在 300 步护栏里）");
-                    assert!(b.turn <= b.turn_limit, "第{level}关 [{}] 越回合闸：turn={}", d.label(), b.turn);
-                    rows.push((level, d.label(), strengthen, out, b.turn));
                 }
             }
         }
         println!("裁定24 章强化读数（seed=4242，我方＝贪心托管、空继承堆单关；强化前=对照）：");
-        for (level, d, st, out, turn) in rows {
+        for (level, foe, d, st, out, turn) in rows {
             let ch = crate::boss::chapter_of(level);
             let s = Battle::chapter_strength(level);
             let tag = if st { format!("强化+{s}") } else { "未强化  ".into() };
-            println!("  第{level:>2}关（第{ch}章）{d:<3} {tag} → {out:?}，{turn} 回合");
+            println!("  第{level:>2}关（第{ch}章）敌{} {d:<3} {tag} → {out:?}，{turn} 回合", foe.name());
         }
     }
 }

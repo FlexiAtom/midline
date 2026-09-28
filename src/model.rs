@@ -120,22 +120,59 @@
 //!     只进 rng 种子与头报，无任何按章递增的敌方数值）。
 //!     人裁定原话：「数值先写，后续有问题再改」⇒ 数值由实现侧先给口径，改动权仍在人侧。
 //!     强化量 `chapter_strength(level) = min(章号-1, 3)`，三档**累积**，逐档复用 §十一:403 的三种升级效果：
-//!     +1 档＝数值+1；+2 档＝再阈值-1（下限1）；+3 档＝再追加 1 个技能。封顶 3 复用 §十一:404「每张卡牌最多升级3次」。
-//!     ⇒ 第1/2/3/4/5章＝0/1/2/3/3（第4章起平台）。落在 `battle.rs::apply_chapter_strengthening`。
+//!     +1 档＝数值+1；+2 档＝**带阈值特性的卡**再阈值-1（下限1）；+3 档＝再给该卡已有技能叠 1 层。
+//!     封顶 3 复用 §十一:404「每张卡牌最多升级3次」。⇒ 第1/2/3/4/5章＝0/1/2/3/3（第4章起平台）。
+//!     落在 `battle.rs::apply_chapter_strengthening`；②③两档的口径由 **裁定25** 更正（原文写的是"阈值-1"与"追加1个技能"）。
 //!     四条自设边界（都是"不擅动别的东西"，不是新规则）：
 //!     - **开端卡不吃强化**：持业者是蜡烛本体，动它会串到烛尽判定（§十四 闸）。
 //!     - **Boss 关整体豁免**：由调用方 `one_level` 决定不施加强化，保 B1「贪心对 5 份脚本全败」读数逐帧可比。
-//!     - **不掷 rng**：技能按卡片序取（与玩家侧 `upgrade_card` 同一索引法）⇒ 同 seed 逐帧复现不破；
+//!     - **不掷 rng**：三档只改既有牌面（不新增卡、不换卡、不索引技能池，见 裁定25②）⇒ 同 seed 逐帧复现不破；
 //!       第1章强化量为 0 时整函数空操作 ⇒ 首关与改动前逐字节相同（`chapter_one_is_byte_identical_no_op` 守）。
 //!     - **与难度正交**：§廿 难度只改决策质量（`ai.rs search_depth`），章强化只改数值，互不渗透
 //!       （`strengthening_is_orthogonal_to_difficulty` 守）。
 //!
 //!     实测读数（`cargo test -- --nocapture chapter_ramp`，seed=4242，我方＝贪心托管、空继承堆单关，
-//!     每格"未强化→强化后"的败北回合）：第2章 10→8 / 7→6 / 9→**6**，第3章 11→5，第4章 9→6 / 9→7 / 9→6，
+//!     每格"未强化→强化后"的败北回合）。**这批是旧取样**：敌方取 `encounter_for`，而章首关全落霜阵营，
+//!     五章其实是同一种敌人 ⇒ 已被 裁定25 的取样修正作废，数值只留作过程痕迹，不再当读数引用。
+//!     第2章 10→8 / 7→6 / 9→**6**，第3章 11→5，第4章 9→6 / 9→7 / 9→6，
 //!     第5章 7→6。方向正确：强化越高我方死得越早，且**不空转**（同 seed 回合数确实变动）。
 //!     **但这批读数不能当平衡结论**：第1章未强化的基准就已经 30 格全败（6-8 回合），⇒ 贪心托管＋空继承堆
 //!     对任何普通关都不是有效玩家。这条同时反证了 `boss-followups` B1 的猜测：Boss 全败**不是 Boss 专属强度**，
 //!     而是基准策略太弱的共病；B1 要的是"更强的托管/多关继承"读数法，不是先削 Boss 数值。
+//! 25. 裁定24 的**两处实现更正 + 一处取样法更正**（人授权原话 2026-09-29：「好，我许准自行决断，继续推进」）。
+//!     起因＝对本方已提交代码的三条指控逐条实测，全部为真；这不是手感调整，是"实现与自己写下的声明不符"。
+//!     - **① 阈值档空转**：旧实现无条件 `threshold -= 1`，但 `threshold` 的唯一行为读取点
+//!       （`battle.rs::try_trigger_col`）前面有 `is_threshold_trait` 闸 ⇒ 每阵营 12 张里 7 张改的是永不被读的字段。
+//!       现加同一道闸：只有带阈值特性的卡才 -1（实测 5/12 张命中，`chapter_five_plateaus_at_chapter_four` 锁死这个数）。
+//!     - **② 技能档换身份而非强化**：旧实现 `pool[c.id % 12]`，而 `id` 是 `next_id` 顺发的战斗内序号
+//!       ⇒ 同一张牌换个关会拿到**不同技能**；原注释却写成"与玩家侧 `upgrade_card` 同一索引法"（那是 `upgrades % 12`，
+//!       与卡片身份无关）。现按 §十一:403「技能强化」的中文语义 + md:354/md:357「同名技能叠加」读法，
+//!       改为**给该卡已有技能再叠一层**（`skill_count` 按出现次数计层，叠层即刻生效且不改身份）。
+//!     - **③ 幂等**：`upgrades` 记为已施加档数，重复调用不再叠加（§十一:404 的计数器在敌方侧也真正生效）。
+//!       同时新增 `Battle::new_mainline()`＝构造即强化，消掉"调用点记得再补一刀"这个可漏步骤。
+//!     - **取样法更正**（这条改的是**读数**不是规则）：章首关 `[1,13,25,37,49]` 全部 `level % 3 == 1`
+//!       ⇒ 旧矩阵五章打的都是同一个霜阵营，而阵营差本身就有 0.00%–5.21% 的胜负幅度，比强化效应还大。
+//!       矩阵补上阵营轴（5 章 × 3 阵营 × 3 难度 × 对照＝90 场）。新读数（seed=4242，贪心托管·空继承堆·单关）：
+//!       基线 45 格里 **3 胜**（全在幽影议会，第3章普通/专家 20 回合、第5章普通 17 回合），强化臂 **0 胜**；
+//!       33/45 格回合数变化，**1 格反向**（第5章幽影困难 6→7 回合：敌方评分吃自身数值，加强会改变它的选择）。
+//!       仍是"测法与对照"，不是平衡结论——基准臂本身仍 42/45 全败（B1 未解）。
+//! 26. 文档自身的序冲突 + 锚点机检的反向缺口（同一授权下的自决）。
+//!     - **序冲突采 §廿二 读法**：§十三:547「业火≥阈值 → 触发特性」排在 §十三:548「数值≤0 → 死亡」之前，
+//!       按字面顺序读会得出"致命一击仍先触发特性"；§廿二:945 明写"死亡后业火值达阈值 不触发特性，业火值清零"。
+//!       边界表是对流程表的例外说明，故采 945。实现本来就是这个行为（`hp <= 0` 闸 + `on_death` 清零），
+//!       缺的只是把这条例外**写进锚点**，否则下一个人顺着 §十三 的序号"修正"它就会改掉规则。
+//!     - **反向覆盖机检**：正向机检只问"已有锚点指对了吗"，问不出"整条规则没落地"——945 正是这样漏掉的
+//!       （有实现、零锚点，正向一路绿灯）。新增 `every_edge_case_row_of_section22_is_anchored_back_from_src`：
+//!       §廿二 边界表每一行都必须被 src/ 的锚点指回。必检集**从文档结构推导**（表头之后到 `---` 的连续非空行），
+//!       不是手挑清单；唯一人工入口是排除表，当前两条：md:970「商业模式 挂Github」＝发行备注不是规则、
+//!       md:971「激励系统 收集/成就/每日奖励」＝规则层范围外（存档包只存进度，金币成就一个字节不存）。
+//!       本轮补齐 §廿二:943..969 共 26 行的锚点。叙述不算锚点：`//!` 裁定登记区与机检自身的文本都被排除在计数外。
+//!     - **假绿反证（实测两次，都留了痕迹）**：① 第一版机检把自己注释里的 "md:945" 也算成锚点 ⇒
+//!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
+//!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
+//!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖只纳入 §廿二 一张表；§廿三 速查表与其它章的同类清单行
+//!       仍未纳入，"整条规则没落地"在那些章仍查不出；语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 
 use std::fmt;
 
@@ -474,11 +511,10 @@ mod anchor_tests {
         if j == from { None } else { Some((cs[from..j].iter().collect::<String>().parse().ok()?, j)) }
     }
 
-    #[test]
-    fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
+    /// 文档不随仓库分发。候选：环境变量 → 仓库同级 → 上两级（本仓在 ~/rust/midline，文档在 ~/）。
+    fn locate_doc() -> Option<std::path::PathBuf> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        // 文档不随仓库分发。候选：环境变量 → 仓库同级 → 上两级（本仓在 ~/rust/midline，文档在 ~/）。
-        let candidates: Vec<std::path::PathBuf> = std::env::var("MIDLINE_DOC")
+        std::env::var("MIDLINE_DOC")
             .map(std::path::PathBuf::from)
             .ok()
             .into_iter()
@@ -487,25 +523,39 @@ mod anchor_tests {
                 manifest.parent().unwrap_or(manifest).join("中线.MD"),
                 manifest.ancestors().nth(2).unwrap_or(manifest).join("中线.MD"),
             ])
-            .collect();
-        let doc = candidates.iter().find(|p| p.exists());
-        if doc.is_none() && std::env::var("MIDLINE_DOC_SKIP").is_ok() {
-            return; // 明确豁免才跳过（默认不跳过，防静默假绿）
+            .find(|p| p.exists())
+    }
+
+    /// 找不到文档时的统一处置：只有 `MIDLINE_DOC_SKIP=1` 才允许跳过（默认不跳过，防静默假绿）。
+    /// 返回 `None` ＝本测试已被显式豁免，调用方直接 `return`。
+    fn doc_or_skip() -> Option<Vec<String>> {
+        if locate_doc().is_none() && std::env::var("MIDLINE_DOC_SKIP").is_ok() {
+            return None;
         }
-        let Some(doc) = doc else {
+        let doc = locate_doc().unwrap_or_else(|| {
             panic!(
-                "找不到规则文档 中线.MD（候选：{}）。它不在仓库里；\
-                 设 MIDLINE_DOC=<路径> 指定，或 MIDLINE_DOC_SKIP=1 明确跳过本检查。",
-                candidates
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(" , ")
-            );
-        };
-        let doc = doc.clone();
-        let text = std::fs::read_to_string(&doc).unwrap();
-        let lines: Vec<&str> = text.lines().collect();
+                "找不到规则文档 中线.MD（候选含 $MIDLINE_DOC 与仓库同级/上两级）。它不在仓库里；\
+                 设 MIDLINE_DOC=<路径> 指定，或 MIDLINE_DOC_SKIP=1 明确跳过本检查。"
+            )
+        });
+        Some(std::fs::read_to_string(&doc).unwrap().lines().map(str::to_string).collect())
+    }
+
+    fn src_rs_files() -> Vec<std::path::PathBuf> {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(manifest.join("src"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
+        let Some(lines_s) = doc_or_skip() else { return };
+        let lines: Vec<&str> = lines_s.iter().map(String::as_str).collect();
         // 章标题表：编号必须严格递增，否则文中任何「一、二」式散文都会被误认成章节头。
         let mut heads: Vec<(u32, u32)> = Vec::new();
         for (i, l) in lines.iter().enumerate() {
@@ -518,13 +568,7 @@ mod anchor_tests {
         let section_at = |line: u32| heads.iter().filter(|(_, at)| *at <= line).map(|(v, _)| *v).last();
 
         let mut bad: Vec<String> = Vec::new();
-        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(manifest.join("src"))
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
-            .collect();
-        files.sort();
-        for fp in files {
+        for fp in src_rs_files() {
             let name = fp.file_name().unwrap().to_string_lossy().into_owned();
             let src = std::fs::read_to_string(&fp).unwrap();
             for (idx, line) in src.lines().enumerate() {
@@ -565,6 +609,105 @@ mod anchor_tests {
             }
         }
         assert!(bad.is_empty(), "{} 处文档锚点错位：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    /// 一行里出现的所有文档锚点行号（`md:` / `速查:` / `§章:`，全角冒号也算）。
+    fn anchor_numbers(line: &str) -> Vec<u32> {
+        let cs: Vec<char> = line.chars().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < cs.len() {
+            let prev_ok = i == 0 || !cs[i - 1].is_ascii_alphanumeric();
+            let plain = prev_ok
+                && ((cs[i] == 'm' && cs.get(i + 1) == Some(&'d') && cs.get(i + 2) == Some(&':'))
+                    || (cs[i] == '速' && cs.get(i + 1) == Some(&'查') && cs.get(i + 2) == Some(&':')));
+            if plain && let Some((n, end)) = digits_at(&cs, i + 3) {
+                out.push(n);
+                i = end;
+                continue;
+            }
+            if cs[i] == '§' {
+                let mut j = i + 1;
+                while j < cs.len() && NUM.contains(&cs[j]) {
+                    j += 1;
+                }
+                if j > i + 1 && matches!(cs.get(j), Some(&':') | Some(&'：')) && let Some((n, end)) = digits_at(&cs, j + 1) {
+                    out.push(n);
+                    i = end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// **反向**覆盖机检（裁定26）：§廿二 边界表的每一行，src/ 里必须有至少一个锚点指回它。
+    /// 正向机检只问"已有锚点指对了吗"，天生问不出"整条规则没落地"——md:945（死亡后业火达阈值不触发特性）
+    /// 就是这么漏掉的：实现早在 `try_trigger_col` 的 `hp <= 0` 闸里，锚点一个没有，正向一路绿灯。
+    /// 必检集合**从文档结构推导**（§廿二 表头之后的连续非空行，到 `---` 为止），不是手挑清单；
+    /// 唯一的人工入口是下面的 `NOT_A_RULE` 排除表，每条必须写理由。
+    /// 残留盲区（如实登记）：本检查只覆盖 §廿二 一张表；§廿三 速查表与其它章的同类清单行仍未反向纳入。
+    #[test]
+    fn every_edge_case_row_of_section22_is_anchored_back_from_src() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "二十二、边界情况处理")
+            .expect("§廿二 标题必须存在（文档结构变了就要同步改本检查）");
+        // 表体＝标题之后到第一条 `---` 之间的非空行；`情况 处理` 是列头，不是规则。
+        let mut rows: Vec<usize> = Vec::new();
+        for (off, l) in lines[head + 1..].iter().enumerate() {
+            let t = l.trim();
+            if t == "---" {
+                break;
+            }
+            if t.is_empty() || t == "情况 处理" {
+                continue;
+            }
+            rows.push(head + 2 + off);
+        }
+        // 人工排除表（机检的唯一自由入口，逐条写理由）：
+        const NOT_A_RULE: &[(usize, &str)] = &[
+            (970, "商业模式 挂Github——不是游戏规则，是发行渠道备注"),
+            (971, "激励系统 通关进度+收集+成就+每日奖励——规则层范围外（存档包只存进度，收集/成就/金币一个字节不存）"),
+        ];
+        let excluded: Vec<usize> = NOT_A_RULE.iter().map(|(n, _)| *n).collect();
+        let required: Vec<usize> = rows.iter().copied().filter(|n| !excluded.contains(n)).collect();
+        assert!(required.len() >= 25, "§廿二 表体至少 25 行，实测 {} 行 ⇒ 结构推导失效", required.len());
+
+        let mut referenced: Vec<u32> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for l in src.lines() {
+                let t = l.trim_start();
+                if t.starts_with("mod anchor_tests") {
+                    break;
+                }
+                // 裁定登记区的 `//!` 行里也写行号，但那是**叙述**不是实现锚点——算进来的话，
+                // 在注释里补一句"md:947"就能把一条没实现的规则判成已覆盖。
+                if t.starts_with("//!") {
+                    continue;
+                }
+                referenced.extend(anchor_numbers(l));
+            }
+        }
+        let missing: Vec<String> = required
+            .iter()
+            .filter(|&&n| !referenced.contains(&(n as u32)))
+            .map(|&n| format!("  md:{n} ← {}", at(n)))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "§廿二 有 {} 行边界规则在 src/ 里没有任何锚点指回：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        // 假绿反证：锚点集合必须是**选择性**的，不能"什么行号都算命中"。
+        for (n, why) in NOT_A_RULE {
+            assert!(!referenced.contains(&(*n as u32)), "{why}，所以 md:{n} 本不该有锚点；现在有了⇒ 排除表过期，请连理由一起删掉");
+        }
     }
 
     fn check(
