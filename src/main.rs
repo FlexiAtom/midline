@@ -35,7 +35,7 @@ const USAGE: &str = "\
   play [--seed N] [--faction 1|2|3] [--difficulty X]        普通爬关（阵营三循环，不落盘）
   play --boss <id> [--seed N] [--faction 1|2|3]             跳打某章末 Boss（同 boss <id>，不落盘）
   mainline [--seed N] [--faction 1|2|3] [--difficulty X]     主线 60 关（5 章，章末 Boss，自动存档）
-  mainline --resume [--save F] [--faction 1|2|3]            从存档的「本关入口」续打
+  mainline --resume [--save F] [--faction 1|2|3]            从存档的「本关入口」续打；不给 --resume 则从第1关重开（档上已有进度会先警告再覆盖）
   boss <id> [--seed N] [--faction 1|2|3]                    单关跳打 Boss
   daily [--save F]                                          每日挑战（日期为种子；打赢一关即记当天已做）
   progress [--save F]                                       看当前存档（只读：不写、不修、不猜）
