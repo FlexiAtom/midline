@@ -37,14 +37,15 @@ const USAGE: &str = "\
   mainline [--seed N] [--faction 1|2|3] [--difficulty X]     主线 60 关（5 章，章末 Boss，自动存档）
   mainline --resume [--save F] [--faction 1|2|3]            从存档的「本关入口」续打；不给 --resume 则从第1关重开（档上已有进度会先警告再覆盖）
   boss <id> [--seed N] [--faction 1|2|3]                    单关跳打 Boss
-  daily [--save F]                                          每日挑战（日期为种子；打赢一关即记当天已做）
-  progress [--save F]                                       看当前存档（只读：不写、不修、不猜）
+  daily [--save F]                                          每日挑战（日期为种子；打赢一关即记当天已做，不动主线进度）
+  progress [--save F]                                       看当前存档（只读：不写、不修、不猜；档读不懂则 rc=2）
   progress recover [--save F]                               把当前档改名留证 .bad-N，下次从空档开始
   auto [N] [--difficulty X]                                 AI 托管模拟 N 局（默认 1，不落盘）
   auto [N] --boss all|<id> [--faction 1|2|3]                Boss 脚本冒烟：N 轮 × 5 个（或指定）
   help                                                      本帮助
 <id> ＝ 1-5 | luzhu|雪爵… 见下：1 炉主 / 2 雪爵 / 3 影长 / 4 炎与冰 / 5 终影
 （Boss 战敌方由脚本接管，不吃难度档；--difficulty 只影响我方托管评分口径 —— 裁定21）
+（--seed / --faction 不给＝种子7·烬火；给了却读不懂 ⇒ 直接报错退出 rc=2，不静默回退成别的值）
 存档（只挂在 mainline / daily 上；落点＝--save ＞ $MIDLINE_SAVE ＞ $XDG_DATA_HOME/midline/ ＞ $HOME/.local/share/midline/）：
   --save <文件>   换档的位置（缺值直接报错，不静默落回默认位置）
   --resume        读档续关；档损坏一律拒绝并指向 progress recover，不会当成空档静默重开
@@ -154,7 +155,16 @@ fn gate_save_flags(cmd: &str, args: &[String]) {
 fn progress_cmd(args: &[String]) {
     let path = save_path(args);
     match positionals(args).first().map(String::as_str) {
-        None => print!("{}", save::describe(&path)),
+        None => {
+            let (report, corrupt) = save::describe(&path);
+            print!("{report}");
+            // 坏档＝非零退出，与 `SaveSlot::open`、`progress recover` 同一口径。
+            // 只打印 ✖ 却返回 0，脚本读到的永远是"一切正常"，那句 ✖ 就成了只给眼睛看的装饰。
+            // "没有这份档"不是坏档：它没有说谎，返回 0。
+            if corrupt {
+                std::process::exit(2);
+            }
+        }
         Some("recover") => match save::backup_and_clear(&path) {
             Ok(bak) => println!("✓ 存档 {} 已改名留证 → {}\n下一次运行从空档开始（原档一个字节都没丢，人眼确认后再处置）。", path.display(), bak.display()),
             Err(e) => {
@@ -190,8 +200,8 @@ fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
 
-/// 档的落点。`--save` 缺值＝报错退出：路径静默落到默认位置，与静默不落盘是两种不同后果，
-/// 不能沿用 `--seed` 那一套静默回退（数字回退还是同一局，路径回退会写进别人的文件）。
+/// 档的落点。`--save` 缺值＝报错退出：路径静默落到默认位置，会写进别人的文件。
+/// 现在 `--seed`/`--faction` 也是同一口径（见 `parse_opts`）——这一族里没有任何一个标志配得上"猜一个继续"。
 fn save_path(args: &[String]) -> PathBuf {
     match value_flag(args, "--save") {
         Flag::Absent => save::default_path().unwrap_or_else(|| {
@@ -243,19 +253,39 @@ fn auto_bosses(seed: u64, faction: Faction, n: u32, raw: &str) {
     }
 }
 
-/// `--seed N` / `--faction 1|2|3`；未给 → 种子7·烬火。
+/// 标志给值却没给对：一律 `exit 2`，不替人改写命令。
+fn bad_opt(got: Option<&str>, flag: &str, want: &str) -> ! {
+    match got {
+        None => println!("✖ {flag} 需要一个值（{want}）"),
+        Some(v) => println!("✖ {flag} 的值「{v}」读不懂，要 {want}"),
+    }
+    std::process::exit(2);
+}
+
+/// `--seed N` / `--faction 1|2|3`；**不给** → 种子7·烬火，**给了但读不懂** → 报错退出。
+/// 静默回退的代价：`--seed 4x` 跑出来的那局根本不是你要复现的那局，而输出里没有任何地方说命令被改写过；
+/// `--faction 9` 更糟——回退到烬火是换掉整张卡表，头报却照样写着"烬火教团"，看着就像你打的就是那个阵营。
+/// 与 `--save` 同一口径（见 `save_path`）。
 fn parse_opts(args: &[String]) -> (u64, Faction) {
     let mut seed: u64 = 7;
     let mut faction = Faction::Ember;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--seed" => seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(7),
+            "--seed" => {
+                let raw = it.next();
+                match raw.and_then(|s| s.parse::<u64>().ok()) {
+                    Some(v) => seed = v,
+                    None => bad_opt(raw.map(String::as_str), "--seed", "非负整数"),
+                }
+            }
             "--faction" => {
-                faction = match it.next().map(|s| s.as_str()) {
+                let raw = it.next();
+                faction = match raw.map(String::as_str) {
+                    Some("1") => Faction::Ember,
                     Some("2") => Faction::Frost,
                     Some("3") => Faction::Shadow,
-                    _ => Faction::Ember,
+                    other => bad_opt(other, "--faction", "1|2|3"),
                 }
             }
             _ => {}

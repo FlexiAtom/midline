@@ -173,6 +173,46 @@
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
 //!     - **残留盲区（明写，不假装已解决）**：反向覆盖只纳入 §廿二 一张表；§廿三 速查表与其它章的同类清单行
 //!       仍未纳入，"整条规则没落地"在那些章仍查不出；语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
+//! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
+//!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
+//!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
+//!     要打中途态就得把 §廿二 全部中途规则（场上/手牌/业力/烛/序列）再序列化一遍，而"能续"只需要
+//!     回到**没过关的那一关门口**——于是 败/平/弃 三种退路天然等价于"不动盘"，写盘点也只有两个：
+//!     本关入口、通关后的下一关入口。第60关不写第61关：`is_mainline_end` 是 `>=`，写了就是伪造进度
+//!     （下一次续档赢一关就再报一次通关）。闸写在 `persist_next_entry` 里而不是调用点，
+//!     是为了让"记得判一下"这个会漏的步骤没有地方可漏（`next_entry_advances_chapter_ends_and_stops_at_sixty`）。
+//!     - **声明与实现不符一处（本批实测坐实并修）**：`SaveUse::DailyDoneOnly` 的注释承诺"关卡与继承堆
+//!       一个字节都不动"，实际 `daily_run` 用 `resume=false` 开槽，冷启动分支把内存档换成 `Progress::new()`，
+//!       而 `mark_daily_done` 是**整文件重写** ⇒ 打赢一次每日就把主线抹回第1关，且全程不响一声。
+//!       真机双臂（同一入口档：第5关·堆2张·结转业力3；`/tmp` 副本里把"每日第一关打赢"换成直接调
+//!       `mark_daily_done`，其余路径全走生产代码）：修前落盘 `level=1 carry_karma=0` + 牌堆两行消失，
+//!       修后除 `daily_done` 外逐字节不变。回归测试 `daily_done_mark_preserves_an_existing_mainline_progress`
+//!       先跑红（`left: 1, right: 5`）再跑绿；旧的 `daily_slot_never_records_progress` 是**假绿**——
+//!       它只测 `snapshot_entry` 那一侧的门禁，管不到记每日这条写路径。
+//!     - 每日与主线共档的代价说清楚：`daily` 读同一份文件来判断"今天打过没有"，所以它必须能读主线档；
+//!       反过来它一个字都不该改主线，这条不变量现在由上面那条测试守着。
+//! 28. 坏档一律 **`exit 2`，绝不静默当空档**（同一授权下的自决）。理由是可定位的失真而非洁癖：
+//!     `Battle::new` 有"空继承堆 ⇒ 发基础牌序"的兜底分支，把读不懂的档当空档，玩家以为在续第N关、
+//!     实际拿到第1关牌序——那是丢进度之后还错打一整局。校验因此全是**拒载**而不是修正
+//!     （重复键/缺必填/未知 schema/level 越界/power·threshold<1 或超基线/upgrades>3/含开端/
+//!     第1关带堆/堆>10 ⇒ `Err`）；未知**键**忽略是前向兼容的最小口径（新字段不该让旧程序判整份档为坏）。
+//!     - 本批把"坏档＝非零"这条**承诺**真正铺到所有出口：`progress` 以前打印 ✖ 却返回 0（脚本读到的
+//!       永远是"一切正常"，那句 ✖ 成了给眼睛看的装饰）⇒ `describe` 多返回一个 bool，`progress_cmd` 据此
+//!       `exit 2`；`--seed`/`--faction` 以前读不懂就回退成 种子7·烬火 ⇒ 改报错（真机：`--seed abc play`
+//!       与 `--faction 9 play` 都 rc=2 并原样回显收到的值）。实测 rc=2 的入口共五条：
+//!       `daily`/`mainline --resume` 撞坏档、跨阵营续档、`progress` 读坏档、未知长选项、`--save` 缺值。
+//!     - **不做的一条：载入时不校验继承堆内 id 唯一性**。审查建议加这道闸，实测不可加：
+//!       `Battle::new` 每关从 `id = 1` 重新发号（`battle.rs:185`），继承堆里的旧牌保留上关的号，
+//!       本作新发的号必然撞上 ⇒ 引擎自己写出的合法档就有重号（实测：
+//!       `engine_reissues_id_one_so_load_must_not_require_unique_ids`——带 id 1、2 两张牌进第2关，
+//!       补进来的第三张必然也叫 1）。加闸的结果是拒载真档，比它要防的问题更糟。
+//!       重号真正的代价在战斗内（`battle.rs:1363` 的同列自排除按 id 比 ⇒ 我方一张牌会让同号敌牌免伤），
+//!       那是发号方案的问题，登记在 `pool/cross-side-id-collision.md`，不在存档侧修。
+//! 29. 「每日挑战**完成**」的边界：文档只说 §廿一:926「完成后记录日期，防止重复完成」，
+//!     一字未定义"完成"，也没给 md:922 那条「固定卡组+特殊规则」的内容 ⇒ 取最小可核读法：
+//!     **本局第一次打赢一关**就算完成，只记 `daily_done`（日种子，不是日期字符串——种子＝`epoch秒/86400`，
+//!     日界是 UTC 零点而非本地零点，这一条是既有权衡不是新坑）。诚实缺口照抄在两处注释里：
+//!     现在的 `daily` 只是"换日期种子的 play"，文档意义上的每日挑战还差固定卡组与特殊规则两项未定义。
 
 use std::fmt;
 
@@ -541,12 +581,30 @@ mod anchor_tests {
         Some(std::fs::read_to_string(&doc).unwrap().lines().map(str::to_string).collect())
     }
 
+    /// 只扫**被编译的**文件：模块清单取 `main.rs` 里的 `mod X;`。没被 `mod` 的 `src/*.rs` 是死文件，
+    /// 一个字都不读——让一份不参与构建的副本替整条规则作证，是覆盖类机检最舒服的假绿形态。
+    /// 代价说清楚：正向检查因此也不再管死文件里的锚点写没写错（它反正不参与构建，写错了也不影响任何输出）。
+    /// 实测双臂：把 `md:943` 的唯一活锚点删掉、原样搬进 `src/zz-dead.rs` ⇒ 反向检查 RED（搬不动真值）；
+    /// 同一份伪造行号（9999）放进死文件 ⇒ 正向 GREEN，放进 `rng.rs` ⇒ 正向 RED。
     fn src_rs_files() -> Vec<std::path::PathBuf> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let main = std::fs::read_to_string(manifest.join("src/main.rs")).unwrap();
+        let mut modules: Vec<String> = Vec::new();
+        for l in main.lines() {
+            let t = l.trim().trim_start_matches("pub ").trim_start_matches("pub(crate) ").trim();
+            let Some(rest) = t.strip_prefix("mod ") else { continue };
+            let Some(name) = rest.strip_suffix(';') else { continue };
+            modules.push(name.trim().to_string());
+        }
+        assert!(modules.len() >= 8, "main.rs 里只抓到 {} 条 `mod X;` ⇒ 判据失效，本检查等于没在筛", modules.len());
         let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(manifest.join("src"))
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .filter(|p| {
+                let stem = p.file_stem().unwrap().to_string_lossy().to_string();
+                stem == "main" || modules.contains(&stem)
+            })
             .collect();
         files.sort();
         files
@@ -680,21 +738,26 @@ mod anchor_tests {
         let mut referenced: Vec<u32> = Vec::new();
         for fp in src_rs_files() {
             let src = std::fs::read_to_string(&fp).unwrap();
-            for l in src.lines() {
-                let t = l.trim_start();
+            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
+            let mut idx = 0;
+            while idx < ls.len() {
+                let t = ls[idx];
+                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
                 // 排除②：**测试代码自身**。断言文案里的 `md:945` 和 `//!` 一样是叙述，算进来＝
                 //        谁都能在测试里补一句行号，把没实现的行判成已覆盖（本轮实测踩过一次：
                 //        存档模块的 `///` 文档写了 §廿二 排除行的行号，机检立刻红在"排除表过期"上）。
-                //        判据取 `#[cfg(test)]` 而不是猜 `mod *_tests` 的名字：整块测试代码都在它之后。
-                if t.starts_with("#[cfg(test)]") || t.starts_with("mod anchor_tests") {
+                //        判据取"`#[cfg(test)]` 之后紧跟 `mod`"，不是"看见 `#[cfg(test)]` 就跳过后半份文件"：
+                //        函数级的那一个（`rng.rs` 的 `state()`）后面还有几十行真实现，一并跳过等于机检自己
+                //        造出一个假缺口——比漏锚点更难发现，因为它看起来像是照规则排除掉了。
+                if (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || t.starts_with("mod anchor_tests") {
                     break;
                 }
                 // 裁定登记区的 `//!` 行里也写行号，但那是**叙述**不是实现锚点——算进来的话，
                 // 在注释里补一句"md:947"就能把一条没实现的规则判成已覆盖。
-                if t.starts_with("//!") {
-                    continue;
+                if !t.starts_with("//!") {
+                    referenced.extend(anchor_numbers(t));
                 }
-                referenced.extend(anchor_numbers(l));
+                idx += 1;
             }
         }
         let missing: Vec<String> = required

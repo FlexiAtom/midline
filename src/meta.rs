@@ -76,22 +76,39 @@ impl SaveSlot {
     /// 开局读盘。**坏档一律 `exit 2`**（裁定28）：读不懂就当空档会撞上 `Battle::new` 的空堆兜底分支，
     /// 玩家以为在续第N关、实际拿到第1关牌序——那是比丢进度更糟的失真。
     /// 全新档（文件不存在）⇒ 用默认值继续，第一次快照就会建文件。
+    /// 拆成 `try_open` + 这层薄壳是为了**让闸本身可测**：`process::exit` 在测试里会带走整个测试进程，
+    /// 上一批"坏档拒载"的全部断言都只能打在 `from_kv` 上，`open` 里那两条出口零覆盖。
     fn open(path: PathBuf, faction: Faction, diff: Difficulty, resume: bool, kind: SaveUse) -> SaveSlot {
+        SaveSlot::try_open(path, faction, diff, resume, kind).unwrap_or_else(|msg| {
+            println!("✖ {msg}");
+            std::process::exit(2);
+        })
+    }
+
+    fn try_open(path: PathBuf, faction: Faction, diff: Difficulty, resume: bool, kind: SaveUse) -> Result<SaveSlot, String> {
         let loaded = match save::load_if_any(&path) {
             Ok(p) => p,
             Err(e) => {
-                println!("✖ 存档打不开：{e}\n处置：`midline progress --save {}` 先看，确认要弃档再 `progress recover`（它改名留证，不删）。", path.display());
-                std::process::exit(2);
+                return Err(format!(
+                    "存档打不开：{e}\n处置：`midline progress --save {}` 先看，确认要弃档再 `progress recover`（它改名留证，不删）。",
+                    path.display()
+                ));
             }
         };
         let Some(loaded) = loaded else {
-            return SaveSlot { path, progress: Progress::new(faction, diff), kind };
+            return Ok(SaveSlot { path, progress: Progress::new(faction, diff), kind });
         };
         if !resume {
+            // 每日槽原样保留盘上那份：它只由 `mark_daily_done` 写，而写是**整文件重写**——
+            // 换成 `Progress::new()` 就等于把别人的 level 与继承堆一起抹回第1关（曾经真抹了）。
+            // 也不给它下面那条覆盖警告：说"会覆盖你的进度"对它是假话。
+            if kind == SaveUse::DailyDoneOnly {
+                return Ok(SaveSlot { path, progress: loaded, kind });
+            }
             // 冷启动只接历史（通关标记/每日记录），不接进度：接了就是玩家没要求的续关。
             // "不接进度"在内存里是无害的，在盘上是覆盖写——所以只要档上真有进度就必须先说出来，
-            // 不能让人以为 `--resume` 只是礼貌用语。每日槽不警告：它一个进度字节都不写，"覆盖原档"对它是假话。
-            if kind == SaveUse::Progress && (loaded.level != 1 || !loaded.inherit.is_empty()) {
+            // 不能让人以为 `--resume` 只是礼貌用语。
+            if loaded.level != 1 || !loaded.inherit.is_empty() {
                 let swap = if loaded.faction != faction {
                     format!("档上是 {}，本次是 {}——换阵营请另开一个 --save 文件。", loaded.faction.name(), faction.name())
                 } else {
@@ -105,23 +122,22 @@ impl SaveSlot {
                 );
             }
             let fresh = Progress::new(faction, diff);
-            return SaveSlot {
+            return Ok(SaveSlot {
                 path,
                 progress: Progress { completed: loaded.completed, daily_done: loaded.daily_done, ..fresh },
                 kind,
-            };
+            });
         }
         if let Some(msg) = loaded.faction_conflict(faction) {
-            println!("✖ {msg}");
-            std::process::exit(2);
+            return Err(msg);
         }
         if loaded.completed {
             println!("⚠ 档上已有主线通关标记 ⇒ 续档无进行中主线，本次从第1关重开（通关记录保留）。");
-            return SaveSlot {
+            return Ok(SaveSlot {
                 path,
                 progress: Progress { completed: true, daily_done: loaded.daily_done, ..Progress::new(faction, diff) },
                 kind,
-            };
+            });
         }
         if let Some(w) = loaded.load_warning() {
             println!("⚠ {w}");
@@ -135,11 +151,7 @@ impl SaveSlot {
             loaded.carry_karma,
             diff.label()
         );
-        SaveSlot {
-            path,
-            progress: Progress { diff, ..loaded },
-            kind,
-        }
+        Ok(SaveSlot { path, progress: Progress { diff, ..loaded }, kind })
     }
 }
 
@@ -861,6 +873,8 @@ mod meta_tests {
 
     /// 每日槽只许动 `daily_done`。让它顺手写进度就等于凭空造出一条没人打过的"主线进度"——
     /// 这个门禁是纯字段判断，一旦有人把 `daily` 改成共用 `Progress` 槽，全靠这条响。
+    /// 注意它**只**管得住 `snapshot_entry` 这一侧；"记一次每日反而抹掉主线"是另一条路，
+    /// 由 `daily_done_mark_preserves_an_existing_mainline_progress` 管（那条曾经真的漏了）。
     #[test]
     fn daily_slot_never_records_progress() {
         let path = snap_path("daily");
@@ -868,6 +882,99 @@ mod meta_tests {
         snapshot_entry(&mut save, 5, Faction::Ember, Difficulty::Normal, &[], 9);
         assert!(!path.exists(), "每日槽不该建主线档");
         assert_eq!(save.unwrap().progress.level, 1, "内存档也不该被推进");
+    }
+
+    /// 每日记一次"今天打过"，走的是**整文件重写**——所以它不能顺带把主线档抹回第1关。
+    /// 危险在于 `daily_run` 用 `resume=false` 开槽，而冷启动分支把内存档换成 `Progress::new()`，
+    /// 于是 `mark_daily_done` 写回的是"第1关+空堆"。开槽和写入都走真实函数，不手工构造中间态。
+    #[test]
+    fn daily_done_mark_preserves_an_existing_mainline_progress() {
+        let path = snap_path("daily-keeps-progress");
+        let mut pre = slot(path.clone(), SaveUse::Progress);
+        let pile = vec![
+            CardInst::new(3, faction_cards(Faction::Ember)[1]),
+            CardInst::new(9, faction_cards(Faction::Ember)[9]),
+        ];
+        snapshot_entry(&mut pre, 5, Faction::Ember, Difficulty::Normal, &pile, 3);
+
+        let opened = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::DailyDoneOnly)
+            .expect("合法档应能开出每日槽");
+        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened) };
+        mark_daily_done(&mut st);
+
+        let got = Progress::load_from(&path).expect("写入后档仍应能被自己的校验器读回");
+        assert_eq!(got.level, 5, "打一次每日不该把主线进度抹回第1关");
+        assert_eq!(got.inherit.len(), 2, "继承堆不该被抹平");
+        assert_eq!(got.inherit[0].id, 3, "id 是战斗输入，重写不得重编号");
+        assert_eq!(got.carry_karma, 3, "结转业力不该被抹平");
+        assert_eq!(got.daily_done, daily_seed(), "每日记录本身要写上");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 通关只翻标记，绝不写"第61关"：`is_mainline_end` 是 `>=`，越界 level 会让下一次续档赢一关就再报一次通关。
+    #[test]
+    fn mark_completed_flips_the_flag_without_faking_a_level_beyond_sixty() {
+        let path = snap_path("completed");
+        let mut save = slot(path.clone(), SaveUse::Progress);
+        snapshot_entry(&mut save, 60, Faction::Ember, Difficulty::Normal, &[], 4);
+        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save };
+        mark_completed(&mut st);
+        let got = Progress::load_from(&path).expect("通关标记写入后仍须可载");
+        assert!(got.completed, "通关历史要落盘：它是不依赖 level 推不倒的那一个字段");
+        assert_eq!(got.level, 60, "档留在第60关入口");
+        assert_eq!(got.carry_karma, 4, "翻标记不许顺手抹牌");
+        let before = std::fs::read_to_string(&path).unwrap();
+        mark_completed(&mut st);
+        assert_eq!(before, std::fs::read_to_string(&path).unwrap(), "已标过就不再重写盘");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 坏档闸的**两条真实入口**（读不懂、跨阵营）：断言的是出口本身。
+    /// 上一批这两条零覆盖——`open` 里直接 `process::exit(2)`，测试进程会被一起带走，于是所有断言
+    /// 只能打在 `from_kv` 上，"拒载之后到底走不走对局"这一步是空的。
+    #[test]
+    fn try_open_refuses_corrupt_and_cross_faction_saves() {
+        let bad = snap_path("gate-bad");
+        std::fs::write(&bad, "schema=1\nlevel=十七\n").unwrap();
+        let e = SaveSlot::try_open(bad.clone(), Faction::Ember, Difficulty::Normal, true, SaveUse::Progress)
+            .err()
+            .expect("坏档不许被当成空档继续");
+        assert!(e.contains("progress recover"), "拒绝里要带下一步处置：{e}");
+        assert_eq!(std::fs::read(&bad).unwrap(), *"schema=1\nlevel=十七\n".as_bytes(), "拒载不许顺手修档");
+
+        let frost = snap_path("gate-frost");
+        let mut p = Progress::new(Faction::Frost, Difficulty::Normal);
+        p.level = 7;
+        p.inherit.push(CardInst::new(4, faction_cards(Faction::Frost)[2]));
+        p.save_to(&frost).unwrap();
+        let e = SaveSlot::try_open(frost.clone(), Faction::Ember, Difficulty::Normal, true, SaveUse::Progress)
+            .err()
+            .expect("烬火卡表认不出霜阵营的卡名，换阵营续档必须拒");
+        assert!(e.contains("阵营不符"), "要指明是不符合阵营而不是泛泛报错：{e}");
+        // 第1关空堆是豁免（新开一档换个阵营不算冲突），上面两条都得是"档上真有东西"才响。
+        SaveSlot::try_open(frost.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Progress)
+            .expect("不续档时换阵营只是重开，警告归警告，不该 exit");
+        std::fs::remove_file(&bad).ok();
+        std::fs::remove_file(&frost).ok();
+    }
+
+    /// 存档侧**故意不校验**继承堆 id 唯一性——不是因为没想过，而是因为引擎自己就写得出发重号的档。
+    /// 机理：`Battle::new` 每关从 `id = 1` 重新发号（`battle.rs:185`），而"继承堆不足3张 ⇒ 补齐"
+    /// 那一支正好用这个计数器（`battle.rs:214-218`）⇒ 带着上关的 1、2 号牌进第2关，补进来的那张必然也叫 1。
+    /// 所以"载入即拒重号"的结局是拒掉真档，比它要防的问题更糟。重号的真实代价在战斗内
+    /// （`battle.rs:1363` 同列自排除按 id 比 ⇒ 我方一张牌会让同号敌牌免伤），那是发号方案的问题，
+    /// 归 `pool/cross-side-id-collision.md`，不在这里治。
+    #[test]
+    fn engine_reissues_id_one_so_load_must_not_require_unique_ids() {
+        let inherit = vec![
+            CardInst::new(1, faction_cards(Faction::Ember)[1]),
+            CardInst::new(2, faction_cards(Faction::Ember)[2]),
+        ];
+        let b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, inherit, 2);
+        let all = b.hand.iter().chain(b.draw_pile.iter()).collect::<Vec<_>>();
+        let ones = all.iter().filter(|c| c.id == 1).count();
+        assert_eq!(ones, 2, "一张是带上关的 1 号牌，一张是补齐时重新发出的 1 号 ⇒ 重号由引擎自己产出");
+        assert_eq!(all.iter().filter(|c| !c.is_starter()).count(), 3, "2 张继承 + 补齐 1 张（开端另算）");
     }
 
     /// 存不进去 ⇒ 摘槽并明说，**本局照打**。让写盘失败终止一局已经打完的游戏是反向的取舍。

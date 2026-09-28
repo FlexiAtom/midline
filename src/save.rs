@@ -30,6 +30,9 @@ use std::path::{Path, PathBuf};
 pub const SCHEMA: u32 = 1;
 /// 默认档名（放在 `pick_path` 解析出的目录里）。
 pub const FILE: &str = "progress.kv";
+/// 单张牌死亡计数的防回绕上限（语义边界是 §三:85 的"第四次起10%保底"，到 3 就不再生效；
+/// 这个数只是"整局也到不了的高度"，用来拦住会让 `deaths += 1` 回绕的手改值）。
+const MAX_DEATHS: u32 = 1_000_000;
 
 /// 空白与空串一律当"没给"（`--save " "` 不该产出一个名叫空格的档）。
 fn tidy(s: Option<&str>) -> Option<&str> {
@@ -66,8 +69,9 @@ fn expand_home(s: &str, home: Option<&str>) -> PathBuf {
 }
 
 /// 一次主线运行的可持久进度。字段全部是**关隘入口**那一刻的真值；战斗内的瞬态（hp/flame/seq/…）一个不存。
-/// 不建金币/成就/收集字段：文档只点名它们、从未给获取条件（§廿二 的激励系统那行已在排除表里判为规则层范围外），
-/// 建了就是没有真值源的第二套壳。
+/// 不建金币/成就/收集字段：文档给了金币一条获取路径（§廿一:923「每日完成获得金币，用于解锁新卡」），
+/// 但**数额、卡池、解锁价格一字未给** ⇒ 没有可实现口径，建了就是没有真值源的第二套壳。
+/// （措辞更正：本行旧版写的是"从未给获取条件"，被 §廿一:923 直接证伪。）
 #[derive(Clone, Debug)]
 pub struct Progress {
     pub faction: Faction,
@@ -231,9 +235,16 @@ impl Progress {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some((k, v)) = line.split_once('=') else {
+            let Some((raw_key, v)) = line.split_once('=') else {
                 return Err(format!("第{no}行不是 key=value：「{raw}」"));
             };
+            // 键也要 trim：值一侧全都过了 `v.trim()`，唯独键没过 ⇒ `card =火苗:…`
+            // 落到 `_ => {}` 被当未知键**静默丢弃**，档里凭空少一张牌，接着撞上"不足3张就补齐"分支，
+            // 换掉整局牌序却一个字不报。拒载或认出，二选一；悄悄扔掉是第三种，也是最坏的一种。
+            let k = raw_key.trim();
+            if k.is_empty() {
+                return Err(format!("第{no}行键为空：「{raw}」"));
+            }
             match k {
                 "schema" => set_once(&mut schema, num::<u32>(v, k, no)?, k)?,
                 "faction" => {
@@ -363,11 +374,32 @@ fn parse_card(faction: Faction, body: &str, no: usize) -> Result<CardInst, Strin
     if upgrades > 3 {
         return Err(format!("第{no}行 upgrades＝{upgrades} 越界（§十一:404 每张最多3次）"));
     }
+    // 上限取**这张牌自己的基线**，不取全局魔数：存进档的只有我方继承堆，而我方牌只有两条变强的路——
+    // §十一:402「数值+1」× §十一:404「最多3次」⇒ power ≤ 基线+3；同一行升级对阈值只有 -1 ⇒ threshold ≤ 基线。
+    // 章强化碰不到这里：`battle.rs:342` 的迭代面是 enemy_hand/enemy_pile，是敌方的牌。
+    if power > def.power + 3 {
+        return Err(format!(
+            "第{no}行「{name}」数值＝{power} 超上限（基线 {} + 升级最多3次·每次+1，§十一:402/404）",
+            def.power
+        ));
+    }
+    if threshold > def.threshold {
+        return Err(format!(
+            "第{no}行「{name}」阈值＝{threshold} 超上限（基线 {}；升级只有 -1 这一条路，不存在加回来的阈值）",
+            def.threshold
+        ));
+    }
     let mut def = def;
     def.power = power;
     def.threshold = threshold;
     let mut c = CardInst::new(num::<u64>(id, "id", no)?, def);
     c.deaths = num::<u32>(deaths, "deaths", no)?;
+    // 这条**不是规则边界**：§三:85「第四次起10%（保底）」说明档位到 3 就不再变，更大的数没有语义。
+    // 它是防回绕闸：`battle.rs:1102` 的 `deaths += 1` 撞上 u32::MAX 时 debug 直接 panic，release 回绕成 0
+    // ⇒ 返还从 10% 跳回 100%，把一个坏字节变成一笔白赚的收益。整局 60 关 × 300 回合也到不了一百万次死亡。
+    if c.deaths > MAX_DEATHS {
+        return Err(format!("第{no}行 deaths＝{} 不合理（防回绕上限 {MAX_DEATHS}）", c.deaths));
+    }
     c.upgrades = upgrades;
     c.crafted = boolean(crafted, "crafted", no)?;
     if !skills.is_empty() {
@@ -430,17 +462,19 @@ pub fn path_for(explicit: Option<&str>) -> Option<PathBuf> {
 }
 
 /// `progress` 子命令的全部输出。只读，绝不写、绝不改、绝不"顺手修复"。
-pub fn describe(path: &Path) -> String {
+/// 返回的第二个值＝"这份档存在但读不懂"——坏档在别处一律 `exit 2`，报告类子命令也不例外，
+/// 所以这个判断得由本函数一次读盘给出，不能让调用方再读一遍。
+pub fn describe(path: &Path) -> (String, bool) {
     let mut out = format!("存档路径：{}\n", path.display());
     if !path.exists() {
         out.push_str("（没有这份存档）\n");
-        return out;
+        return (out, false);
     }
     match Progress::load_from(path) {
         Err(e) => {
             out.push_str(&format!("✖ 解析失败：{e}\n"));
             out.push_str("处置：`progress recover` 改名留证后从空档开始（它不删文件）。\n");
-            out
+            (out, true)
         }
         Ok(p) => {
             let ch = crate::boss::chapter_of(p.level);
@@ -470,7 +504,7 @@ pub fn describe(path: &Path) -> String {
             for (i, c) in p.inherit.iter().enumerate() {
                 out.push_str(&format!("  [{i}] id{} {}\n", c.id, crate::model::short_card(c)));
             }
-            out
+            (out, false)
         }
     }
 }
@@ -537,7 +571,7 @@ mod save_tests {
         assert_eq!(back.inherit[1].def.threshold, 1);
         assert_eq!(back.inherit[1].def.cost, 3, "cost 由卡表重建，不入档");
         // 瞬态一律不得被带进来：写它们既被 `Battle::new` 忽略、又会让 `progress` 说谎
-        assert_eq!(back.inherit[0].hp, 5, "hp 由 def.power 重建（每关重置满格 md:373）");
+        assert_eq!(back.inherit[0].hp, 5, "hp 由 def.power 重建＝每关满格（md:373 只对**自造牌**明写，非自造牌是推断，见 裁定27）");
         assert_eq!(back.inherit[0].flame, 0);
         assert_eq!(back.inherit[0].seq, 0);
         assert_eq!(back.inherit[0].placed_turn, i64::MIN);
@@ -558,8 +592,20 @@ mod save_tests {
     #[test]
     fn unknown_keys_are_ignored_for_forward_compatibility() {
         let text = sample().to_kv() + "coins=99\nfuture_thing=abc\n";
-        let p = Progress::from_kv(&text).expect("未知键必须忽略（文档点名的金币/成就没有获取条件⇒不建字段，但旧程序要能读新档）");
+        let p = Progress::from_kv(&text).expect("未知键必须忽略（金币/成就没有可实现口径⇒不建字段，但旧程序要能读新档）");
         assert_eq!(p.level, 17);
+    }
+
+    /// 键两侧的空格是手改档位最常见的手滑。旧实现只 trim 值、不 trim 键 ⇒ `card =…` 落进"未知键"被
+    /// **静默丢弃**：档里凭空少一张牌，接着撞上"不足3张就补齐"分支换掉整局牌序，全程一个字不报。
+    #[test]
+    fn spaced_keys_are_recognised_not_dropped() {
+        let text = sample().to_kv().replace("card=", "card = ");
+        let p = Progress::from_kv(&text).expect("「card = …」必须与「card=…」同义");
+        assert_eq!(p.inherit.len(), 3, "带空格的 card 键不许被当成未知键丢掉");
+        assert_eq!(p.inherit[0].def.power, 5, "牌面还是档里那三张，没被补齐分支换掉");
+        // 空键是另一种形态：它不是"未知键"，是这一行根本不是 key=value。
+        assert!(Progress::from_kv("=1\n").is_err(), "空键要报错，不能当未知键静默忽略");
     }
 
     /// 每一行破坏都必须是**响**的：本表列的都是会静默改成战斗输入、或静默丢牌、或谎报进度的形态。
@@ -583,6 +629,10 @@ mod save_tests {
             ("段数不足", good.replace("card=火苗:2:5:4:2:3:0", "card=火苗:2:5:4")),
             ("数值越界", good.replace("card=火苗:2:5:4", "card=火苗:2:0:4")),
             ("阈值越界", good.replace("card=焚稿人:4:4:1", "card=焚稿人:4:4:0")),
+            // 上界那三条：下界只挡 0，挡不住"大得离谱但看着合法"的值——它们会一路走到算术里去。
+            ("power 超基线+3 §十一:402/404", good.replace("card=火苗:2:5:4", "card=火苗:2:6:4")),
+            ("threshold 超基线（升级只有 -1 这条路径）", good.replace("card=火苗:2:5:4:2", "card=火苗:2:5:9:2")),
+            ("deaths 大到会回绕 §三:85", good.replace("card=火苗:2:5:4:2:", "card=火苗:2:5:4:4294967295:")),
             ("升级数越界 §十一:404", good.replace(":3:0:AtkSelfFlame1", ":4:0:AtkSelfFlame1")),
             ("未知技能名", good.replace("AtkSelfFlame1+AtkSelfFlame1", "AtkSelfFlame1+NoSuchSkill")),
             ("crafted 非布尔", good.replace("2:3:0:AtkSelfFlame1", "2:3:yes:AtkSelfFlame1")),
@@ -691,19 +741,27 @@ mod save_tests {
         }
     }
 
+    /// `describe` 同时负责"给人看"和"给脚本判断"：那份 bool 就是 `progress` 的退出码来源，
+    /// 所以三条路径都得验——缺档(false)、好档(false)、坏档(true)。坏档报 false，脚本就永远看不见损坏。
     #[test]
     fn describe_reports_missing_and_present_without_touching_disk() {
         let dir = temp_path("describe");
         let missing = dir.join(FILE);
-        let text = describe(&missing);
+        let (text, corrupt) = describe(&missing);
+        assert!(!corrupt, "没有这份档不是坏档");
         assert!(text.contains("没有这份存档"), "缺档要如实报缺，不写成空档：\n{text}");
         sample().save_to(&missing).unwrap();
-        let text = describe(&missing);
+        let (text, corrupt) = describe(&missing);
+        assert!(!corrupt);
         assert!(text.contains("第17/60关") && text.contains("继承堆（3张"), "进度与牌数要看得见：\n{text}");
         assert!(text.contains("id2"), "id 是战斗输入，报进度就该报出来");
         std::fs::write(&missing, "schema=1\nlevel=oops\n").unwrap();
-        let text = describe(&missing);
+        let (text, corrupt) = describe(&missing);
+        assert!(corrupt, "坏档必须让调用方拿得到非零信号");
         assert!(text.contains("解析失败") && text.contains("progress recover"), "坏档给出下一步，不止报错：\n{text}");
+        // 只读性：三条路径走完，盘上还是那份坏档原样，没被"顺手修好"，也没留派生文件。
+        assert_eq!(std::fs::read(&missing).unwrap(), b"schema=1\nlevel=oops\n", "describe 不许碰盘");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "describe 不许在档目录里留派生文件");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
