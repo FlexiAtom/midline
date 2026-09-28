@@ -71,7 +71,7 @@
 //!     不吃 rng、技能由脚本显式声明），预算只给一次 `start_karma`（＝intro 花费＋周期最大下凹，实测反推），
 //!     **没有**"每回合发钱"——5 份脚本按 FIFO 传送带写成周期自我闭合，30 回合零跳过（见
 //!     `boss::boss_tests::boss_ledger_is_self_funding_over_30_turns`）。
-//!     代价须如实写清：§三:137 有一行「初始业力 | 0」，`start_karma != 0` **就是**与它相抵的自造豁免，
+//!     代价须如实写清：§三:64 有一行「初始业力 0」，`start_karma != 0` **就是**与它相抵的自造豁免，
 //!     不是"没违反 §三"。理由：在场≥1回合 + 每回合1次献祭 两条闸使 0 起手无法在第 2 周期前供养任何脚本，
 //!     要么给起手预算，要么整层脚本不成立。待人向设计裁决的三个方向：① 承认 Boss 例外并给数；
 //!     ② 改 §三 使"初始业力"按侧区分；③ 把脚本降级为"从 0 起手也只放得起 1-2 费"的弱脚本（等于放弃 §廿一 的战术设计）。
@@ -86,19 +86,22 @@
 //! 22. Boss 战**平局＝未通关**：不解锁下一章、不记 `boss_down`（否则可用平局白嫖章节奖励）。本实现自造条款，
 //!     文档 §22"30回合未分胜负→蜡烛长者胜"未区分 Boss 战。
 //! 23. **五条 Boss 特殊规则与其全部数值，都是实现自造，文档没有真值可核对**：§廿一 Boss 表只有
-//!     「章节 / Boss / 特征」三列（md:1033-1037），"特殊规则"在 md:907、md:1002 各出现一次且一字未定义。
+//!     「章节 Boss 特征」三列（md:931-936），"特殊规则"全文只出现两次——md:907「Boss 脚本Combo + 特殊规则」
+//!     与 md:922（每日挑战规则「固定卡组+特殊规则」），两处都**一字未定义**。
 //!     本实现按 特征 名字反推规则，逐条**故意覆盖**下列文档硬规则（待人向设计逐条确认或换掉）：
-//!     - 炉温：敌方回合开始全体在场卡业火+1 —— 与 md:650「业火只由攻击造成的伤害触发」相反（非伤害来源发焰）。
+//!     - 炉温：敌方回合开始全体在场卡业火+1 —— 与 md:564「业火只由攻击造成的伤害触发」相反（非伤害来源发焰）。
 //!     - 霜封：我方卡对敌前排伤害-1（开端不削）。口径：减免只作用于**攻击落子那一发**；§十五 超额分配
 //!       是同一发已减免伤害的再路由，故不二次减免（另一读法＝每一发命中都减，未采）。
-//!     - 暗渡：脚本主动把后排压上已占用前排 —— 覆盖的是 md:847「AI 不会主动将 E5-E8 挤越线（避免自杀）」
-//!       这条 **AI 自律**，不覆盖 §十七 挤压机制本身（机制在 md:845「敌方挤压：后排挤前排，越线死亡」里本来就有）。
+//!     - 暗渡：脚本主动把后排压上已占用前排 —— 覆盖的是 md:757「AI不会主动将E5-E8挤越线（避免自杀）」
+//!       这条 **AI 自律**，不覆盖 §十七 挤压机制本身（机制在 md:756「敌方挤压：后排挤前排，越线死亡」里本来就有）。
 //!     - 炎冰同源：见裁定19（双烛/列分区/⌊伤害/2⌋ 反弹/皆尽判胜/回合终取较长值，全为自造）。
-//!     - 吞名：我方主动献祭改按**当前**死亡返还档位计 —— 与 md:148、速查 md:1088「献祭获得全额费用、
+//!     - 吞名：我方主动献祭改按**当前**死亡返还档位计 —— 与 md:99、速查 md:985「主动献祭 → 获得全额费用，
 //!       不触发死亡返还递减」相反。不推进档位：推进会把单场惩罚顺着裁定7 的跨关台账变成永久惩罚。
-//!     - 终影 持业者 30：与 md:683「敌方持业者初始长度20」相反；后果是 30 回合判对我方结构性不利（须净多打 >10）。
-//!     平衡现状（实测，非结论）：贪心托管对 5 份脚本 `auto 5 --boss all` 全败（4-11 回合），
-//!     按台账「手感调试先挂起」只登记不擅改。
+//!     - 终影 持业者 30：与 md:596「敌方持业者…初始长度20单位」相反；后果是 30 回合判对我方结构性不利（须净多打 >10）。
+//!       平衡现状（实测，非结论）：贪心托管对 5 份脚本 `auto 5 --boss all` 全败（4-11 回合），
+//!       按台账「手感调试先挂起」只登记不擅改。
+//!       **人裁定 2026-09-28：「五条特殊规则的语义与全部数值我确认没有问题，后续有问题再」** ⇒ 本条由"待人逐条确认"
+//!       转为**已认可的实施口径**（pending B2 关闭）。"后续有问题再改"＝改动授权保留在人侧，AI 仍不擅自调数。
 //! 24. §廿一 主线"每章新阵营"＝三阵营循环 + 强化（人裁定 2026-09-28）。**只落了循环**：`level` 目前仅用于
 //!     rng 种子与头报，没有任何按章递增的敌方数值。缺的是数值口径而非挂载点 ⇒ 待人向设计给数（见 pending）。
 
@@ -386,5 +389,174 @@ mod tests {
     #[test]
     fn skill_pool_has_12() {
         assert_eq!(Skill::list().len(), 12);
+    }
+}
+
+/// 文档锚点机检。此前一轮全量核对发现裁定清单里有 8 处引用指错行（含一处指向**全文不存在的行号**、
+/// 三处指向空行、两处指到别的章节），故立此不变量：注释里的每一处文档引用必须
+/// ① 行号不越界 ② 该行非空 ③ 凡带章名的锚点，该行确实属于所声称的那一章。
+/// 规则文档不在仓库内（与本仓同级 `中线.MD`），文件缺失时跳过而非失败。
+/// 语义是否被曲解无法机检——那仍靠人向设计逐条核对。
+#[cfg(test)]
+mod anchor_tests {
+    const NUM: &[char] = &['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '廿'];
+
+    fn cn2int(s: &str) -> Option<u32> {
+        let digit = |c: char| match c {
+            '一' => Some(1),
+            '二' => Some(2),
+            '三' => Some(3),
+            '四' => Some(4),
+            '五' => Some(5),
+            '六' => Some(6),
+            '七' => Some(7),
+            '八' => Some(8),
+            '九' => Some(9),
+            _ => None,
+        };
+        let cs: Vec<char> = s.chars().collect();
+        if cs.is_empty() || !cs.iter().all(|c| NUM.contains(c)) {
+            return None;
+        }
+        if cs[0] == '廿' {
+            return Some(20 + cs.get(1).and_then(|&c| digit(c)).unwrap_or(0));
+        }
+        if cs.len() == 1 && cs[0] == '十' {
+            return Some(10);
+        }
+        if cs[0] == '十' {
+            return Some(10 + cs.get(1).and_then(|&c| digit(c))?);
+        }
+        if cs.get(1) == Some(&'十') {
+            let tens = digit(cs[0])?;
+            return Some(tens * 10 + cs.get(2).and_then(|&c| digit(c)).unwrap_or(0));
+        }
+        digit(cs[0])
+    }
+
+    fn digits_at(cs: &[char], from: usize) -> Option<(u32, usize)> {
+        let mut j = from;
+        while j < cs.len() && cs[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == from { None } else { Some((cs[from..j].iter().collect::<String>().parse().ok()?, j)) }
+    }
+
+    #[test]
+    fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // 文档不随仓库分发。候选：环境变量 → 仓库同级 → 上两级（本仓在 ~/rust/midline，文档在 ~/）。
+        let candidates: Vec<std::path::PathBuf> = std::env::var("MIDLINE_DOC")
+            .map(std::path::PathBuf::from)
+            .ok()
+            .into_iter()
+            .chain([
+                manifest.join("中线.MD"),
+                manifest.parent().unwrap_or(manifest).join("中线.MD"),
+                manifest.ancestors().nth(2).unwrap_or(manifest).join("中线.MD"),
+            ])
+            .collect();
+        let doc = candidates.iter().find(|p| p.exists());
+        if doc.is_none() && std::env::var("MIDLINE_DOC_SKIP").is_ok() {
+            return; // 明确豁免才跳过（默认不跳过，防静默假绿）
+        }
+        let Some(doc) = doc else {
+            panic!(
+                "找不到规则文档 中线.MD（候选：{}）。它不在仓库里；\
+                 设 MIDLINE_DOC=<路径> 指定，或 MIDLINE_DOC_SKIP=1 明确跳过本检查。",
+                candidates
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" , ")
+            );
+        };
+        let doc = doc.clone();
+        let text = std::fs::read_to_string(&doc).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        // 章标题表：编号必须严格递增，否则文中任何「一、二」式散文都会被误认成章节头。
+        let mut heads: Vec<(u32, u32)> = Vec::new();
+        for (i, l) in lines.iter().enumerate() {
+            let Some((num, _)) = l.trim().split_once('、') else { continue };
+            let Some(v) = cn2int(num) else { continue };
+            if heads.last().is_none_or(|&(last, _)| v > last) {
+                heads.push((v, (i + 1) as u32));
+            }
+        }
+        let section_at = |line: u32| heads.iter().filter(|(_, at)| *at <= line).map(|(v, _)| *v).last();
+
+        let mut bad: Vec<String> = Vec::new();
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(manifest.join("src"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .collect();
+        files.sort();
+        for fp in files {
+            let name = fp.file_name().unwrap().to_string_lossy().into_owned();
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for (idx, line) in src.lines().enumerate() {
+                let cs: Vec<char> = line.chars().collect();
+                let mut i = 0;
+                while i < cs.len() {
+                    let prev_ok = i == 0 || !cs[i - 1].is_ascii_alphanumeric();
+                    // md:NNN —— 纯行号锚点，只验越界与空行
+                    let md = prev_ok && cs[i] == 'm' && cs.get(i + 1) == Some(&'d') && cs.get(i + 2) == Some(&':');
+                    // 速查:NNN —— 指 §廿三，顺带验章归属
+                    let quick = cs[i] == '速' && cs.get(i + 1) == Some(&'查') && cs.get(i + 2) == Some(&':');
+                    if md || quick {
+                        if let Some((n, end)) = digits_at(&cs, i + 3) {
+                            let claim = if quick { Some(23) } else { None };
+                            check(&mut bad, &name, idx + 1, n, claim, &lines, section_at);
+                            i = end;
+                            continue;
+                        }
+                    }
+                    // §章[:：]NNN —— 带章名，三条件全验
+                    if cs[i] == '§' {
+                        let mut j = i + 1;
+                        while j < cs.len() && NUM.contains(&cs[j]) {
+                            j += 1;
+                        }
+                        let claim = cn2int(&cs[i + 1..j].iter().collect::<String>());
+                        if cs.get(j) == Some(&':') || cs.get(j) == Some(&'：') {
+                            j += 1;
+                        }
+                        if let (Some(claim), Some((n, end))) = (claim, digits_at(&cs, j)) {
+                            check(&mut bad, &name, idx + 1, n, Some(claim), &lines, section_at);
+                            i = end;
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{} 处文档锚点错位：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    fn check(
+        bad: &mut Vec<String>,
+        file: &str,
+        line: usize,
+        n: u32,
+        claim: Option<u32>,
+        lines: &[&str],
+        section_at: impl Fn(u32) -> Option<u32>,
+    ) {
+        let tag = format!("{file}:{line} → 文档行 {n}");
+        if n as usize > lines.len() {
+            bad.push(format!("{tag} 越界（全文仅 {} 行）", lines.len()));
+            return;
+        }
+        if lines[n as usize - 1].trim().is_empty() {
+            bad.push(format!("{tag} 指向空行"));
+            return;
+        }
+        if let Some(claim) = claim
+            && section_at(n) != Some(claim)
+        {
+            bad.push(format!("{tag} 声称第 {claim} 章，实际归属第 {:?} 章", section_at(n)));
+        }
     }
 }

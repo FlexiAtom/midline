@@ -301,7 +301,7 @@ fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool)
                     continue;
                 }
                 if up_used {
-                    println!("✖ 每次通关只能升级1张（§十一/§廿二1004）");
+                    println!("✖ 每次通关只能升级1张（§十一:402 / §廿二:965）");
                     continue;
                 }
                 match upgrade_card(inherit, parse_idx(parts[1]), parts[2]) {

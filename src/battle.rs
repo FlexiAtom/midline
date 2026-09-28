@@ -994,7 +994,7 @@ impl Battle {
                     2
                 } else if devour {
                     // 终影「吞名」：我方主动献祭改按**当前**死亡返还档位计。
-                    // 不推进 deaths——速查:1088「主动献祭…不触发死亡返还递减」；推进档位会让单场惩罚
+                    // 不推进 deaths——速查:985「主动献祭…不触发死亡返还递减」；推进档位会让单场惩罚
                     // 顺着裁定7 的跨关台账永久压低该实例后续的自然返还，那是第二重未授权的罚。
                     let pct = refund_pct(c.deaths);
                     c.def.cost * pct / 100
@@ -1851,7 +1851,7 @@ mod boss_rule_tests {
         let k0 = b.p_karma;
         b.on_death(yi, SideK::Player, None, DeathCause::Sacrifice);
         assert_eq!(b.p_karma - k0, 1, "吞名：献祭改按死亡递减 3×50%=1（原本全额3）");
-        assert_eq!(b.discard_pile.last().unwrap().deaths, 1, "吞名只改本手收益，不推进死亡档位（速查:1088 献祭不触发递减）");
+        assert_eq!(b.discard_pile.last().unwrap().deaths, 1, "吞名只改本手收益，不推进死亡档位（速查:985 献祭不触发递减）");
         assert!(b.log.iter().any(|l| l.contains("（吞名·按死亡返还递减）")));
 
         let k1 = b.p_karma;
