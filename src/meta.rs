@@ -119,6 +119,22 @@ pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::
     }
 }
 
+/// 关隘头报。普通关从第2章起标出敌方强化量——数值既然进了对局，就得在屏幕上看得见；
+/// 章1 保持旧文案逐字不变。Boss 关报章号与名号，不报强化（豁免见 `one_level`）。
+pub(crate) fn level_head(level: u32, boss: Option<crate::boss::BossId>) -> String {
+    let strength = Battle::chapter_strength(level);
+    match boss {
+        Some(id) => format!(
+            "主线 第{}章 第{level}关 · Boss「{}」· {}",
+            crate::boss::chapter_of(level),
+            id.name(),
+            id.profile().title
+        ),
+        None if strength > 0 => format!("第 {level} 关（第{}章·敌方强化 +{strength}）", crate::boss::chapter_of(level)),
+        None => format!("第 {level} 关"),
+    }
+}
+
 /// 一关的外围：头报 → 准备阶段 → 战斗 → 收尸 →（胜且还有下一关时）结算阶段。返回战斗结果。
 /// `enc` 是本关遭遇（普通关＝阵营轮转，章末关＝Boss）；主线与跳打 Boss 共用这一份循环，不开第二套。
 fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
@@ -133,21 +149,17 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     let inherit = &mut st.inherit;
     let carry_karma = &mut st.carry_karma;
     let (foe, boss) = enc(level);
-    let head = match boss {
-        Some(id) => format!(
-            "主线 第{}章 第{level}关 · Boss「{}」· {}",
-            crate::boss::chapter_of(level),
-            id.name(),
-            id.profile().title
-        ),
-        None => format!("第 {level} 关"),
-    };
+    let head = level_head(level, boss);
     println!("\n===== {head} · 准备阶段 =====");
     settle_phase(inherit, carry_karma, false);
     let mut b = match boss {
         Some(id) => Battle::new_boss(seed, faction, id, std::mem::take(inherit), level),
         None => Battle::new(seed, faction, foe, diff, std::mem::take(inherit), level),
     };
+    // Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）。
+    if boss.is_none() {
+        b.apply_chapter_strengthening(level);
+    }
     loop {
         print!("\n{}", crate::render::render(&b));
         if let Some(out) = b.over {
@@ -379,6 +391,9 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
         let mut last = Outcome::Draw;
         for _ in 0..5 {
             let mut b = Battle::new(seed, Faction::Ember, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
+            // 与 one_level 同一套敌方构造：本循环当前最多到第5关（第1章，强化量 0），加上来是为了
+            // 将来把轮数拉长读章节曲线时，托管冒烟与主线玩的不是两种游戏。
+            b.apply_chapter_strengthening(level);
             auto_play(&mut b);
             last = b.over.unwrap_or(Outcome::Draw);
             match last {
@@ -562,5 +577,47 @@ mod meta_tests {
         );
         assert!(survivors.iter().all(|c| !c.is_starter()), "§五185：开端不入继承堆");
         assert!(b.hand.is_empty() && b.draw_pile.is_empty() && b.discard_pile.is_empty());
+    }
+
+    #[test]
+    fn level_head_shows_the_ramp_but_stays_quiet_on_chapter_one_and_boss() {
+        assert_eq!(level_head(1, None), "第 1 关", "第1章头报必须与旧文案逐字相同");
+        assert_eq!(level_head(12, None), "第 12 关", "第12关仍属第1章");
+        assert_eq!(level_head(13, None), "第 13 关（第2章·敌方强化 +1）");
+        assert!(level_head(37, None).contains("敌方强化 +3"), "第4章封顶值要可见");
+        let boss = level_head(24, Some(crate::boss::BossId::Xuejue));
+        assert!(boss.contains("主线 第2章 第24关") && boss.contains("Boss「"), "Boss 关头报：{boss}");
+        assert!(!boss.contains("强化"), "Boss 关豁免章强化，头报不该谎称有");
+    }
+
+    /// 裁定24 的**读数**（不是断言平衡）：每章首关 × 三个难度档，各打「未强化」与「已强化」两场贪心托管。
+    /// 断言只锁"能分出结果、不越回合闸、不 panic"；对照与实验同 seed，读数随
+    /// `cargo test -- --nocapture` 打印并回填 pool/chapter-strengthening.md §2。
+    #[test]
+    fn chapter_ramp_matrix_reaches_a_decision() {
+        let mut rows = Vec::new();
+        for level in [1u32, 13, 25, 37, 49] {
+            for d in [Difficulty::Normal, Difficulty::Hard, Difficulty::Expert] {
+                let (foe, boss) = encounter_for(level);
+                assert!(boss.is_none(), "第{level}关不该是 Boss 章末");
+                for strengthen in [false, true] {
+                    let mut b = Battle::new(4242, Faction::Ember, foe, d, Vec::new(), level);
+                    if strengthen {
+                        b.apply_chapter_strengthening(level);
+                    }
+                    auto_play(&mut b);
+                    let out = b.over.expect("每章首关都必须分出结果（不得卡在 300 步护栏里）");
+                    assert!(b.turn <= b.turn_limit, "第{level}关 [{}] 越回合闸：turn={}", d.label(), b.turn);
+                    rows.push((level, d.label(), strengthen, out, b.turn));
+                }
+            }
+        }
+        println!("裁定24 章强化读数（seed=4242，我方＝贪心托管、空继承堆单关；强化前=对照）：");
+        for (level, d, st, out, turn) in rows {
+            let ch = crate::boss::chapter_of(level);
+            let s = Battle::chapter_strength(level);
+            let tag = if st { format!("强化+{s}") } else { "未强化  ".into() };
+            println!("  第{level:>2}关（第{ch}章）{d:<3} {tag} → {out:?}，{turn} 回合");
+        }
     }
 }

@@ -23,6 +23,8 @@ use crate::rng::Rng;
 pub const CANDLE_HP: i32 = 20;
 pub const HAND_LIMIT: usize = 8;
 pub const TURN_LIMIT: i64 = 30;
+/// 章强化的封顶档数 = §十一:404「每张卡牌最多升级3次」。
+pub const CHAPTER_STRENGTH_CAP: u32 = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Outcome {
@@ -310,6 +312,44 @@ impl Battle {
             None => self.e_candle,
             Some(c2) => self.e_candle.max(c2),
         }
+    }
+
+    /// §廿一「每章新阵营」＝三阵营循环 + **强化**（裁定24 人授权"数值先写，后续有问题再改"）。
+    /// 强化量取 `章号-1`，上限直接复用 §十一:404 的"每张卡牌最多升级3次" ⇒ 第1/2/3/4章＝0/1/2/3，第4章起平台。
+    pub fn chapter_strength(level: u32) -> u32 {
+        (crate::boss::chapter_of(level) - 1).min(CHAPTER_STRENGTH_CAP)
+    }
+
+    /// 把章强化落到敌方牌面上：三档累积，逐档对应 §十一:403 的三种升级效果
+    /// （数值+1 / 阈值-1 / 技能强化）。开端卡不吃——持业者是蜡烛本体，强化它会顺带动到烛尽判定。
+    /// **不掷 rng**：技能按卡片序取，与玩家侧 `upgrade_card` 同一索引法 ⇒ 同 seed 逐帧复现不破，
+    /// 第1章强化量为 0 时整函数是空操作 ⇒ 首关与旧行为逐字节相同。
+    pub fn apply_chapter_strengthening(&mut self, level: u32) {
+        let s = Self::chapter_strength(level);
+        if s == 0 {
+            return;
+        }
+        let pool = Skill::list();
+        let mut touched = 0usize;
+        for c in self.enemy_hand.iter_mut().chain(self.enemy_pile.iter_mut()) {
+            if c.is_starter() {
+                continue;
+            }
+            if s >= 1 {
+                c.def.power += 1;
+                c.hp = c.def.power;
+            }
+            if s >= 2 {
+                c.def.threshold = (c.def.threshold - 1).max(1);
+            }
+            if s >= 3 {
+                c.skills.push(pool[c.id as usize % pool.len()]);
+            }
+            touched += 1;
+        }
+        let ch = crate::boss::chapter_of(level);
+        self.log
+            .push(format!("— 第{ch}章强化：敌方 {touched} 张各 +{s} 档 —"));
     }
 
     fn make_card(&mut self, def: CardDef, with_skill: bool) -> CardInst {
@@ -1879,5 +1919,160 @@ mod boss_rule_tests {
         assert_eq!(b.e_karma, b.boss_profile().unwrap().start_karma, "开场业力＝一次性预算");
         assert!(b.log.iter().any(|l| l.contains("— Boss 登场：终影")));
         assert!(b.log.iter().any(|l| l.contains("特殊规则【吞名】")));
+    }
+}
+
+/// 裁定24「每章新阵营＝三阵营循环 + 强化」的数值层。
+/// 这里只锁**结构与不变量**（阶梯、豁免、rng 零扰动、与难度正交），不锁平衡结论：
+/// 胜率读数在 meta_tests 里跑，并回填 projects/midline/pool/chapter-strengthening.md。
+#[cfg(test)]
+mod chapter_strength_tests {
+    use super::*;
+    use crate::boss::BossId;
+
+    type Snap = Vec<(u64, &'static str, i32, i32, i32, usize)>;
+
+    fn enemy_snap(b: &Battle) -> Snap {
+        b.enemy_hand
+            .iter()
+            .chain(b.enemy_pile.iter())
+            .map(|c| (c.id, c.def.name, c.def.power, c.def.threshold, c.hp, c.skills.len()))
+            .collect()
+    }
+
+    fn ids(b: &Battle) -> (Vec<u64>, Vec<u64>) {
+        (
+            b.enemy_hand.iter().map(|c| c.id).collect(),
+            b.enemy_pile.iter().map(|c| c.id).collect(),
+        )
+    }
+
+    fn base_power(f: Faction, name: &str) -> (i32, i32) {
+        faction_cards(f)
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| (d.power, d.threshold))
+            .unwrap()
+    }
+
+    #[test]
+    fn strength_ladder_is_chapter_minus_one_capped_at_three() {
+        assert_eq!(Battle::chapter_strength(1), 0, "第1章＝基准，必须为零扰动留位");
+        assert_eq!(Battle::chapter_strength(12), 0, "第12关仍属第1章");
+        assert_eq!(
+            (
+                Battle::chapter_strength(13),
+                Battle::chapter_strength(25),
+                Battle::chapter_strength(37),
+                Battle::chapter_strength(49),
+                Battle::chapter_strength(60)
+            ),
+            (1, 2, 3, 3, 3),
+            "阶梯 1/2/3 后按 §十一:404 的上限封顶"
+        );
+    }
+
+    #[test]
+    fn chapter_one_is_byte_identical_no_op() {
+        let mut b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
+        let before = enemy_snap(&b);
+        let log_len = b.log.len();
+        b.apply_chapter_strengthening(1);
+        assert_eq!(enemy_snap(&b), before, "第1章不得改动任何敌方牌面");
+        assert_eq!(b.log.len(), log_len, "第1章不该多打日志");
+    }
+
+    #[test]
+    fn strengthening_never_consumes_rng_or_reorders() {
+        let plain = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 37);
+        let mut s = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 37);
+        s.apply_chapter_strengthening(37);
+        assert_eq!(ids(&s), ids(&plain), "卡片身份与顺序不得因强化而变动（=没掷过 rng）");
+        assert_eq!(s.next_id, plain.next_id);
+        assert_eq!(
+            s.hand.iter().map(|c| c.id).collect::<Vec<_>>(),
+            plain.hand.iter().map(|c| c.id).collect::<Vec<_>>(),
+            "我方起手也不得被敌方强化波及"
+        );
+    }
+
+    #[test]
+    fn three_tiers_map_to_the_three_upgrade_effects() {
+        let mut b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 37);
+        b.apply_chapter_strengthening(37);
+        let mut seen = 0;
+        for c in b.enemy_hand.iter().chain(b.enemy_pile.iter()) {
+            if c.is_starter() {
+                let st = faction_cards(Faction::Frost)[0];
+                assert_eq!((c.def.power, c.def.threshold, c.skills.len()), (st.power, st.threshold, 0), "开端卡不吃强化");
+                continue;
+            }
+            let (bp, bt) = base_power(Faction::Frost, c.def.name);
+            seen += 1;
+            assert_eq!(c.def.power, bp + 1, "{}：第4章＝三档 ⇒ 数值+1", c.def.name);
+            assert_eq!(c.def.threshold, (bt - 1).max(1), "{}：第4章＝三档 ⇒ 阈值-1", c.def.name);
+            assert_eq!(c.skills.len(), 2, "{}：第4章＝三档 ⇒ 技能强化（构造1 + 追加1）", c.def.name);
+            assert_eq!(c.hp, c.def.power, "强化后血量须跟着定义重置满格");
+        }
+        // 每阵营 13 张定义（1 开端 + 12 普通）；敌方 4 在手、9 在堆。
+        assert_eq!((seen, b.enemy_hand.len() + b.enemy_pile.len(), b.enemy_hand.len(), b.enemy_pile.len()), (12, 13, 4, 9));
+    }
+
+    /// 同一关内「强化后 - 强化前」的逐牌差值，按卡名归档。
+    fn deltas(level: u32) -> Vec<(&'static str, i32, i32, i32)> {
+        let plain = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), level);
+        let mut s = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), level);
+        s.apply_chapter_strengthening(level);
+        let mut v: Vec<(&'static str, i32, i32, i32)> = plain
+            .enemy_hand
+            .iter()
+            .chain(plain.enemy_pile.iter())
+            .zip(s.enemy_hand.iter().chain(s.enemy_pile.iter()))
+            .filter(|(p, _)| !p.is_starter())
+            .map(|(p, s)| (p.def.name, s.def.power - p.def.power, s.def.threshold - p.def.threshold, s.skills.len() as i32 - p.skills.len() as i32))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
+    #[test]
+    fn chapter_five_plateaus_at_chapter_four() {
+        let c4 = deltas(37);
+        let c5 = deltas(49);
+        assert_eq!(c4.len(), 12);
+        assert!(
+            c4.iter().all(|(_, dp, dt, ds)| (*dp, *dt, *ds) == (1, -1, 1)),
+            "第4章＝三档：每张非开端牌 +1/-1/+1，实际差值 {c4:?}"
+        );
+        assert_eq!(c4, c5, "第4章起按 §十一:404 封顶：第5章的逐牌差值不得再涨");
+    }
+
+    #[test]
+    fn strengthening_is_orthogonal_to_difficulty() {
+        let mut easy = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Easy, Vec::new(), 37);
+        easy.apply_chapter_strengthening(37);
+        let mut expert = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Expert, Vec::new(), 37);
+        expert.apply_chapter_strengthening(37);
+        assert_eq!(
+            enemy_snap(&easy),
+            enemy_snap(&expert),
+            "难度只管决策质量（§廿），章强化只管数值——两者不得互相渗透"
+        );
+    }
+
+    #[test]
+    fn boss_levels_stay_out_of_the_chapter_ramp() {
+        for id in BossId::all() {
+            let level = id.chapter() * crate::boss::LEVELS_PER_CHAPTER;
+            let boss = Battle::new_boss(2026, Faction::Ember, id, Vec::new(), level);
+            let plain = Battle::new(2026, Faction::Ember, id.profile().faction, Difficulty::Normal, Vec::new(), level);
+            assert_eq!(
+                enemy_snap(&boss),
+                enemy_snap(&plain),
+                "{}（第{}章末）的牌面必须是未强化的基准——B1 的贪心全败读数要逐帧可比",
+                id.name(),
+                id.chapter()
+            );
+        }
     }
 }
