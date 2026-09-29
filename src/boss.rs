@@ -21,14 +21,14 @@
 use crate::battle::{Battle, Outcome, Row};
 use crate::model::{CardInst, Faction, Skill, card_by_name};
 
-/// §二十一 Boss 表 5 行（中线.MD:931-936）。
+/// §廿一 Boss 表 5 行——逐行锚点挂在下面各变体上（列头行不算规则行，由 §廿一 推导器按结构剔掉）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BossId {
-    Luzhu,    // 第一章 炉主 · 烬火教团首领
-    Xuejue,   // 第二章 雪爵 · 霜誓守卫领袖
-    Yingzhang, // 第三章 影长 · 幽影议会首脑
-    YanBing,  // 第四章 炎与冰 · 双Boss
-    ZhongYing, // 第五章 终影 · 最终Boss
+    Luzhu,    // §廿一:932 第一章 炉主 · 烬火教团首领
+    Xuejue,   // §廿一:933 第二章 雪爵 · 霜誓守卫领袖
+    Yingzhang, // §廿一:934 第三章 影长 · 幽影议会首脑
+    YanBing,  // §廿一:935 第四章 炎与冰 · 双Boss
+    ZhongYing, // §廿一:936 第五章 终影 · 最终Boss
 }
 
 /// 每 Boss 恰好一条特殊规则（测试按此枚举分派）。
@@ -470,8 +470,8 @@ impl BossId {
 
 // ---------- 主线章节↔关卡映射（章末为 Boss） ----------
 
-pub const MAINLINE_LEVELS: u32 = 60;
-pub const LEVELS_PER_CHAPTER: u32 = 12;
+pub const MAINLINE_LEVELS: u32 = 60; // §廿一:914 主线体量「60关」（复合行另两clause：5章见下一行，每章新阵营见 battle.rs:321）
+pub const LEVELS_PER_CHAPTER: u32 = 12; // §廿一:914 「5章」＝60/12，章末为 Boss（`boss_for_level`）
 
 pub fn chapter_of(level: u32) -> u32 {
     ((level.saturating_sub(1)) / LEVELS_PER_CHAPTER + 1).clamp(1, 5)

@@ -172,10 +172,12 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **四张表**——§廿二 边界表、§十八 卡牌总表、
-//!       §十二 回合流程（第 30 条之后）、以及本帧的 §廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
-//!       复述／否定行，见 `every_row_of_section23_…`）。**仍未纳入**的是 §一/§二/§五/§六/§七/§八/§十四/
-//!       §十五/§十六 那些散文行——那里"整条规则没落地"仍查不出；语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **五张表**——§廿二 边界表、§十八 卡牌总表、
+//!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
+//!       复述／否定行，见 `every_row_of_section23_…`）、以及本帧的 §廿一 单机模式（模式表／每日挑战规则围栏／
+//!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）。**仍未纳入**的是
+//!       §一/§二/§五/§六/§七/§八/§十四/§十五/§十六 那些散文行——那里"整条规则没落地"仍查不出；
+//!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -241,9 +243,10 @@
 //!     §十六 11/1/8；§八 技能池 12↔12 一一对应。⇒ 规则层几乎全落地，缺口集中在**呈现层**（render.rs 只有"焰N/阈值"
 //!     纯数字，无百分比、无色档、无震屏，全仓无音频）与两处真校验缺失（§二:47-48「后排先放」只在 `ai.rs` 候选生成
 //!     生效、引擎与 Boss 不查；§一:17 成就+每日奖励零实现）。**D3 已落、D2 第三步续之**：这些真未实现的文档行现在以
-//!     `NOT_IMPLEMENTED` 债表的形式住在下面的锚点机检里（**20 条＝呈现层 15／规则层 4／豁免改登记 1**，逐条带原文、证据与去处，
-//!     偿一条就当场红）。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，本表以文档实测为准；
-//!     多出的两条是 §十二:456 与 §廿三:980（横屏），后者由 §廿三 速查表推导器列出。
+//!     `NOT_IMPLEMENTED` 债表的形式住在下面的锚点机检里（**23 条＝呈现层 15／规则层 4／豁免改登记 1／模式层 3**，
+//!     逐条带原文、证据与去处，偿一条就当场红）。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，
+//!     本表以文档实测为准；多出的几条是 §十二:456、§廿三:980（横屏）与本帧 §廿一:915/922/923（Roguelike 与
+//!     每日挑战的固定卡组、金币），全部由各自章的推导器列出，不是手挑。
 //!     计划、读数与 6 条待人裁都在
 //!     `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`，本处只登记口径。
 //!     - 本章**不能只查锚点存在**：三行开端（774/791/808）逐字节相同、代码里是同一个 `STARTER`，只查锚点会让
@@ -903,7 +906,8 @@ mod anchor_tests {
     /// `the_unimplemented_debt_table_…` 逐条验原文/章归属/去处，并且**不许有锚点**，所以这条路有牙。
     /// 残留盲区（如实登记）：§十八 由
     /// `every_card_row_of_section18_is_anchored_back_and_matches_field_by_field` 单独覆盖（它额外要求逐字段等值，
-    /// 原因见该测试的注释）；§廿三 由 `every_row_of_section23_…` 覆盖；**其余各章**（§一/§二/§三/§六/§七/§八/
+    /// 原因见该测试的注释）；§廿三 由 `every_row_of_section23_…` 覆盖；§廿一 由
+    /// `every_row_of_section21_…` 覆盖（一张章里三张子表）；**其余各章**（§一/§二/§三/§六/§七/§八/
     /// §十四/§十五/§十六 等 10 章零锚点的正文行）仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
@@ -1184,14 +1188,126 @@ mod anchor_tests {
         assert!(!s22_claimed_keys.iter().any(|k| k == "商业模式"), "§廿二 排除表里的行成了 §廿三 的复述上游＝两级洗白");
     }
 
+    /// §廿一 单机模式：**一张章里有三张子表**（模式表 3 行／每日挑战规则围栏 6 步／Boss 表 5 行＝14 行），
+    /// 每一行只许两条认领路——**锚点指回**或**挂债**；排除表在本围栏不作数（同 §十二，那条洗白路是量出来的）。
+    /// 必检集由结构推导，判据只有三条：① 围栏内必须逐行匹配 `^数字. `（围栏里冒出不像流程步的行就红）；
+    /// ② **紧跟空行的第一非空行是「块首」**，块首里单 token 的是小节头（`每日挑战规则`／`Boss设计`）、
+    /// 多 token 的是列头（`模式 说明`／`章节 Boss 特征`）；③ 其余非空行进必检集。
+    /// 三条判据谁都不许偷偷吞行：列头与小节头两个集合按**行号逐个钉死**，必检集钉 14，成员级反证再从
+    /// 三张子表各钉一行——把「回滚次数」这类真规则误当块首吃掉、或把小节头当规则行放进来，都当场红在名字上。
+    #[test]
+    fn every_row_of_section21_single_player_mode_is_anchored_back_or_debited() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "二十一、单机模式")
+            .expect("§廿一 标题必须存在（文档结构变了就要同步改本检查）");
+
+        let mut rows: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut headings: Vec<usize> = Vec::new();
+        let mut fence = false;
+        let mut block_start = false;
+        for (off, l) in lines[head + 1..].iter().enumerate() {
+            let n = head + 2 + off;
+            let t = l.trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                block_start = false;
+                continue;
+            }
+            if t.is_empty() {
+                block_start = true;
+                continue;
+            }
+            if fence {
+                let numbered = t.chars().next().is_some_and(|c| c.is_ascii_digit());
+                assert!(
+                    numbered && t[1..].starts_with('.'),
+                    "md:{n} 落在 §廿一 的围栏里却不是编号步（「{t}」）⇒ 推导口径失效，请同步改本检查而不是放宽它"
+                );
+                rows.push(n);
+                block_start = false;
+                continue;
+            }
+            if block_start {
+                if t.split_whitespace().count() == 1 {
+                    headings.push(n);
+                } else {
+                    headers.push(n);
+                }
+            } else {
+                rows.push(n);
+            }
+            block_start = false;
+        }
+        assert_eq!(rows.len(), 14, "§廿一 三张子表按结构推导应得 14 行，实测 {} 行 ⇒ 文档加了模式/规则/Boss 条目，或推导口径失效", rows.len());
+        assert_eq!(headers, vec![913, 931], "§廿一 的列头应恰好是 913「模式 说明」与 931「章节 Boss 特征」，实测 {headers:?}");
+        assert_eq!(headings, vec![918, 929], "§廿一 的小节头应恰好是 918「每日挑战规则」与 929「Boss设计」，实测 {headings:?}");
+        // 成员级反证：三张子表各钉一行必须在必检集里，两个块首必须不在——只钉总数会让"吞掉一行、凭空加一行"蒙混过关。
+        for n in [914usize, 916, 921, 924, 926, 932, 936] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §廿一 必检集 ⇒ 推导器漏了这种形态（{}）", at(n));
+        }
+        for n in [913usize, 918, 929, 931] {
+            assert!(!rows.contains(&n), "md:{n}（{}）进了必检集 ⇒ 块首判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        // 排除表在本围栏不作数（同 §十二 的裁定26 修法）。
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §廿一 围栏内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+        let (mut anchored, mut on_debt) = (0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§廿一 有 {} 行既无锚点指回、也不在债表里（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt),
+            (11, 3),
+            "§廿一 两条认领路应为 锚点11／挂债3，实测 ({anchored},{on_debt}) ⇒ 有行从一条路悄悄挪到另一条（把已实现的改成挂债＝拔掉牙）"
+        );
+        // 逐档再钉成员：路走错了要红在"哪一行走错"上，而不只是红在一个总数上。
+        for n in [914usize, 916, 921, 924, 925, 926, 932, 936] {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（{}）登记的处置是「锚点指回」，现在没有锚点＝债已偿或锚被删", at(n));
+        }
+        for n in [915usize, 922, 923] {
+            assert!(debited.contains(&n), "md:{n}（{}）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
+        }
+    }
+
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
     /// 规则层欠的是校验（引擎收了它不该收的走法）。后者会让同一局打出不同结果，前者不会。
+    /// 第三档 `Mode` 是本帧被 §廿一 逼出来的：整块模式没做（Roguelike／金币／每日固定卡组）既不是
+    /// "画不出来"也不是"引擎放过了不该放的走法"，塞进前两档都是改写缺口性质。
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum Tier {
         Presentation,
         Rule,
         /// 曾经躺在 `NOT_A_RULE` 里当"规则层范围外"，按裁定26 改挂成有去处的债。
         Washed,
+        /// 整块模式／字段级别的功能没有对应物，且文档没给可实现口径。
+        Mode,
     }
 
     impl Tier {
@@ -1200,6 +1316,7 @@ mod anchor_tests {
                 Tier::Presentation => "呈现层·设施缺失",
                 Tier::Rule => "规则层·真校验缺失",
                 Tier::Washed => "豁免改登记",
+                Tier::Mode => "模式层·整块设施未做",
             }
         }
     }
@@ -1222,9 +1339,10 @@ mod anchor_tests {
     /// 未实现债表（`reverse-coverage-multi-chapter` 的 D3）。逐条按"文档行 + 原文 + 证据 + 去处"录，
     /// 读数：呈现层 15 行（§十五 665/666 ＋ §十六 702/705/706/707/708/709/715/716/717/718/721
     /// ＋ §十二 479 ＋ §廿三 980；704 是列头「状态 表现」，属非规则行不入债表）、规则层 4 行（§二 47/48 ＋
-    /// §十二 416/456）、豁免改登记 1 行（§一 17）＝**20 条**。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，
-    /// 本表以文档实测为准。§十二 那三条、以及最后这条 §廿三 980 都不是手挑：由各自章的推导器从文档结构里
-    /// 列出"无人认领"的行，再逐行判定挂锚还是挂债。
+    /// §十二 416/456）、豁免改登记 1 行（§一 17）、模式层 3 行（§廿一 915/922/923）＝**23 条**。
+    /// 提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，本表以文档实测为准。§十二 那三条、
+    /// §廿三 980、以及本帧 §廿一 那三条都不是手挑：由各自章的推导器从文档结构里列出"无人认领"的行，
+    /// 再逐行判定挂锚还是挂债。模式层这一档是 §廿一 逼出来的——"整块模式没做"塞进前两档都是改写缺口性质。
     const NOT_IMPLEMENTED: &[Debt] = &[
         Debt {
             doc: 17,
@@ -1379,6 +1497,30 @@ mod anchor_tests {
             dest: "壳的粒子层（与 md:717 同一套设施）",
         },
         Debt {
+            doc: 915,
+            section: 21,
+            row: "Roguelike 随机卡组+遗物，死亡重来",
+            tier: Tier::Mode,
+            evidence: "由 §廿一 推导器列出：src/ 全文「遗物」0 命中，`rogue`／随机卡组／死亡重来 三路 grep 皆 0 命中；meta.rs 只有两个入口——mainline_run（60 关推进）与 ladder（play 与 daily 共用的无上限爬梯），没有第三种模式；save.rs 的 Progress 也没有遗物位",
+            dest: "文档未给随机卡组的抽取口径、遗物清单与效果、死亡重来的保留范围三件事 ⇒ 先要设计给数再动；开工点 meta.rs 加一个 run 入口 + save.rs::Progress 扩遗物位（CLI 命令面一动，main.rs 词表与裁定27/28 的存档语义要同步）",
+        },
+        Debt {
+            doc: 922,
+            section: 21,
+            row: "2. 固定卡组+特殊规则",
+            tier: Tier::Mode,
+            evidence: "由 §廿一 推导器列出：meta.rs::daily_run 只是把 ladder 的种子换成 daily_seed()，起手仍是 §六 的常规开局（开端＋继承堆顶 3 张），没有按日固定的卡组表，也没有任何按日生效的规则开关；文档对「固定卡组」是哪副、「特殊规则」是什么一字未定义 ⇒ 没有可实现口径",
+            dest: "与 Boss 数值同一条「文档没真值」的账（裁定20 ④），待人给数；开工点 meta.rs::daily_run 在进 ladder 前装配一次卡组，外加一条按日种子取值的规则开关（落点 save.rs 的日种子比对）",
+        },
+        Debt {
+            doc: 923,
+            section: 21,
+            row: "3. 完成获得金币，用于解锁新卡",
+            tier: Tier::Mode,
+            evidence: "由 §廿一 推导器列出：src/ 全文「金币」仅 1 命中，且那一条正是 save.rs 顶部说明「不建金币/成就/收集字段」的注释本身；文档给了金币的获取路径却没给数额、卡池与解锁价格 ⇒ 建了就是没有真值源的第二套壳",
+            dest: "先要设计给金币数额与解锁价目，再在 save.rs::Progress 扩金币位并在 meta.rs 通关处发放；解锁表另需文档给卡池",
+        },
+        Debt {
             doc: 980,
             section: 23,
             row: "屏幕 横屏",
@@ -1475,14 +1617,26 @@ mod anchor_tests {
         assert!(bad.is_empty(), "未实现债表有 {} 处失效：\n{}", bad.len(), bad.join("\n"));
         assert_eq!(
             NOT_IMPLEMENTED.len(),
-            20,
+            23,
             "债表条数变了。偿了债 ⇒ 删条目并把本数字与下面的分档数一起改小；真要新增债 ⇒ 连同文档出处、证据、去处一起写"
         );
         let pres = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Presentation).count();
         let rule = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Rule).count();
         let washed = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Washed).count();
+        let mode = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Mode).count();
         // 分档不许互相挪：把规则层挪进呈现层＝把"引擎收了它不该收的走法"说成"只是没画出来"，缺口的性质就变了。
-        assert_eq!((pres, rule, washed), (15, 4, 1), "债表应为 呈现层15／规则层4／豁免改登记1，实测 ({pres},{rule},{washed})");
+        assert_eq!(
+            (pres, rule, washed, mode),
+            (15, 4, 1, 3),
+            "债表应为 呈现层15／规则层4／豁免改登记1／模式层3，实测 ({pres},{rule},{washed},{mode})"
+        );
+        assert_eq!(
+            pres + rule + washed + mode,
+            NOT_IMPLEMENTED.len(),
+            "分档之和 ({}) ≠ 债表条数 ({}) ⇒ 有新档没被上面的计数覆盖（加了 Tier 变体却忘了 here）",
+            pres + rule + washed + mode,
+            NOT_IMPLEMENTED.len()
+        );
     }
 
     fn check(

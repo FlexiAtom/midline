@@ -79,4 +79,33 @@ ls.insert(i+1,'const _SCORING_PROBE: &str = \"评分系统\";')
 ls.insert(i+2,'')
 open(p,'w',encoding='utf8').write('\n'.join(ls))"
 run
-echo "### M10 收尾：全部复原后整族应全绿"; restore; run
+echo "### M10 抹掉 §廿一:932（Boss 表第一章）的锚点 ⇒ 应红在 §廿一 推导器（漏登记）"
+restore; py "
+import re
+p='$D/src/boss.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'\s*//\s*§廿一:932[^\n]*','',s)
+assert s2!=s, '没抹到 §廿一:932'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M11 放宽块首判据（把单 token 的小节头也当规则行）⇒ 应红在 §廿一 的 14 行死数与 headings 钉死"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+s2=s.replace('if t.split_whitespace().count() == 1 {','if false {')
+assert s2!=s, '没打到块首判据'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M12 把债条 md:915 塞进 NOT_A_RULE ⇒ 应同时红在 §廿一 围栏排除表断言 + 债表「两头下注」"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+s2=s.replace('&[(970,','&[(915, \"变异试验：把债条塞进排除表\"), (970,')
+assert s2!=s, '没塞进 NOT_A_RULE'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M13 文档副本 §廿一 模式表凭空多一条模式 ⇒ 应红在 §廿一 总数 14→15（正证：推导器跟着文档长）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[915].startswith('每日挑战 '), '文档行 916 变了，副本口径不再对：'+ls[915]
+ls.insert(916,'合作 双人同屏（变异：凭空多出的模式）')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M14 收尾：全部复原后整族应全绿"; restore; run

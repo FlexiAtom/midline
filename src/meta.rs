@@ -21,10 +21,10 @@ use crate::save::{self, Progress};
 use std::path::PathBuf;
 
 /// §廿二:969 每日挑战＝本地种子，基于日期生成（`epoch秒/86400` ⇒ 日界是 UTC 零点，不是本地零点）。
-/// 诚实缺口：md:922 说每日挑战还有「固定卡组+特殊规则」，文档**一字未定义**两者，
-/// 所以当前 `daily` 只是"换日期种子的 play"，不是文档意义上的每日挑战。
-pub fn daily_seed() -> u64 {
-    let now = std::time::SystemTime::now()
+/// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，文档**一字未定义**两者，
+/// 所以当前 `daily` 只是"换日期种子的 play"，不是文档意义上的每日挑战（该缺口挂成显式债，见 model.rs 债表）。
+pub fn daily_seed() -> u64 {  // §廿一:921 每日挑战规则第 1 步＝本地种子，基于日期生成
+    let now = std::time::SystemTime::now()  // §廿一:925 改时间不可防：文档自己声明"不影响游戏平衡"⇒ 本实现不设闸，也不做服务器校时
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
@@ -217,12 +217,12 @@ fn persist(slot: &mut SaveSlot, what: &str) -> bool {
 
 /// 每日挑战：文档要求「完成后记录日期，防止重复完成」（§廿一:926），但**从未定义"完成"的边界**
 /// （裁定29）。这里取最小可核读法——本局**第一次打赢一关**就算完成，只记 `daily_done`，不动主线进度。
-/// 诚实缺口：md:922 还要「固定卡组+特殊规则」，文档一字未定义 ⇒ 现在的 daily 只是"换日期种子的 play"。
-pub fn daily_run(path: PathBuf) {
+/// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，文档一字未定义 ⇒ 现在的 daily 只是"换日期种子的 play"。
+pub fn daily_run(path: PathBuf) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
     let seed = daily_seed();
     println!("每日挑战 seed={seed}");
     let save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::DailyDoneOnly);
-    if save.progress.daily_done == seed {
+    if save.progress.daily_done == seed {  // §廿一:924 每日重置＝只比对**今天**的日种子：记过的是昨天，不挡今天重开
         println!("今天的每日挑战已经打过了（记录日种子={seed}）。想再来一局换个档就行：daily --save /tmp/another.kv");
         return;
     }
