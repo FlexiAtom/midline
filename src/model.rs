@@ -648,6 +648,36 @@ mod anchor_tests {
         files
     }
 
+    /// 许可证头机检。人原话（09-28）：「代码头要加AGPL-v3头，这个需要检查，如果没有的话补，署名用FlexiAtom」。
+    /// 判据＝文件开头那段**连续的行注释**（`//` 起头、排除 `//!` 文档注释）必须与 `main.rs` 的那段逐字相同，
+    /// 且其中必须含 AGPL 与署名两句话。
+    /// 为什么不逐文件写死一份期望：期望文本抄两遍，改年份时会出现"改了九个忘改模板"的第十四种错法；
+    /// 拿 `main.rs` 当参照物，新增文件漏头当场红，改头时九个文件一起动才不会漏。
+    #[test]
+    fn every_compiled_src_file_opens_with_the_same_agpl_header() {
+        fn block(src: &str) -> Vec<String> {
+            src.lines().take_while(|l| l.starts_with("//") && !l.starts_with("//!")).map(str::to_string).collect()
+        }
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let main = std::fs::read_to_string(manifest.join("src/main.rs")).unwrap();
+        let want = block(&main);
+        assert!(want.len() >= 10, "参照头只有 {} 行，判据失效", want.len());
+        let joined = want.join("\n");
+        assert!(joined.contains("GNU Affero General Public License"), "参照头不含 AGPL 条款，本检查在拿错的模板上自证");
+        assert!(joined.contains("Copyright (C) 2026 FlexiAtom"), "参照头不含约定署名（人原话：署名用FlexiAtom）");
+
+        let mut bad: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let name = fp.file_name().unwrap().to_string_lossy().into_owned();
+            let got = block(&std::fs::read_to_string(&fp).unwrap());
+            if got != want {
+                let at = got.iter().zip(want.iter()).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len()));
+                bad.push(format!("  {name}：头第 {} 行起与参照不同（该文件头 {} 行 / 参照 {} 行）", at + 1, got.len(), want.len()));
+            }
+        }
+        assert!(bad.is_empty(), "许可证头不一致：\n{}", bad.join("\n"));
+    }
+
     #[test]
     fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
         let Some(lines_s) = doc_or_skip() else { return };

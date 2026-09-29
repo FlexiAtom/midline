@@ -14,34 +14,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //! ASCII 棋盘渲染（§二 布局基线）。
+//!
+//! 本模块是快照的**消费者**之一：所有数据来自 `view::Board`，不再直读 `Battle` 字段。
+//! 壳层（TUI / 2D / 3D）接的是同一份 `Board`——所以这里出现的任何数字都必须能从快照里拿到，
+//! 反过来也不许在这里偷偷回读引擎（那等于把刚拆掉的耦合再装回来）。
 
-use crate::battle::{CANDLE_HP, SideK};
 use crate::battle::Battle;
-use crate::model::short_card;
+use crate::view::{Board, CardView, HolderView};
 
-fn cell(b: &Battle, side_front: bool, col: usize) -> String {
-    let c = if side_front { b.p_front[col].as_ref() } else { b.e_front[col].as_ref() };
-    match c {
-        Some(x) => {
-            let side = if side_front { SideK::Player } else { SideK::Enemy };
-            format!(
-                "{:<12}",
-                format!("{}·{}/{}焰{}", x.def.name, x.hp, b.effective_threshold(side, col, x), x.flame)
-            )
-        }
-        None => format!("{:<12}", "·"),
-    }
+/// 格内一行（名字·当前值/生效阈值 焰累积）。
+fn face(c: &CardView) -> String {
+    format!("{:<12}", format!("{}·{}/{}焰{}", c.name, c.hp, c.threshold, c.flame))
 }
 
-fn ecell(b: &Battle, back: bool, col: usize) -> String {
-    let c = if back { b.e_back[col].as_ref() } else { b.e_front[col].as_ref() };
-    match c {
-        Some(x) => format!(
-            "{:<12}",
-            format!("{}·{}/{}焰{}", x.def.name, x.hp, b.effective_threshold(SideK::Enemy, col, x), x.flame)
-        ),
-        None => format!("{:<12}", "·"),
-    }
+fn blank() -> String {
+    format!("{:<12}", "·")
+}
+
+/// 四个同列格：槽位为 None 画空。
+fn row_cells(row: &[Option<CardView>; 4]) -> [String; 4] {
+    std::array::from_fn(|i| row[i].as_ref().map(face).unwrap_or_else(blank))
 }
 
 pub fn candle_bar(hp: i32, cap: i32) -> String {
@@ -50,7 +42,7 @@ pub fn candle_bar(hp: i32, cap: i32) -> String {
     format!("🕯️[{:<10}]{}{}/{cap}", "#".repeat(filled), if hp == 0 { "烛尽 " } else { "" }, hp)
 }
 
-/// 持业者称呼：普通对局沿用原文案；Boss 战带名（`holder_names` 由 profile 提供）。
+/// 持业者称呼：普通对局沿用原文案；Boss 战带名（`name` 由引擎给出）。
 fn holder_label(name: &str) -> String {
     if name == "敌方持业者" {
         "敌方持业者".to_string()
@@ -59,61 +51,61 @@ fn holder_label(name: &str) -> String {
     }
 }
 
-/// 持业者行（业力是敌方共用一池，只在第一根那行列出）。双烛时第二行列出另一根与其受击列区。
-fn holder_lines(b: &Battle) -> Vec<String> {
-    let p = b.boss_profile();
-    let cap1 = p.map_or(CANDLE_HP, |x| x.holder_hp);
-    let mut v = vec![format!(
-        "{} {} 业力:{}\n",
-        holder_label(b.holder_names[0]),
-        candle_bar(b.e_candle, cap1),
-        b.e_karma
-    )];
-    if let Some(c2) = b.e_candle2 {
-        v.push(format!(
-            "{} {}（第1-2列直击此柱）\n",
-            holder_label(b.holder_names[1]),
-            candle_bar(c2, p.map_or(CANDLE_HP, |x| x.holder_hp2.unwrap_or(CANDLE_HP)))
-        ));
-    }
-    v
+fn holder_line(h: &HolderView) -> String {
+    let karma = h.karma.map_or(String::new(), |k| format!(" 业力:{k}"));
+    let zone = h.column_zone.map_or(String::new(), |(a, b)| format!("（第{a}-{b}列直击此柱）"));
+    format!("{} {}{karma}{zone}\n", holder_label(h.name), candle_bar(h.hp, h.cap))
 }
 
-pub fn render(b: &Battle) -> String {
-    let mut s = String::new();
-    for line in holder_lines(b) {
-        s.push_str(&line);
+/// 一行简述（快照版）。它和 `model::short_card`（引擎版）是两份实现，
+/// 等值由 view.rs 的 `hand_card_label_equals_the_engines_own_short_card` 钉住。
+pub fn card_label(c: &CardView) -> String {
+    let mut s = format!("{}{}({}费 值{} 阈{})[{}]", c.name, if c.crafted { "〈造〉" } else { "" }, c.cost, c.hp, c.threshold, c.flame);
+    if !c.skills.is_empty() {
+        s.push_str(&format!("{{{}}}", c.skills.join("+")));
     }
-    if let Some(p) = b.boss_profile() {
-        s.push_str(&format!("特殊规则【{}】：{}\n", p.rule.label(), p.rule_text));
-    }
-    s.push_str(&format!("│ E1 {:<12}│ E2 {:<12}│ E3 {:<12}│ E4 {:<12}│ ← 敌方后排（不可攻击）\n",
-        ecell(b, true, 0), ecell(b, true, 1), ecell(b, true, 2), ecell(b, true, 3)));
-    s.push_str(&format!("│ E5 {:<12}│ E6 {:<12}│ E7 {:<12}│ E8 {:<12}│ ← 敌方前排（可攻击）\n",
-        ecell(b, false, 0), ecell(b, false, 1), ecell(b, false, 2), ecell(b, false, 3)));
-    s.push_str("╞══════════════╪══════════════╪══════════════╪══════════════╡ ← 中线（绝对边界）\n");
-    s.push_str(&format!("│ P1 {:<12}│ P2 {:<12}│ P3 {:<12}│ P4 {:<12}│ ← 我方（全部可攻击）\n",
-        cell(b, true, 0), cell(b, true, 1), cell(b, true, 2), cell(b, true, 3)));
-    s.push_str(&format!(
-        "我方持业者 {} 业力:{}（回合 {}）\n",
-        candle_bar(b.p_candle, CANDLE_HP),
-        b.p_karma,
-        b.turn
-    ));
-    s.push_str("手牌：");
-    if b.hand.is_empty() {
-        s.push_str("（空）");
-    }
-    for (i, c) in b.hand.iter().enumerate() {
-        s.push_str(&format!("[{i}]{}  ", short_card(c)));
-    }
-    s.push_str(&format!("\n牌堆：继承堆剩{}张（自动抽）  开端堆{}张\n", b.draw_pile.len(), b.starter_pile));
     s
 }
 
+/// 快照 → 文本。CLI 走 `render`，壳层若要"同一段文案"可直接走这个函数（正常情况它消费快照自己画）。
+pub fn render_board(v: &Board) -> String {
+    let mut s = String::new();
+    for h in &v.enemy_holders {
+        s.push_str(&holder_line(h));
+    }
+    if let Some(r) = &v.rule {
+        s.push_str(&format!("特殊规则【{}】：{}\n", r.label, r.text));
+    }
+    let [b0, b1, b2, b3] = row_cells(&v.enemy_back);
+    s.push_str(&format!("│ E1 {:<12}│ E2 {:<12}│ E3 {:<12}│ E4 {:<12}│ ← 敌方后排（不可攻击）\n", b0, b1, b2, b3));
+    let [f0, f1, f2, f3] = row_cells(&v.enemy_front);
+    s.push_str(&format!("│ E5 {:<12}│ E6 {:<12}│ E7 {:<12}│ E8 {:<12}│ ← 敌方前排（可攻击）\n", f0, f1, f2, f3));
+    s.push_str("╞══════════════╪══════════════╪══════════════╪══════════════╡ ← 中线（绝对边界）\n");
+    let [p0, p1, p2, p3] = row_cells(&v.player_front);
+    s.push_str(&format!("│ P1 {:<12}│ P2 {:<12}│ P3 {:<12}│ P4 {:<12}│ ← 我方（全部可攻击）\n", p0, p1, p2, p3));
+    s.push_str(&format!(
+        "我方持业者 {} 业力:{}（回合 {}）\n",
+        candle_bar(v.player.hp, v.player.cap),
+        v.player.karma,
+        v.player.turn
+    ));
+    s.push_str("手牌：");
+    if v.hand.is_empty() {
+        s.push_str("（空）");
+    }
+    for (i, c) in v.hand.iter().enumerate() {
+        s.push_str(&format!("[{i}]{}  ", card_label(c)));
+    }
+    s.push_str(&format!("\n牌堆：继承堆剩{}张（自动抽）  开端堆{}张\n", v.draw_pile_len, v.starter_pile_len));
+    s
+}
+
+pub fn render(b: &Battle) -> String {
+    render_board(&b.view())
+}
+
 pub fn log_tail(b: &Battle, n: usize) -> String {
-    let start = b.log.len().saturating_sub(n);
-    b.log[start..].join("\n")
+    b.view().log_tail(n)
 }
 
 #[cfg(test)]

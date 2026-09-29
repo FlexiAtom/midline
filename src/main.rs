@@ -23,6 +23,7 @@ mod model;
 mod render;
 mod rng;
 mod save;
+mod view;
 
 use battle::Difficulty;
 use boss::BossId;
