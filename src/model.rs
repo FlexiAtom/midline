@@ -172,12 +172,19 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **五张表**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **六张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
-//!       复述／否定行，见 `every_row_of_section23_…`）、以及本帧的 §廿一 单机模式（模式表／每日挑战规则围栏／
-//!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）。**仍未纳入**的是
-//!       §一/§二/§五/§六/§七/§八/§十四/§十五/§十六 那些散文行——那里"整条规则没落地"仍查不出；
+//!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
+//!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、以及本帧的
+//!       §十五 伤害回滚（**第一条非表的章**：34 行按形态推出来，认领路多开一条——「示例」围栏那 14 行
+//!       只许走**用文档自身数字驱动引擎跑一遍**的实测，挂锚与挂债都不算数，见 `every_row_of_section15_…`
+//!       与 `battle::parse_section15_examples`）。**仍未纳入**的是
+//!       §一/§二/§五/§六/§七/§八/§十四/§十六 那些散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
+//!       §十五 这一帧同时暴露一类新的不可机检面：**否定式条款**（"不包括…""不参与后续回滚"）的锚点
+//!       指向的是"这里没有某行代码"，机检证伪不了。本轮只给 §十五:630 补了一条真测
+//!       （`rollback_excess_does_not_flow_back_into_the_dealt_ledger`：连触发两次，第二次额度仍按 A=7），
+//!       §十五:621 那类"不包括"仍只有锚点。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -256,8 +263,10 @@
 //!       逐字段（费/数值/阈值/卡名）比死，并断言三行开端逐字节相同、小节顺序与 `Faction` 顺序一致。
 //!     - 假绿反证实测两次：改 `影仆` 阈值 3→4 ⇒ 红 `md:809 文档[…阈3] ≠ 代码[…阈4]`；摘掉 `// md:809` ⇒ 红
 //!       `md:809 ← 1 2 3 影仆 无 从技能池随机 没有任何锚点指回`；复原 ⇒ 106 全绿（基线 104 ＋ 本测 ＋ 献祭越界回归测）。
-//!     - **仍未纳入**：§廿三 速查表、§十二 的编号步骤（411-509 是 ``` 围栏内的 `1.` 与 `   a.` 两级步骤，要第三档
-//!       推导器）、以及九张散文章。语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
+//!     - 写这条时**未纳入**的是 §廿三 速查表、§十二 的编号步骤（411-509 是 ``` 围栏内的 `1.` 与 `   a.` 两级
+//!       步骤，当时以为要第三档推导器）以及若干散文章。前两项后来各开了一档推导器就纳入进去了，清单每帧都在动
+//!       ⇒ **不再在此复述**（写死一次就会像这样过期），以本文件「残留盲区」那条的当前清单为准。
+//!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 
 use std::fmt;
 
@@ -549,11 +558,46 @@ mod tests {
 /// 文档锚点机检。此前一轮全量核对发现裁定清单里有 8 处引用指错行（含一处指向**全文不存在的行号**、
 /// 三处指向空行、两处指到别的章节），故立此不变量：注释里的每一处文档引用必须
 /// ① 行号不越界 ② 该行非空 ③ 凡带章名的锚点，该行确实属于所声称的那一章。
+/// 文档不随仓库分发。候选：环境变量 → 仓库同级 → 上两级（本仓在 ~/rust/midline，文档在 ~/）。
+/// 放在模块层而不是 `anchor_tests` 里，是因为 §十五 的示例实测测住在 `battle.rs`（它要动引擎），
+/// 而它必须与 `model.rs` 的反向覆盖推导器**共用同一份读取口径**——两处各读一遍文档，
+/// 一处按行号 1 起、一处按 0 起，就会朝不同方向错，而"这行有没有被核对过"恰恰只在这类偏移上才会静默绿。
+#[cfg(test)]
+pub(crate) fn locate_doc() -> Option<std::path::PathBuf> {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::env::var("MIDLINE_DOC")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .into_iter()
+        .chain([
+            manifest.join("中线.MD"),
+            manifest.parent().unwrap_or(manifest).join("中线.MD"),
+            manifest.ancestors().nth(2).unwrap_or(manifest).join("中线.MD"),
+        ])
+        .find(|p| p.exists())
+}
+
+/// 找不到文档时的统一处置：只有 `MIDLINE_DOC_SKIP=1` 才允许跳过（默认不跳过，防静默假绿）。
+/// 返回 `None` ＝本测试已被显式豁免，调用方直接 `return`。
+#[cfg(test)]
+pub(crate) fn doc_or_skip() -> Option<Vec<String>> {
+    if locate_doc().is_none() && std::env::var("MIDLINE_DOC_SKIP").is_ok() {
+        return None;
+    }
+    let doc = locate_doc().unwrap_or_else(|| {
+        panic!(
+            "找不到规则文档 中线.MD（候选含 $MIDLINE_DOC 与仓库同级/上两级）。它不在仓库里；\
+             设 MIDLINE_DOC=<路径> 指定，或 MIDLINE_DOC_SKIP=1 明确跳过本检查。"
+        )
+    });
+    Some(std::fs::read_to_string(&doc).unwrap().lines().map(str::to_string).collect())
+}
+
 /// 规则文档不在仓库内（与本仓同级 `中线.MD`），文件缺失时跳过而非失败。
 /// 语义是否被曲解无法机检——那仍靠人向设计逐条核对。
 #[cfg(test)]
 mod anchor_tests {
-    use super::{Faction, faction_cards};
+    use super::{Faction, doc_or_skip, faction_cards};
 
     const NUM: &[char] = &['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '廿'];
 
@@ -596,36 +640,6 @@ mod anchor_tests {
             j += 1;
         }
         if j == from { None } else { Some((cs[from..j].iter().collect::<String>().parse().ok()?, j)) }
-    }
-
-    /// 文档不随仓库分发。候选：环境变量 → 仓库同级 → 上两级（本仓在 ~/rust/midline，文档在 ~/）。
-    fn locate_doc() -> Option<std::path::PathBuf> {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        std::env::var("MIDLINE_DOC")
-            .map(std::path::PathBuf::from)
-            .ok()
-            .into_iter()
-            .chain([
-                manifest.join("中线.MD"),
-                manifest.parent().unwrap_or(manifest).join("中线.MD"),
-                manifest.ancestors().nth(2).unwrap_or(manifest).join("中线.MD"),
-            ])
-            .find(|p| p.exists())
-    }
-
-    /// 找不到文档时的统一处置：只有 `MIDLINE_DOC_SKIP=1` 才允许跳过（默认不跳过，防静默假绿）。
-    /// 返回 `None` ＝本测试已被显式豁免，调用方直接 `return`。
-    fn doc_or_skip() -> Option<Vec<String>> {
-        if locate_doc().is_none() && std::env::var("MIDLINE_DOC_SKIP").is_ok() {
-            return None;
-        }
-        let doc = locate_doc().unwrap_or_else(|| {
-            panic!(
-                "找不到规则文档 中线.MD（候选含 $MIDLINE_DOC 与仓库同级/上两级）。它不在仓库里；\
-                 设 MIDLINE_DOC=<路径> 指定，或 MIDLINE_DOC_SKIP=1 明确跳过本检查。"
-            )
-        });
-        Some(std::fs::read_to_string(&doc).unwrap().lines().map(str::to_string).collect())
     }
 
     /// 只扫**被编译的**文件：模块清单取 `main.rs` 里的 `mod X;`。没被 `mod` 的 `src/*.rs` 是死文件，
@@ -1293,6 +1307,126 @@ mod anchor_tests {
         }
         for n in [915usize, 922, 923] {
             assert!(debited.contains(&n), "md:{n}（{}）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
+        }
+    }
+
+    /// §十五 伤害回滚：**围栏式散文章，不是表**，所以形态判据换一套（三条）：
+    /// ① 章内 trim 后**单 token 且以「：」收尾**的行是标签——含围栏外的 606/615/633/641/662 与**围栏内**的 636「触发后：」，
+    ///    标签不入必检集；② 其余非空行（围栏内外都算）全入必检集，实测 34 行；
+    /// ③ 「示例」标签后那道围栏里的行**只许走第三条认领路：用文档自己的数字驱动引擎跑一遍**
+    ///    （`battle::parse_section15_examples` 解析 ＋ `section15_worked_examples_reproduce_on_the_engine` 实测）。
+    /// 为什么示例不吃挂锚：644–659 是 618–630 那批规则的重说一遍，锚点只能证明"有代码行指过来"，
+    /// 证明不了"引擎算出的数＝文档写的那串数"；实测才是两头都拦——改文档示例的数会红，改引擎的算法也会红。
+    /// 为什么示例也不许同时走锚点／挂债：那等于把"必须跑一遍"降级成"有人指过来就行"。
+    /// 排除表（`NOT_A_RULE`）在本章同样不作数（同 §十二／§廿一 的裁定26 修法）。
+    #[test]
+    fn every_row_of_section15_damage_rollback_is_anchored_debited_or_reproduced_by_the_engine() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十五、伤害回滚（仅玩家拥有）")
+            .expect("§十五 标题必须存在（文档结构变了就要同步改本检查）");
+
+        let mut rows: Vec<usize> = Vec::new();
+        let mut labels: Vec<usize> = Vec::new();
+        let mut fence = false;
+        // 标签的两条形态判据（各自只在一侧生效，合起来才覆盖本章两种标签写法）：
+        // ① 围栏**内**：单 token 且以「：」收尾 —— 636「触发后：」；
+        // ② 围栏**外**：单 token 且下一个非空行就是 ``` —— 606/615/633/641/662 这种不带冒号的块首标签。
+        // ② 只在围栏外生效是必须的：示例最后一行 659「→ 下回合业力-1」也是单 token，而它的下一个非空行
+        // 恰好是**闭**围栏 ⇒ 若 ② 不分内外就会把这条真示例行吞成标签，而吞掉一行正好能让总数从 39 落回 34，
+        // 只钉总数拦不住（本帧先实测到 39≠34，才把这条危害写成实证的）。
+        let next_non_blank = |n: usize| -> String {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            at(k).trim().to_string()
+        };
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                continue;
+            }
+            if t.is_empty() {
+                continue;
+            }
+            let one_word = t.split_whitespace().count() == 1;
+            let is_label = one_word && ((fence && t.ends_with('：')) || (!fence && next_non_blank(n) == "```"));
+            if is_label {
+                labels.push(n);
+                continue;
+            }
+            rows.push(n);
+        }
+        assert_eq!(rows.len(), 34, "§十五 按形态推导应得 34 行（触发条件4＋效果12＋回滚代价2＋示例14＋视觉2），实测 {} 行 ⇒ 文档加了规则或推导口径失效", rows.len());
+        assert_eq!(
+            labels,
+            vec![606, 615, 633, 636, 641, 662],
+            "§十五 的标签应恰好是 606 触发条件／615 效果／633 回滚代价／636 触发后：／641 示例／662 视觉，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效"
+        );
+        // 成员级反证：各形态各钉一行必须在必检集里（只钉总数会让"吞一行、加一行"蒙混过关）。
+        for n in [609usize, 612, 618, 622, 628, 630, 637, 638, 644, 657, 665] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §十五 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [604usize, 606, 633, 636, 641, 662] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 标签／章标题判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §十五 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+        // 第三条路：示例行必须正好是那个解析器认下来的行，两套口径不许分叉。
+        let verified: Vec<usize> = crate::battle::parse_section15_examples(&lines).iter().map(|c| c.line).collect();
+        assert_eq!(verified.len(), 14, "§十五 示例围栏应解析出 14 行，实测 {} 行 ⇒ 解析器与本推导器的口径分叉了", verified.len());
+        for n in &verified {
+            assert!(rows.contains(n), "md:{n} 被示例解析器收了却不在必检集 ⇒ 推导器与解析器对同一段围栏读法不同");
+            assert!(
+                !referenced.contains(&(*n as u32)) && !debited.contains(n),
+                "md:{n}（「{}」）是 §十五 示例行，却走了锚点／挂债路＝把「必须跑一遍」降级成「有人指过来就行」",
+                at(*n)
+            );
+        }
+
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§十五 有 {} 行既无锚点指回、也不在债表里、又不是示例围栏里被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (18, 2, 14),
+            "§十五 三条认领路应为 锚点18／挂债2／示例实测14，实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从一条路悄悄挪到另一条"
+        );
+        for n in [609usize, 610, 612, 618, 622, 625, 628, 630, 637, 638] {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）登记的处置是「锚点指回」，现在没有锚点＝实现被删或锚被摘", at(n));
+        }
+        for n in [665usize, 666] {
+            assert!(debited.contains(&n), "md:{n}（「{}」）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
         }
     }
 

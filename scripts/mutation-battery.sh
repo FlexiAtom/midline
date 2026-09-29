@@ -108,4 +108,42 @@ assert ls[915].startswith('每日挑战 '), '文档行 916 变了，副本口径
 ls.insert(916,'合作 双人同屏（变异：凭空多出的模式）')
 open(p,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
-echo "### M14 收尾：全部复原后整族应全绿"; restore; run
+echo "### M14 抹掉 §十五:628（超额按攻击顺序分配）的锚点 ⇒ 应红在 §十五 推导器（漏登记）"
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'[ \t]*§十五:628(?![0-9])','',s)
+assert s2!=s, '没抹到 §十五:628'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M15 给示例行 md:645 挂一个真锚点 ⇒ 应红在 §十五「示例行不许走锚点路」（把实测降级成指向）"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split('\n')
+i=[k for k,l in enumerate(ls) if 'let d = std::mem::take(&mut self.pending_candle_d);' in l]
+assert len(i)==1, i
+ls[i[0]]+='  // §十五:645 变异试验：给示例行挂锚'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+run
+echo "### M16 标签判据放宽到不分围栏内外 ⇒ 应红在 §十五 总数：闭围栏前那条真示例行 659 被吞成标签"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+Q = chr(34) + chr(96)*3 + chr(34) + ')'   # 源文本里的闭合部分；用 chr 拼出来，免得反引号在 bash 双引号里被当命令替换
+s2 = s.replace('(!fence && next_non_blank(n) == ' + Q, '(next_non_blank(n) == ' + Q)
+assert s2!=s, '没打到标签判据'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M17 文档副本 §十五 触发条件凭空多一条 ⇒ 应红在 §十五 总数 34→35 ＋ 示例行号名单"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[611].startswith('4. '), '文档行 612 变了，副本口径不再对：'+ls[611]
+ls.insert(612,'5. 变异检验：凭空多出的触发条件')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M18 引擎侧把剩余伤害下限从 0 改成 1 ⇒ 应红在 §十五 示例实测（正证：实测抓得住行为回归，非只注释面）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2=s.replace('let remain = (d - a).max(0);','let remain = (d - a).max(1);')
+assert s2!=s, '没打到 remain 口径'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M19 收尾：全部复原后整族应全绿"; restore; run

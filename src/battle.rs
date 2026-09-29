@@ -149,14 +149,19 @@ pub struct Battle {
     pub pf: SideFlags,
     pub ef: SideFlags,
 
+    /// §十五:638 回滚代价之二＝下回合业力-1。这里只**登记**，落地在 `player_turn_start`（含"最低0"的钳位）。
     pub karma_penalty_next: i32,
     /// §廿二:955 伤害回滚每局最多触发2次（我方每局独立计数，不跨关累积）。§廿三:1017 同一预算的速查复述。
+    /// §十五:612 同一预算的原文触发条件第4条：初始 2、每次触发在本函数之外扣 1。
     pub rollback_left: i32,
+    /// §十五:618 口径 A＝"我方本回合攻击阶段已打出的伤害总和"，回滚时当作抵消额度。
+    /// §十五:621 每回合开始清零（`player_turn_start`）⇒ 文档那句"不包括上一回合遗留的伤害"是靠这个清零兑现的。
     pub dealt_this_turn: i32,
     pub in_player_attack_phase: bool,
     /// 守夜人式"本回合友方累积+N"增益窗口：(阵营, 生效回合, 增量)。
     pub boosts: Vec<(SideK, i64, i32)>,
     pub attack_order: Vec<u64>,
+    /// §十五:611 伤害在 pending 里躺着＝文档触发条件第3条"伤害尚未结算"；统一结算才 `take` 走它。
     pub pending_candle_d: i32,
     pub pending_card_d: Vec<(usize, i32)>,
 
@@ -437,6 +442,8 @@ impl Battle {
         self.pf.starter_draws = 1;
         self.pf.sacrifice_used = false;
         self.pf.sacrificed_names.clear();
+        // §十五:637 "触发后：本回合已打出的伤害全部消耗"——引擎里 A 是一次性额度：每个敌方攻击阶段只结算一次
+        // （`enemy_settle` 在 battle.rs:849 被调用一次），A 在本回合用完后于下回合开始处清零，不会带给第二次回滚。
         self.dealt_this_turn = 0;
         self.attack_order.clear();
         // §廿二:951 手牌为0且场上无卡 → 免费补1张开端（走 `grant_free_starter`，不占 `manual_draws` 额度）。
@@ -795,13 +802,13 @@ impl Battle {
             if let Some(dcol) = target {  // §十二:443 我方攻击阶段伤害立即结算；§廿三:1023 我方立即结算，敌方累积到回合末统一结算（battle.rs:889）
                 let eb = self.boost_for(SideK::Enemy);
                 if let Some(def) = self.e_front[dcol].as_mut() {
-                    def.hp -= dmg;  // §十二:444 目标数值降低
+                    def.hp -= dmg;  // §十二:444 目标数值降低；§十五:622 "A已结算（敌方数值已降低）"就是这一句——回滚只是把它当额度，不再打第二遍
                     def.flame += dmg + eb;  // §十二:445 目标业火值 += 伤害
                 }
-                self.dealt_this_turn += dmg;
+                self.dealt_this_turn += dmg;  // §十五:619 口径 A 的入账处：本回合攻击阶段**所有卡牌攻击时**造成的伤害总和
                 self.log.push(format!("  → 敌第{}列受{dmg}", dcol + 1));
             } else {
-                self.dealt_this_turn += dmg;
+                self.dealt_this_turn += dmg;  // §十五:620 直击持业者的那发攻击同样进口径 A（"基础攻击伤害"的一部分，不是外添项）
                 self.damage_enemy_holder(dmg, Some(col), HolderHit::Direct);  // §十二:442 直击中线→敌方持业者掉血
             }
             self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Player);  // §十二:447 攻击时自动触发特性+技能
@@ -891,6 +898,7 @@ impl Battle {
     }
 
     /// 我方回合末的敌方伤害统一结算。四条形径都钉在这一个函数里，改动会同时破坏多条边界条款：
+    /// §十五:609 时点＝"敌方攻击阶段结束，统一结算前"——本函数就是那道统一结算，回滚判定排在任何数值落地之前；
     /// §廿二:954 回滚消耗来源 A＝本回合攻击阶段已打出的伤害总和（`dealt_this_turn`）；
     /// §廿二:956 代价＝A 全额抵掉这一发 D，另记下回合业力-1（`karma_penalty_next`）；
     /// §廿二:957 顺序＝先回滚判定 → 后蜡烛减短 → 后业火增加（下面严格按此三段排列）；
@@ -899,19 +907,19 @@ impl Battle {
     fn enemy_settle(&mut self) {  // §廿三:1014 回滚只存在于「我方受击」这一侧，敌方没有对应物
         let d = std::mem::take(&mut self.pending_candle_d);  // §十二:470 统一结算先算我方持业者受到的总伤害 D
         if d > 0 && self.over.is_none() {
-            if d >= self.p_candle && self.rollback_left > 0 {  // §十二:471 D ≥ 当前蜡烛长度 → 触发伤害回滚；§廿三:1015 回滚触发
-                let a = self.dealt_this_turn;  // §十二:472 A＝我方本回合攻击阶段已打出的伤害总和；§廿三:1016 回滚来源
-                let remain = (d - a).max(0);  // §十二:473 剩余伤害 = max(0, D - A)
-                let excess = (a - d).max(0);  // §十二:474 超额伤害 = max(0, A - D)
+            if d >= self.p_candle && self.rollback_left > 0 {  // §十二:471 D ≥ 当前蜡烛长度 → 触发伤害回滚；§廿三:1015 回滚触发；§十五:610 累积伤害（D）≥ 我方持业者HP
+                let a = self.dealt_this_turn;  // §十二:472 A＝我方本回合攻击阶段已打出的伤害总和；§廿三:1016 回滚来源；§十五:622 A 早已结算过，这里只当抵消额度用
+                let remain = (d - a).max(0);  // §十二:473 剩余伤害 = max(0, D - A)；§十五:624 A 抵消 D；§十五:625 剩余伤害 = max(0, D - A)
+                let excess = (a - d).max(0);  // §十二:474 超额伤害 = max(0, A - D)；§十五:626 超额伤害 = max(0, A - D)
                 self.rollback_left -= 1;
-                self.karma_penalty_next = 1;
-                self.p_candle -= remain;  // §十二:475 回滚后蜡烛减短＝剩余伤害
+                self.karma_penalty_next = 1;  // §十五:638 代价之二登记处（落地与"最低0"见 player_turn_start）
+                self.p_candle -= remain;  // §十二:475 回滚后蜡烛减短＝剩余伤害；§十五:627 剩余伤害结算 → 蜡烛减短
                 self.log.push(format!(
                     "[红光亮起·伤害回滚 余{}] D={d} A={a} → 剩余{remain}削烛（我方蜡烛剩 {}）",
                     self.rollback_left, self.p_candle
                 ));
                 if excess > 0 {
-                    self.distribute_excess(excess);  // §十二:476 超额伤害另行分配
+                    self.distribute_excess(excess);  // §十二:476 超额伤害另行分配；§十五:629 只派超额这一份，A 已造成的伤害不重复结算
                 }
             } else {
                 self.p_candle -= d;
@@ -949,6 +957,9 @@ impl Battle {
     }
 
     /// 超额伤害：按我方攻击顺序轮转，每名存活攻击者至多分配其当前数值点。§十二:476 按我方攻击顺序依次分配，优先敌方卡牌、无卡则打敌方持业者。 §廿三:1020 超额伤害分配。
+    /// §十五:628 超额伤害按**我方本回合的攻击顺序**依次分配：该列有敌卡就打敌卡，该列无卡就打敌方持业者。
+    /// §十五:630 本函数只花掉传进来的 `excess`，**不回头累加 `dealt_this_turn`**——所以这一发超额不会变成
+    /// 下一次回滚的额度 A（"回滚产生的超额伤害不参与后续回滚"就是靠这里不入账兑现的）。
     fn distribute_excess(&mut self, mut excess: i32) {
         let order = self.attack_order.clone();
         let eb = self.boost_for(SideK::Enemy);
@@ -1355,7 +1366,7 @@ impl Battle {
                     let mut hits: Vec<(SideK, usize, u64)> = Vec::new();
                     for s in [SideK::Player, SideK::Enemy] {
                         let sb = self.boost_for(s);
-                        let counts = s == SideK::Enemy && self.in_player_attack_phase;
+                        let counts = s == SideK::Enemy && self.in_player_attack_phase;  // §十五:621 口径 A 的"不包括"就落在这个闸上：非攻击阶段打出的伤害（含敌方侧、结算期外溢）不进 A
                         let mut dealt = 0i32;
                         let srows = match s {
                             SideK::Player => vec![Row::Front],
@@ -1375,7 +1386,7 @@ impl Battle {
                             }
                         }
                         if counts {
-                            self.dealt_this_turn += dealt; // §十二：攻击阶段内造成的伤害计入 A
+                            self.dealt_this_turn += dealt; // §十二：攻击阶段内造成的伤害计入 A；§十五:620 "攻击时触发的特性/技能额外伤害"就在这一句进口径
                         }
                     }
                     for (s, c, cid) in hits {
@@ -1481,6 +1492,137 @@ pub fn adj_cols(col: usize) -> Vec<usize> {
     v
 }
 
+// ---------- §十五 示例块的文档驱动实测（只在测试里编译，运行时行为零变更） ----------
+
+/// §十五「示例」围栏（文档 643–660）里的每一行，按**形态**读成一条可核对的断言。
+/// 为什么示例走实测而不走挂锚：这 14 行是 618–630 那些规则的同一件事重说一遍，挂锚只能证明
+/// "有代码行指过它"，跑一遍才证明"引擎算出来的数与文档写的那串数真的相等"。
+/// 认不出的行**当场 panic，绝不平跳**——平跳＝文档加了第三种写法的例子而尺子量不到那一行。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S15Claim {
+    /// `我方蜡烛：3` —— 场景输入：我方持业者长度
+    Candle(i32),
+    /// `敌方攻击阶段：敌方卡牌攻击中线，总伤害5` —— 场景输入：累积伤害 D
+    EnemyDamage(i32),
+    /// `我方本回合已打出伤害：4` —— 场景输入：口径 A
+    Dealt(i32),
+    /// `→ 5 ≥ 3，触发回滚` —— 断言这一发真触发了，且两个操作数就是本场景的 D 与蜡烛
+    Triggered(i32, i32),
+    /// `→ 剩余伤害：5 - 4 = 1` —— (D, A, 文档写的结果)
+    Remaining(i32, i32, i32),
+    /// `→ 我方蜡烛减短1 → 长度2` —— (减短量, 结果长度)
+    CandleShorn(i32, i32),
+    /// `→ 我方伤害被消耗，不作用于敌方` —— A 全额抵进 D，敌方一点没挨到
+    DealtConsumed,
+    /// `→ 下回合业力-1`
+    KarmaMinusNext(i32),
+    /// `→ 超额伤害：7 - 5 = 2` —— (A, D, 文档写的结果)
+    Excess(i32, i32, i32),
+    /// `→ 敌方伤害完全抵消`
+    FullyOffset,
+    /// `→ 超额2 → 对敌方正常造成2伤害`
+    ExcessHitsHolder(i32),
+    /// `→ 我方蜡烛不减短 → 长度3`
+    CandleIntact(i32),
+}
+
+#[cfg(test)]
+pub(crate) struct S15Line {
+    pub line: usize,
+    pub claim: S15Claim,
+}
+
+/// 取一行里所有连续 ASCII 数字段。示例行的算术全是半角数字，符号（`：` `≥` `－`）不参与解析，
+/// 所以"数出几个数"本身就是形态判据的一部分：多写或少写一个数都当场 panic，不会静默走错分支。
+#[cfg(test)]
+fn s15_digits(s: &str) -> Vec<i32> {
+    let mut out = Vec::new();
+    let mut run = String::new();
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            run.push(c);
+        } else if !run.is_empty() {
+            out.push(run.parse().unwrap());
+            run.clear();
+        }
+    }
+    if !run.is_empty() {
+        out.push(run.parse().unwrap());
+    }
+    out
+}
+
+#[cfg(test)]
+fn s15_classify(t: &str, line: usize) -> S15Claim {
+    let nums = s15_digits(t);
+    let want = |n: usize| -> Vec<i32> {
+        assert_eq!(nums.len(), n, "md:{line}「{t}」解析出 {} 个数字，该形态期望 {n} 个 ⇒ 示例算术被改写或形态判据失效", nums.len());
+        nums.clone()
+    };
+    if t.starts_with("我方蜡烛：") {
+        S15Claim::Candle(want(1)[0])
+    } else if t.starts_with("敌方攻击阶段：") {
+        S15Claim::EnemyDamage(want(1)[0])
+    } else if t.starts_with("我方本回合已打出伤害：") {
+        S15Claim::Dealt(want(1)[0])
+    } else if t.starts_with("→ 剩余伤害：") {
+        let v = want(3);
+        S15Claim::Remaining(v[0], v[1], v[2])
+    } else if t.starts_with("→ 超额伤害：") {
+        let v = want(3);
+        S15Claim::Excess(v[0], v[1], v[2])
+    } else if t.contains("不减短") {
+        S15Claim::CandleIntact(want(1)[0])
+    } else if t.contains("蜡烛减短") {
+        let v = want(2);
+        S15Claim::CandleShorn(v[0], v[1])
+    } else if t.contains("触发回滚") {
+        let v = want(2);
+        S15Claim::Triggered(v[0], v[1])
+    } else if t.contains("我方伤害被消耗") {
+        S15Claim::DealtConsumed
+    } else if t.contains("完全抵消") {
+        S15Claim::FullyOffset
+    } else if t.contains("对敌方正常造成") {
+        S15Claim::ExcessHitsHolder(want(2)[1])
+    } else if t.starts_with("→ 下回合业力-") {
+        S15Claim::KarmaMinusNext(want(1)[0])
+    } else {
+        panic!(
+            "md:{line}「{t}」不像 §十五 示例里的任何一种行形态 ⇒ 文档加了新写法。请先扩本解析器与它对应的实测断言，\
+             别让示例行从尺子外面漏过去（挂锚对示例行不算数，见 model.rs 的 §十五 推导器）"
+        );
+    }
+}
+
+/// 定位并解析 §十五「示例」围栏：章标题 → 其后第一个 trim==`示例` 的标签行 → 之后第一道 ``` 到下一道 ```。
+/// 返回**带文档行号**的断言列表；行号口径与 `model::doc_or_skip` 一致（1 起）。
+#[cfg(test)]
+pub(crate) fn parse_section15_examples(lines: &[String]) -> Vec<S15Line> {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "十五、伤害回滚（仅玩家拥有）")
+        .expect("§十五 标题必须存在（文档结构变了就要同步改本解析器与 model.rs 的推导器）");
+    let label = ((head + 2)..=lines.len())
+        .find(|&n| at(n).trim() == "示例")
+        .expect("§十五 里必须有一行块首标签「示例」");
+    let open = ((label + 1)..=lines.len())
+        .find(|&n| at(n).trim() == "```")
+        .expect("「示例」标签后必须有开围栏 ```");
+    for n in (open + 1)..=lines.len() {
+        let t = at(n).trim();
+        if t == "```" {
+            return (open + 1..n)
+                .filter(|&k| !at(k).trim().is_empty())
+                .map(|k| S15Line { line: k, claim: s15_classify(at(k).trim(), k) })
+                .collect();
+        }
+    }
+    panic!("§十五 示例围栏没有闭围栏（{open} 之后找不到 ```）")
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -1562,6 +1704,135 @@ mod rule_tests {
         assert_eq!(b.p_candle, 3, "A=D 全抵消，蜡烛不减不超");
         assert_eq!(b.e_candle, CANDLE_HP, "无超额可分配");
         assert_eq!(b.rollback_left, 1);
+    }
+
+    /// 按 §十五 示例自己给的输入搭引擎并跑一次统一结算。
+    /// `dealt > d` 时必须摆一个"按攻击顺序在场的攻击者"：否则超额伤害按 §廿二 判给不到攻击者而消散，
+    /// 示例 657「对敌方正常造成2伤害」就复现不出来。这不是测试自由发挥——文档说 A 是"本回合**攻击阶段**
+    /// 打出的伤害总和"，有 A 就意味着那回合真有过攻击者（`§十五:619`）。
+    fn settle_from_doc_inputs(candle: i32, d: i32, dealt: i32) -> Battle {
+        let mut b = fresh_battle();
+        b.p_candle = candle;
+        b.dealt_this_turn = dealt;
+        b.pending_candle_d = d;
+        if dealt > d {
+            let mut atk = CardInst::new(902, faction_cards(Faction::Ember)[1]);
+            atk.seq = b.seq;
+            b.seq += 1;
+            atk.hp = 5;
+            b.attack_order.push(atk.seq);
+            b.p_front[0] = Some(atk);
+        }
+        b.enemy_settle();
+        b
+    }
+
+    /// §十五 示例块（文档 644–659）的**黄金实测**：期望值一行都不写在代码里，全部从文档读进来
+    /// （`parse_section15_examples`），再用文档自己给的输入驱动 `enemy_settle`，逐条核对文档自己写的数。
+    /// 于是"文档改了示例、引擎没跟着改"与"引擎改了口径、文档还写着旧数"**两边都会红**——这两条挂锚都拦不住：
+    /// 锚点只证明有代码行指过来，不证明那一行算出的数等于文档写的数。
+    /// 推导口径与 `model.rs` 的 §十五 反向覆盖共用同一个解析器（两处各写一遍会朝不同方向错）。
+    #[test]
+    fn section15_worked_examples_reproduce_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let claims = parse_section15_examples(&lines);
+        assert_eq!(claims.len(), 14, "§十五 示例围栏按形态应解析出 14 条断言，实测 {} 条 ⇒ 文档增删了示例行", claims.len());
+        assert_eq!(
+            claims.iter().map(|c| c.line).collect::<Vec<_>>(),
+            vec![644, 645, 646, 648, 649, 650, 651, 652, 654, 655, 656, 657, 658, 659],
+            "§十五 示例的行号名单变了 ⇒ 文档重排过示例，请连 model.rs 推导器里的钉一起改"
+        );
+
+        let mut candle = CANDLE_HP;
+        let mut d = 0;
+        let mut dealt = 0;
+        let mut eng: Option<Battle> = None;
+        for c in &claims {
+            let tag = || format!("md:{}「{}」", c.line, lines[c.line - 1].trim());
+            match c.claim {
+                S15Claim::Candle(v) => {
+                    eng = None;
+                    candle = v;
+                }
+                S15Claim::EnemyDamage(v) => {
+                    eng = None;
+                    d = v;
+                }
+                S15Claim::Dealt(v) => {
+                    eng = None;
+                    dealt = v;
+                }
+                out => {
+                    if eng.is_none() {
+                        eng = Some(settle_from_doc_inputs(candle, d, dealt));
+                    }
+                    let b = eng.as_ref().unwrap();
+                    let remain = (d - dealt).max(0);
+                    let excess = (dealt - d).max(0);
+                    match out {
+                        S15Claim::Triggered(lhs, rhs) => {
+                            assert_eq!((lhs, rhs), (d, candle), "{} 写的两个操作数与本场景输入（D={d}，蜡烛={candle}）不符 ⇒ 文档内部就不自洽", tag());
+                            assert!(lhs >= rhs, "{} 写着 {lhs} ≥ {rhs} 却触发回滚？", tag());
+                            assert_eq!(b.rollback_left, 1, "{} 文档说触发回滚，引擎的每局预算却没被扣（2 应剩 1）", tag());
+                        }
+                        S15Claim::Remaining(dd, aa, result) => {
+                            assert_eq!((dd, aa), (d, dealt), "{} 剩余伤害的操作数与本场景输入不符", tag());
+                            assert_eq!(result, remain, "{} 文档写的结果 ≠ max(0, D-A)={}，引擎实算蜡烛 {}→{}", tag(), remain, candle, b.p_candle);
+                            assert_eq!(b.p_candle, candle - result, "{} 引擎的蜡烛没按文档写的剩余伤害减短", tag());
+                        }
+                        S15Claim::CandleShorn(shaved, after) => {
+                            assert_eq!(shaved, remain, "{} 减短量 ≠ max(0, D-A)={remain}", tag());
+                            assert_eq!(after, candle - shaved, "{} 文档自己的算术就不自洽（{candle} 减 {shaved} 应得 {}）", tag(), candle - shaved);
+                            assert_eq!(b.p_candle, after, "{} 引擎算出的蜡烛长度 ≠ 文档写的 {after}", tag());
+                        }
+                        S15Claim::DealtConsumed => {
+                            assert_eq!(excess, 0, "{} 说 A 全额消耗掉且不外溢，本场景却有超额 {excess}", tag());
+                            assert_eq!(b.e_candle, CANDLE_HP, "{} 我方已打出的伤害外溢到了敌方持业者", tag());
+                        }
+                        S15Claim::KarmaMinusNext(n) => {
+                            assert_eq!(b.karma_penalty_next, n, "{} 引擎没有登记\"下回合业力-{n}\"", tag());
+                            let mut after = settle_from_doc_inputs(candle, d, dealt);
+                            after.player_turn_start();
+                            assert_eq!(after.p_karma, (b.p_karma - n).max(0), "{} 下回合业力没有按 -{n}（最低0）落地", tag());
+                            assert_eq!(after.karma_penalty_next, 0, "{} 代价登记没有被消费，会每回合重复扣", tag());
+                        }
+                        S15Claim::Excess(aa, dd, result) => {
+                            assert_eq!((aa, dd), (dealt, d), "{} 超额伤害的操作数（写的 {aa}−{dd}）与本场景输入（A={dealt}，D={d}）不符", tag());
+                            assert_eq!(result, excess, "{} 文档写的结果 ≠ max(0, A-D)={excess}", tag());
+                        }
+                        S15Claim::FullyOffset => {
+                            assert_eq!(remain, 0, "{} 说完全抵消，本场景 D={d} A={dealt} 却还剩 {remain}", tag());
+                            assert_eq!(b.p_candle, candle, "{} 完全抵消后我方蜡烛仍被减短", tag());
+                        }
+                        S15Claim::ExcessHitsHolder(x) => {
+                            assert_eq!(x, excess, "{} 超额写的 {x} ≠ 引擎的超额 {excess}", tag());
+                            assert_eq!(b.e_candle, CANDLE_HP - x, "{} 超额 {x} 没有按\"无卡则攻击敌方持业者\"打到持业者身上", tag());
+                        }
+                        S15Claim::CandleIntact(after) => {
+                            assert_eq!(remain, 0, "{} 说不减短，却有剩余伤害 {remain}", tag());
+                            assert_eq!(b.p_candle, after, "{} 引擎的蜡烛长度 ≠ 文档写的 {after}", tag());
+                        }
+                        S15Claim::Candle(_) | S15Claim::EnemyDamage(_) | S15Claim::Dealt(_) => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+
+    /// §十五:630「回滚产生的超额伤害不参与后续回滚」是一条**否定式**条款：锚点只能指到"这里没有 `dealt_this_turn +=`"，
+    /// 机检抓不住哪天有人把那一行加回去。这条测就是给那句缺席补上的牙——连着触发两次回滚，
+    /// 第二次的额度必须还是 7；若第一次的 2 点超额回流进口径 A（变成 9），第二次会多打出 2 点。
+    #[test]
+    fn rollback_excess_does_not_flow_back_into_the_dealt_ledger() {
+        let mut b = settle_from_doc_inputs(3, 5, 7);
+        assert_eq!(b.dealt_this_turn, 7, "第一次结算本身不许改动口径 A（超额是派生量，不是新打出的伤害）");
+        assert_eq!(b.e_candle, CANDLE_HP - 2, "先确认这一发确实产生了 2 点超额，否则本测什么也没证");
+        assert_eq!(b.rollback_left, 1);
+        b.pending_candle_d = 5;
+        b.enemy_settle();
+        assert_eq!(b.rollback_left, 0, "第二次回滚应真的触发（每局 2 次预算见底）");
+        assert_eq!(b.e_candle, CANDLE_HP - 4, "第二次仍按 A=7 只外溢 2；若拿到 {} 就说明第一次的超额回流进了 A", b.e_candle);
+        assert_eq!(b.dealt_this_turn, 7, "两次回滚后口径 A 仍是那发攻击的 7");
     }
 
     #[test]
