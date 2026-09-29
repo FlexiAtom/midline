@@ -172,19 +172,28 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **六张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **七张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
-//!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、以及本帧的
+//!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
 //!       §十五 伤害回滚（**第一条非表的章**：34 行按形态推出来，认领路多开一条——「示例」围栏那 14 行
 //!       只许走**用文档自身数字驱动引擎跑一遍**的实测，挂锚与挂债都不算数，见 `every_row_of_section15_…`
-//!       与 `battle::parse_section15_examples`）。**仍未纳入**的是
+//!       与 `battle::parse_section15_examples`）、以及本帧的 §十七 挤压与推进（**第二张非表的章**：
+//!       19 行＝我方挤压 2＋敌方推进 10＋双方对称 4＋中线绝对规则 3，标签三档形态见
+//!       `every_row_of_section17_…`。本章**没有示例围栏**，所以 §十五 那第三条实测路在这里开不出来，
+//!       只有锚点／挂债两路，实测配比钉死为 (19, 0)）。**仍未纳入**的是
 //!       §一/§二/§五/§六/§七/§八/§十四/§十六 那些散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
-//!       §十五 这一帧同时暴露一类新的不可机检面：**否定式条款**（"不包括…""不参与后续回滚"）的锚点
-//!       指向的是"这里没有某行代码"，机检证伪不了。本轮只给 §十五:630 补了一条真测
-//!       （`rollback_excess_does_not_flow_back_into_the_dealt_ledger`：连触发两次，第二次额度仍按 A=7），
-//!       §十五:621 那类"不包括"仍只有锚点。
+//!       §十五 那一帧暴露的**否定式条款**盲区在本章又添两例：§十七:763「任何卡牌不能越过中线」锚在
+//!       `DeathCause` 的变体列表上（指向的是"这里没有第四因"），§十七:747「后排多张只推最靠近前排的」
+//!       锚在"每列后排单格"这条结构事实上（指向的是"没有第四档"）——两条都机检证伪不了，同 §十五:621
+//!       那类"不包括"（§十五:630 上一帧已补真测 `rollback_excess_does_not_flow_back_into_the_dealt_ledger`，
+//!       621 仍只有锚点）。
+//!       能证伪的那半本轮补了真测：`a_squeezed_card_dies_at_its_own_line_and_never_reaches_the_other_side`
+//!       （挤压后果全留本侧：本侧弃堆＋本侧业力，对面八格逐格身份不动、蜡烛不减）。
+//!       电池 M20–M23 另外量出一件比盲区更要紧的事：**锚点尺抓不住行为回归**。M22 把推进的前排占用闸
+//!       改成"永远放行"，§十七 推导器**照样绿**（锚点还在原地，实现却变了），红的是两条既有 Boss 账本测
+//!       ⇒ 反向覆盖只保证"这行有人指回过"，行为面仍靠正向测兜——两把尺不可互相替代。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -1427,6 +1436,119 @@ mod anchor_tests {
         }
         for n in [665usize, 666] {
             assert!(debited.contains(&n), "md:{n}（「{}」）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
+        }
+    }
+
+    /// §十七 挤压与推进——**第二张非表的章**，也是第一条"整章都是围栏流程步"的章（没有示例数字，
+    /// 所以 §十五 那第三条认领路在这里开不出来：只能走锚点／挂债两条）。
+    /// 标签判据在本章多出一档：761「中线绝对规则」是围栏外的块首，但它引的不是 ``` 而是一段「·」散列行，
+    /// 判据 ② 认不下它。第三档只放宽**围栏外**（围栏内仍是「：」收尾那一档），且靠成员级双向钉拦住
+    /// "把真规则行当标签吞掉"——与 §十五 同一套防"吞一行、加一行"的做法。
+    #[test]
+    fn every_row_of_section17_squeeze_and_advance_is_anchored_back_or_debited() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十七、挤压与推进")
+            .expect("§十七 标题必须存在（文档结构变了就要同步改本检查）");
+
+        let mut rows: Vec<usize> = Vec::new();
+        let mut labels: Vec<usize> = Vec::new();
+        let mut fence = false;
+        let next_non_blank = |n: usize| -> String {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            at(k).trim().to_string()
+        };
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                continue;
+            }
+            if t.is_empty() {
+                continue;
+            }
+            let one_word = t.split_whitespace().count() == 1;
+            // 三档标签形态：① 围栏内单 token 且「：」收尾；② 围栏外单 token 且下一非空行是 ```；
+            // ③ 围栏外单 token 且下一非空行以「·」开头（本章独有的散列式块）。
+            let is_label = one_word
+                && ((fence && t.ends_with('：'))
+                    || (!fence && (next_non_blank(n) == "```" || next_non_blank(n).starts_with('·'))));
+            if is_label {
+                labels.push(n);
+                continue;
+            }
+            rows.push(n);
+        }
+        assert_eq!(
+            rows.len(),
+            19,
+            "§十七 按形态推导应得 19 行（我方挤压2＋敌方推进10＋对称规则4＋中线绝对规则3），实测 {} 行 ⇒ 文档加了规则或推导口径失效",
+            rows.len()
+        );
+        assert_eq!(
+            labels,
+            vec![728, 731, 736, 739, 752, 761],
+            "§十七 的标签应恰好是 728 我方挤压／731 放置新卡到P格：／736 敌方挤压／739 敌方回合结束推进：／752 双方规则对称／761 中线绝对规则，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效"
+        );
+        // 成员级双向钉：四个块各钉一行必须在必检集里，三档标签各钉一行必须不在。
+        for n in [732usize, 733, 742, 746, 749, 755, 758, 763, 765] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §十七 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [728usize, 731, 739, 761] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 标签判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §十七 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+
+        let (mut anchored, mut on_debt) = (0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§十七 有 {} 行既无锚点指回、也不在债表里（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt),
+            (19, 0),
+            "§十七 认领路应为 锚点19／挂债0（本章没有示例围栏，开不出第三条实测路），实测 ({anchored},{on_debt}) ⇒ 有行从一条路悄悄挪到另一条，或实现被删"
+        );
+        // 逐行钉处置：这 10 行登记的处置是「锚点指回」，摘掉任何一条锚点都要当场红。
+        for n in [732usize, 733, 740, 742, 743, 746, 748, 756, 758, 764, 765] {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）登记的处置是「锚点指回」，现在没有锚点＝实现被删或锚被摘", at(n));
+        }
+        // 否定式那两行（763「不能越过中线」／747「多张只推最靠近的」）只锚不测，盲区照 §十五:621 登记；
+        // 763 的可测那半已由 `a_squeezed_card_dies_at_its_own_line_and_never_reaches_the_other_side` 钉住。
+        for n in [747usize, 763] {
+            assert!(
+                referenced.contains(&(n as u32)),
+                "md:{n}（「{}」）是否定式条款，本轮登记的处置是锚点指回；改成没锚＝把这条盲区抹进静默里",
+                at(n)
+            );
         }
     }
 

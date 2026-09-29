@@ -161,4 +161,38 @@ s2=s.replace('let remain = (d - a).max(0);','let remain = (d - a).max(1);')
 assert s2!=s, '没打到 remain 口径'
 open(p,'w',encoding='utf8').write(s2)"
 run
+echo "### M20 抹掉 §十七:742（前排空才推进）的锚点 ⇒ 应红在 §十七 推导器（漏登记）"
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'；§十七:742(?![0-9])','',s)
+assert s2!=s, '没抹到 §十七:742'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M21 摘掉 §十七 标签判据的第三档（围栏外单 token＋下一非空行以「·」开头）⇒ 761 落回 rows ⇒ 红在总数 19→20 与标签名单"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+needle = ' || next_non_blank(n).starts_with(' + chr(39) + '·' + chr(39) + ')'
+assert needle in s, '没找到第三档判据'
+open(p,'w',encoding='utf8').write(s.replace(needle, ''))"
+run
+echo "### M22 行为回归：摘掉推进的前排占用闸（前排有卡也推）⇒ 应红在 §十七 真测／既有规则测（正证：尺子抓得住行为，不止注释面）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+needle='            if self.e_front[col].is_none() {'
+assert s.count(needle)==1, s.count(needle)
+s=s.replace(needle, needle.replace('is_none()','is_none() || true'))
+open(p,'w',encoding='utf8').write(s)"
+run
+echo "### M23 叙述顶锚：从实现里抹掉 §十七:756，只把行号写进 model.rs 的 //! 裁定登记区 ⇒ 应红（叙述不算锚点，§十七 同款判据）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+assert '§十七:756' in s
+open(p,'w',encoding='utf8').write(s.replace('§十七:756',''))
+q='$D/src/model.rs'; ls=open(q,encoding='utf8').read().split('\n')
+k=0
+while k<len(ls) and not ls[k].startswith('//!'): k+=1
+ls.insert(k+1, '//! 变异检验：这一行把 §十七:756 写在叙述里，不该被算成锚点')
+open(q,'w',encoding='utf8').write('\n'.join(ls))"
+run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run

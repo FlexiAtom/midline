@@ -36,6 +36,10 @@ pub enum Outcome {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeathCause {
     Battle,
+    /// §十七:763 「任何卡牌不能越过中线」在类型层的落点：越线只有"死"这一种后果，枚举里**不存在**
+    /// "越过之后落到对面／落到更前一格"这类第四因。残留盲区照旧：这条是**否定式条款**，
+    /// 锚点指向的是"这里没有某个变体"，机检证伪不了（同 §十五:621），能证伪的部分见
+    /// `a_squeezed_card_dies_at_its_own_line_and_never_reaches_the_other_side`。
     Cross,
     Sacrifice,
 }
@@ -600,12 +604,12 @@ impl Battle {
         c.seq = self.seq;
         self.seq += 1;
         c.placed_turn = self.turn;
-        let slot: &mut Option<CardInst> = match (side, row) {
+        let slot: &mut Option<CardInst> = match (side, row) {  // §十七:765 挤只挤在同一侧的格子里，两套数组无任何交叉赋值
             (SideK::Player, _) => &mut self.p_front[col],
             (SideK::Enemy, Row::Front) => &mut self.e_front[col],
             (SideK::Enemy, Row::Back) => &mut self.e_back[col],
         };
-        let old = slot.take();  // §十二:434 空格直接放；§十二:435 有卡则新卡占位、旧卡待越线
+        let old = slot.take();  // §十二:434 空格直接放；§十二:435 有卡则新卡占位、旧卡待越线；§十七:732 若格为空→直接放置
         let (tr, skills) = (c.def.tr, c.skills.clone());
         self.log.push(format!(
             "{}放置 {} → {}{}",
@@ -616,9 +620,9 @@ impl Battle {
         ));
         *slot = Some(c);
         let _ = slot;
-        if let Some(old) = old {
+        if let Some(old) = old {  // §十七:755 我方挤压＝新卡挤旧卡，越线死亡（同一条路径对两侧通用）
             self.log.push(format!("挤压：{} 越线死亡", short_card(&old)));  // §十二:435 旧卡越线死亡
-            self.on_death(old, side, Some(col), DeathCause::Cross);  // §十二:435 越线死亡按死亡返还递减返业力；§廿三:1006 挤压
+            self.on_death(old, side, Some(col), DeathCause::Cross);  // §十二:435 越线死亡按死亡返还递减返业力；§廿三:1006 挤压；§十七:733 新卡占位＋旧卡越线＋业力＝旧卡费用（按递减）；§十七:764 越过＝直接死亡（本行是唯一出口，没有"越过后再落到某格"的分支）
         }
         let slot_now = match (side, row) {
             (SideK::Player, _) => &self.p_front[col],
@@ -645,7 +649,7 @@ impl Battle {
         self.check_all_triggers();
     }
 
-    pub fn player_place(&mut self, hand_idx: usize, col: usize) -> Result<(), String> {  // §十二:432 放置到 P1-P4 的唯一入口
+    pub fn player_place(&mut self, hand_idx: usize, col: usize) -> Result<(), String> {  // §十二:432 放置到 P1-P4 的唯一入口；§十七:758 玩家可以挤压我方卡牌越线＝主动选择，故这条入口**不查目标格占用**（与敌方 enemy_place_legal 的占用闸相反）
         if col >= 4 {
             return Err("格位为 P1-P4".into());
         }
@@ -682,8 +686,8 @@ impl Battle {
             Row::Front => self.e_front[col].is_some(),
             Row::Back => self.e_back[col].is_some(),
         };
-        let squeeze = self.boss_rule() == crate::boss::BossRule::ShadowPush && row == Row::Front;
-        if occupied && !squeeze {  // §十二:490 AI 不会主动把 E5-E8 挤越线
+        let squeeze = self.boss_rule() == crate::boss::BossRule::ShadowPush && row == Row::Front;  // §十七:756 敌方挤压（后排挤前排、被挤者越线死）在引擎里真实存在的唯一入口＝影长「暗渡」，普通 AI 走不到这条路径
+        if occupied && !squeeze {  // §十二:490 AI 不会主动把 E5-E8 挤越线；§十七:748 同上（本行就是那条自律的实现处，普通敌方放置一律拒绝压 occupied）
             return Err("AI 不挤压（不会主动挤越线）".into());
         }
         Ok(())
@@ -854,7 +858,7 @@ impl Battle {
     pub fn enemy_resolve_turn_end(&mut self) {
         self.enemy_attack_phase();
         self.enemy_settle();
-        self.enemy_advance();  // §十二:459 推进阶段；§十二:488 前排被击杀后由下一次推进补上
+        self.enemy_advance();  // §十二:459 推进阶段；§十二:488 前排被击杀后由下一次推进补上；§十七:746 前排被击杀→下回合后排推进（本帧没有"死格立即补位"的旁路，补位只有这一处时机）
         self.starter_turn_end(SideK::Enemy);
     }
 
@@ -1042,13 +1046,13 @@ impl Battle {
         }
     }
 
-    /// §廿二:963 推进＝单卡、按列独立：只有前排空的列才把该列后排顶上来，每列每次至多1张。§十二:482 单卡推进按列独立结算；§十二:483 每列各判一次。
+    /// §廿二:963 推进＝单卡、按列独立：只有前排空的列才把该列后排顶上来，每列每次至多1张。§十二:482 单卡推进按列独立结算；§十二:483 每列各判一次；§十七:740 同一条（敌方回合结束推进，按列独立）。
     fn enemy_advance(&mut self) {
-        for col in 0..4 {
-            if self.e_front[col].is_none() {  // §十二:484 前排空→后排推进；§十二:485 前排有卡→不推进
-                if let Some(c) = self.e_back[col].take() {  // §十二:486 后排空→不推进；§十二:487 推进后 E1-E4 空出；§十二:489 每列后排仅 1 格⇒天然只推最靠近前排的那张
+        for col in 0..4 {  // §十七:741 「每列：」＝这条循环体，四列各判一次，列与列之间不传状态
+            if self.e_front[col].is_none() {  // §十二:484 前排空→后排推进；§十二:485 前排有卡→不推进；§十七:742 后有新、前空→推进；§十七:743 前后都有→不推进
+                if let Some(c) = self.e_back[col].take() {  // §十二:486 后排空→不推进；§十二:487 推进后 E1-E4 空出；§十二:489 每列后排仅 1 格⇒天然只推最靠近前排的那张；§十七:744 后排空→不推进；§十七:745 推进后 E1-E4 空出（`take` 走的就是这一格）；§十七:747 「多张只推最靠近前排」在本棋盘结构下天然成立（每列后排单格），无第四档可推
                     self.log.push(format!("敌方推进：第{}列后排 {} → 前排", col + 1, c.def.name));
-                    self.e_front[col] = Some(c);  // §十二:491 落到 E5-E8 即紧贴中线，没有再往前一步的路径
+                    self.e_front[col] = Some(c);  // §十二:491 落到 E5-E8 即紧贴中线，没有再往前一步的路径；§十七:749 推进后 E5-E8 紧贴中线、停在这里
                 }
             }
         }
@@ -1626,6 +1630,7 @@ pub(crate) fn parse_section15_examples(lines: &[String]) -> Vec<S15Line> {
 #[cfg(test)]
 mod rule_tests {
     use super::*;
+    use crate::model::CardId;
 
     fn fresh_battle() -> Battle {
         Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
@@ -2059,6 +2064,50 @@ mod rule_tests {
         b.check_all_triggers();
         assert_eq!(b.e_front[0].as_ref().unwrap().hp, 6, "整列3伤");
         assert_eq!(b.dealt_this_turn, 3, "攻击阶段内的敌方伤害计入A");
+    }
+    /// §十七:763／§十七:765 里**可证伪**的那半：挤压的后果全部留在**本侧**——被挤的牌进本侧弃牌堆、
+    /// 业力回本侧，对面棋盘逐格不动、对面业力与蜡烛一字节不动。`DeathCause` 里不存在"越过之后落到对面"
+    /// 的第四因，但那半是否定式条款、机检证伪不了（同 §十五:621）；这条测钉住它可测的部分。
+    #[test]
+    fn a_squeezed_card_dies_at_its_own_line_and_never_reaches_the_other_side() {
+        // 对面四列前排＋四列后排的逐格身份快照（`CardInst` 没有 `PartialEq`，比 id 就够，不为一条测去改类型）
+        let enemy_ids = |b: &Battle| -> Vec<Option<CardId>> {
+            let mut v: Vec<Option<CardId>> = Vec::new();
+            for row in [&b.e_front[..], &b.e_back[..]] {
+                for cell in row {
+                    v.push(cell.as_ref().map(|c| c.id));
+                }
+            }
+            v
+        };
+        let mut b = fresh_battle();
+        // 两张都取**非开端**牌：开端的死亡返还是定额 2（§十五 裁定1 同源），混进来会让业力断言测的不再是递减路径。
+        let victim = b.hand.remove(b.hand.iter().position(|c| !c.is_starter()).expect("开局手牌含非开端牌"));
+        let (victim_id, victim_cost) = (victim.id, victim.def.cost);
+        b.p_front[0] = Some(victim);
+        let (enemy0, e_karma0, candle0) = (enemy_ids(&b), b.e_karma, b.e_candle);
+        let push = b.hand.remove(b.hand.iter().position(|c| !c.is_starter()).expect("还剩一张非开端牌作挤入者"));
+        let (push_id, push_cost) = (push.id, push.def.cost);
+        let hand_idx = b.hand.len();
+        b.hand.push(push);
+        b.p_karma = 99;
+        b.player_place(hand_idx, 0).expect("我方放置不查目标格占用＝主动挤压");
+        assert_eq!(b.p_front[0].as_ref().unwrap().id, push_id, "新卡占位");
+        let dead = b.discard_pile.last().expect("被挤牌进本侧弃牌堆");
+        assert_eq!(dead.id, victim_id, "弃的是被挤那张本人");
+        assert_eq!(dead.deaths, 1, "越线死亡推进死亡档位（走递减）");
+        assert_eq!(
+            b.p_karma,
+            99 - push_cost + victim_cost * refund_pct(0) / 100,
+            "付新卡费；被挤牌新实例 100% 返还，且回的是**我方**业力"
+        );
+        assert_eq!(enemy_ids(&b), enemy0, "对面八格逐格不动");
+        assert_eq!(b.e_karma, e_karma0, "对面业力不动");
+        assert_eq!(b.e_candle, candle0, "对面蜡烛不减——挤压不是攻击");
+        assert!(
+            !enemy_ids(&b).contains(&Some(victim_id)),
+            "被挤的牌出现在对面＝越过中线还在场上，§十七:763 的直接反例"
+        );
     }
 }
 
