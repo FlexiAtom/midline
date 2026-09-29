@@ -501,6 +501,9 @@ impl Battle {
     /// §廿二:964 的"阵营限制"（§四:160 不能献祭敌方阵营的卡）由 API 形状保证：只有我方 `p_front`
     /// 与 `hand` 可寻址，敌方卡传不进来，故无需运行期检查。
     pub fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {
+        if col >= 4 {
+            return Err("格位为 P1-P4".into());
+        }
         if self.pf.sacrifice_used {
             return Err("本回合献祭次数已用完（每回合最多1次）".into());
         }
@@ -1612,6 +1615,18 @@ mod rule_tests {
         assert_eq!(b.p_karma - k0, 4, "献祭全额");
         let d = &b.discard_pile[0];
         assert_eq!(d.deaths, 1, "献祭不使死亡计数+1（返还互斥递减，§三100行）");
+    }
+
+    #[test]
+    fn field_sacrifice_rejects_out_of_range_slot_instead_of_panicking() {
+        // 真机崩溃复现（`play --seed 7` 战斗阶段输入 `s P5` ⇒ battle.rs index out of bounds，rc=101）：
+        // `parse_slot` 对 P5/P6/P9/非数字一律回 9 或 4-8，而本函数直接下标 `p_front`。
+        // 放置侧 `player_place` 早有 `col >= 4` 闸（§十二:431 的"献祭"步只写了规则没写边界）。
+        let mut b = fresh_battle();
+        for col in [4, 5, 8, 9] {
+            assert_eq!(b.player_sacrifice_field(col).err().as_deref(), Some("格位为 P1-P4"), "col={col}");
+        }
+        assert!(!b.pf.sacrifice_used, "越界请求不得消耗每回合1次的献祭额度");
     }
 
     #[test]
