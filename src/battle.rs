@@ -1620,7 +1620,9 @@ mod rule_tests {
     #[test]
     fn field_sacrifice_rejects_out_of_range_slot_instead_of_panicking() {
         // 真机崩溃复现（`play --seed 7` 战斗阶段输入 `s P5` ⇒ battle.rs index out of bounds，rc=101）：
-        // `parse_slot` 对 P5/P6/P9/非数字一律回 9 或 4-8，而本函数直接下标 `p_front`。
+        // 当年命令行把格位读成"取末位数字"，P5/P6/P9/非数字一律折成 9 或 4-8，而本函数直接下标 `p_front`。
+        // 那道读法现已在 `command::parse_slot` 改成严格集合（P1-P4），但引擎这道闸照留：
+        // 壳层挡不住的所有调用方（TUI/2D、以后的脚本）都只信任这里。
         // 放置侧 `player_place` 早有 `col >= 4` 闸（§十二:431 的"献祭"步只写了规则没写边界）。
         let mut b = fresh_battle();
         for col in [4, 5, 8, 9] {

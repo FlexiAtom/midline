@@ -18,6 +18,7 @@
 mod ai;
 mod battle;
 mod boss;
+mod command;
 mod meta;
 mod model;
 mod render;

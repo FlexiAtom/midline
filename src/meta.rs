@@ -406,50 +406,19 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     }
 }
 
+/// 战斗内一行 → 命令层 → 把 `Exec` 落成 CLI 的输出/退出。文案与退出意图都由 `command` 给出，
+/// 这一层只负责「怎么显示」和「进程怎么走」——TUI/2D 接的是同一个 `execute`，不必再抄一遍词表。
 fn execute_player_command(b: &mut Battle, line: &str) {
-    let parts: Vec<&str> = line.trim().split_whitespace().collect();
-    if parts.is_empty() {
-        return;
-    }
-    let r = match parts[0] {
-        "p" if parts.len() == 3 => b.player_place(parts[1].parse().unwrap_or(99), parse_slot(parts[2])),
-        "s" if parts.len() == 2 => b.player_sacrifice_field(parse_slot(parts[1])),
-        "sh" if parts.len() == 2 => b.player_sacrifice_hand(parts[1].parse().unwrap_or(99)),
-        "di" => b.action_draw(false),
-        "ds" => b.action_draw(true),
-        "e" => {
-            b.end_player_turn();
-            Ok(())
-        }
-        "l" => {
-            println!("{}", crate::render::log_tail(b, 40));
-            Ok(())
-        }
-        "b" => {
-            println!("{}", crate::boss::dossier(b));
-            Ok(())
-        }
-        "q" => {
-            println!("弃局退出。");
+    use crate::command::{Exec, execute, parse};
+    match execute(b, parse(line)) {
+        Exec::Done => {}
+        Exec::Print(s) => println!("{s}"),
+        Exec::Refused(e) => println!("✖ {e}"),
+        Exec::Quit(msg) => {
+            println!("{msg}");
             std::process::exit(0);
         }
-        "h" | "help" => {
-            println!("p <手牌idx> <P1-P4> 放置 | s <Pn> 场上献祭 | sh <idx> 手牌献祭 | di/ds 抽继承/开端 | e 结束回合 | l 日志 | b Boss档案 | q 退出");
-            Ok(())
-        }
-        _ => Err(format!("未知命令：{}（h 看帮助）", parts[0])),
-    };
-    if let Err(e) = r {
-        println!("✖ {e}");
     }
-}
-
-fn parse_slot(s: &str) -> usize {
-    s.chars()
-        .next_back()
-        .and_then(|c| c.to_digit(10))
-        .map(|d| (d.saturating_sub(1)) as usize)
-        .unwrap_or(9)
 }
 
 /// §廿二:947 继承堆上限 10 张，超出弃最早入堆的牌（永久消失）。
