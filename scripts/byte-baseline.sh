@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+# midline - 《中线》核心规则引擎 CLI
+# Copyright (C) 2026 FlexiAtom
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # 逐字节对账基线（验收尺＝纯重构＋同一族场景在两个二进制之间逐字节相同）。
 # 为什么这份文件要进版本库：既往各帧只把 md5 抄进状态文档、脚本留在 /tmp 里被清掉，
 # 结果归档的 10 条读数里只有 5 条还能被后人复跑对撞。md5 有据、脚本无档＝不可复现的验收。

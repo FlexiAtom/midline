@@ -1,1 +1,23 @@
+# Rust 构建／测试中间产物
 /target
+**/*.rs.bk
+*.rlib
+*.rmeta
+*.o
+*.so
+*.dylib
+*.d
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+/coverage
+
+# 编辑器／系统临时文件
+*.swp
+*~
+.DS_Store
+
+# 本协议入口与工具会话目录（不入库）
+AGENTS.md
+.qoder
