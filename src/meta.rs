@@ -342,8 +342,8 @@ fn persist_next_entry(
     snapshot_entry(save, level + 1, faction, diff, inherit, karma);
 }
 
-/// 一关的外围：头报 → 准备阶段 → 战斗 → 收尸 →（胜且还有下一关时）结算阶段。返回战斗结果。
-/// `enc` 是本关遭遇（普通关＝阵营轮转，章末关＝Boss）；主线与跳打 Boss 共用这一份循环，不开第二套。
+/// 一关的外围＝**CLI 这块壳**：把会话层（`session::run_level`）的四个接缝落到 stdin/stdout/磁盘上，
+/// 再提供"本关怎么构造"（阵营轮转与 Boss 遭遇）。阶段机本身不在这儿，所以摘壳时只换这个函数与 `CliHost`。
 fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     seed: u64,
     faction: Faction,
@@ -352,100 +352,73 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     st: &mut RunState,
     enc: F,
 ) -> Outcome {
-    let has_next = st.has_next;
-    let inherit = &mut st.inherit;
-    let carry_karma = &mut st.carry_karma;
+    // 解构而非整体借用：会话层要 `inherit`／`carry_karma`，落盘要 `save`，三条各走各的字段。
+    let RunState { inherit, carry_karma, has_next, save } = st;
+    // 遭遇**只算一次**（改前也是"先定遭遇、再拿去两头用"）。存成值而不是把闭包 `enc` 留着再调一遍：
+    // `enc` 是无状态查表，但"同一关两头各查一次"这种事，一旦哪天它有了副作用就是第二套真值。
     let (foe, boss) = enc(level);
-    let head = level_head(level, boss);
-    println!("\n===== {head} · 准备阶段 =====");
-    settle_phase(inherit, carry_karma, false);
-    // 准备阶段的 fuse/drop/move 是玩家的真实决策，写盘必须在它们之后、`take` 之前。
-    snapshot_entry(&mut st.save, level, faction, diff, inherit, *carry_karma);
-    // Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）；
-    // 普通关走 `new_mainline`＝构造即强化，省掉"记得再补一刀"这个会漏的步骤。
-    let mut b = match boss {
-        Some(id) => Battle::new_boss(seed, faction, id, std::mem::take(inherit), level),
-        None => Battle::new_mainline(seed, faction, foe, diff, std::mem::take(inherit), level),
-    };
-    loop {
-        print!("\n{}", crate::render::render(&b));
-        if let Some(out) = b.over {
-            println!("{}", crate::render::log_tail(&b, 12));
-            match out {
-                Outcome::PlayerWin => println!("胜：敌方烛尽（或蜡烛优势）。"),
-                Outcome::PlayerLose => println!(
-                    "败：我方烛尽，人亡。{}",
-                    if has_next { "阵亡自造牌永久消失。" } else { "本局到此为止。" }
-                ),
-                Outcome::Draw => println!("平局（30回合蜡烛判定/双烛尽）。"),
+    let cfg = crate::session::LevelCfg { head: level_head(level, boss), level, has_next: *has_next };
+    let mut host = CliHost { seed, faction, diff, foe, boss, save };
+    match crate::session::run_level(&mut host, &cfg, inherit, carry_karma) {
+        crate::session::Terminus::Done(out) => out,
+        crate::session::Terminus::Quit { msg } => {
+            if let Some(m) = msg {
+                println!("{m}");
             }
-            if has_next {
-                for l in crate::progress::collect_survivors(&mut b, inherit) {
-                    println!("{l}");
-                }
-                // §廿二:967 保留战斗结束时的业力进结算阶段（融合定价花它）；下一关的战斗业力由 `Battle::new`
-                // 重新起算＝"进入下一关重置为0"。本行只在这两个用途之间传递，不做跨关战斗业力累积。
-                *carry_karma = b.p_karma.max(0);
-                if out == Outcome::PlayerWin {
-                    println!("\n===== {head} · 结算阶段 =====（融合/升级/弃置，go 进入下一关）");
-                    settle_phase(inherit, carry_karma, true);
-                    // 通关奖励一发完就落一次盘：结算阶段的 `q` 走 `process::exit`，回到不了调用方，
-                    // 只靠下一关入口那次写会把刚赢的等级与 fuse/up 成果全丢掉。
-                    persist_next_entry(&mut st.save, level, faction, diff, inherit, *carry_karma);
-                }
-            }
-            return out;
-        }
-        print!("\n> ");
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-            println!("输入结束，退出。");
-            std::process::exit(0);
-        }
-        execute_player_command(&mut b, &line);
-    }
-}
-
-/// 战斗内一行 → 命令层 → 把 `Exec` 落成 CLI 的输出/退出。文案与退出意图都由 `command` 给出，
-/// 这一层只负责「怎么显示」和「进程怎么走」——TUI/2D 接的是同一个 `execute`，不必再抄一遍词表。
-fn execute_player_command(b: &mut Battle, line: &str) {
-    use crate::command::{Exec, execute, parse};
-    match execute(b, parse(line)) {
-        Exec::Done => {}
-        Exec::Print(s) => println!("{s}"),
-        Exec::Refused(e) => println!("✖ {e}"),
-        Exec::Quit(msg) => {
-            println!("{msg}");
             std::process::exit(0);
         }
     }
 }
 
-/// 准备/结算阶段命令循环。词表、语义、文案都在 `command`/`progress`，这里只剩两件 CLI 才有的事：
-/// 把行打到终端、从 stdin 读下一行（EOF 视作 `go`，与改前同一分支）。
-fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool) {
-    use crate::command::{SettleStep, execute_settle, parse_settle, settle_listing};
-    let mut up_used = false;
-    loop {
-        print!("{}", settle_listing(inherit, *karma, post_battle, up_used));
-        print!("> ");
+/// `Host` 的 CLI 实现——全仓唯一还允许 `stdin().read_line()` 与 `process::exit()` 的地方。
+/// 逐字节口径：`write` 原样打印（会话层已经带好换行，这里不补），`board`/`log_tail` 与改前的
+/// `print!("\n{}", render(&b))`、`println!("{}", log_tail(&b, 12))` 一一对应。
+/// flush 只在 `write` 后做一次：改前是"打完提示符必 flush"，改成"任何输出之后 flush"，字节不变、终端不再吞行。
+struct CliHost<'a> {
+    seed: u64,
+    faction: Faction,
+    diff: Difficulty,
+    /// 本关遭遇，由 `one_level` 算好一次存这儿——头报与构造战斗用的是**同一个** `(阵营, Boss)`。
+    foe: Faction,
+    boss: Option<crate::boss::BossId>,
+    save: &'a mut Option<SaveSlot>,
+}
+
+impl crate::session::Host for CliHost<'_> {
+    fn write(&mut self, s: &str) {
         use std::io::Write;
+        print!("{s}");
         std::io::stdout().flush().ok();
+    }
+
+    fn board(&mut self, b: &Battle) {
+        print!("\n{}", crate::render::render(b));
+    }
+
+    fn log_tail(&mut self, b: &Battle) {
+        println!("{}", crate::render::log_tail(b, 12));
+    }
+
+    fn read(&mut self) -> Option<String> {
+        // 返回连行尾换行的原始行，与改前 `read_line(&mut line)` 喂给解析器的同一个字串。
         let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
-            return;
-        }
-        match execute_settle(inherit, karma, &mut up_used, post_battle, parse_settle(&line)) {
-            SettleStep::Stay(lines) => {
-                for l in lines {
-                    println!("{l}");
-                }
-            }
-            SettleStep::Go => return,
-            // 改前这里直接 `process::exit(0)`，一个字节都不输出——"没有文案"也是行为的一部分。
-            SettleStep::Quit => std::process::exit(0),
+        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 { None } else { Some(line) }
+    }
+
+    fn snapshot_entry(&mut self, level: u32, inherit: &[CardInst], karma: i32) {
+        snapshot_entry(&mut *self.save, level, self.faction, self.diff, inherit, karma);
+    }
+
+    fn snapshot_next(&mut self, level: u32, inherit: &[CardInst], karma: i32) {
+        persist_next_entry(&mut *self.save, level, self.faction, self.diff, inherit, karma);
+    }
+
+    /// Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）；
+    /// 普通关走 `new_mainline`＝构造即强化，省掉"记得再补一刀"这个会漏的步骤。
+    fn new_battle(&mut self, inherit: &mut Vec<CardInst>, level: u32) -> Battle {
+        match self.boss {
+            Some(id) => Battle::new_boss(self.seed, self.faction, id, std::mem::take(inherit), level),
+            None => Battle::new_mainline(self.seed, self.faction, self.foe, self.diff, std::mem::take(inherit), level),
         }
     }
 }

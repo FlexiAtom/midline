@@ -25,6 +25,7 @@ mod progress;
 mod render;
 mod rng;
 mod save;
+mod session;
 mod view;
 
 use battle::Difficulty;
