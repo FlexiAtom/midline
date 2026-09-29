@@ -171,7 +171,8 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖只纳入 §廿二 一张表；§廿三 速查表与其它章的同类清单行
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 §廿二 与 §十八 两张表（见第 30 条）；
+//!       §廿三 速查表、§十二 的编号步骤、以及 §一/§二/§五/§六/§七/§八/§十四/§十五/§十六 的散文行
 //!       仍未纳入，"整条规则没落地"在那些章仍查不出；语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
@@ -229,6 +230,25 @@
 //!     **本局第一次打赢一关**就算完成，只记 `daily_done`（日种子，不是日期字符串——种子＝`epoch秒/86400`，
 //!     日界是 UTC 零点而非本地零点，这一条是既有权衡不是新坑）。诚实缺口照抄在两处注释里：
 //!     现在的 `daily` 只是"换日期种子的 play"，文档意义上的每日挑战还差固定卡组与特殊规则两项未定义。
+//! 30. 反向覆盖从「§廿二 一张表」扩到 **§十八 卡牌总表**（同一授权下的自决，人原话 2026-09-29：「建议落入全局坑，
+//!     然后接着推进」）。入池前按 `cn2int`/排除口径重算的读数（**旧读数 14 章零锚点／48 锚点行／112 次引用全部作废**，
+//!     偏差来自章号映射缺 `廿→20` 一支 + 把 `//!` 叙述与测试断言里的行号也算了进去）：文档 1034 行／23 章，
+//!     机检可见锚点指向 **53 个不同文档行／75 次引用**，**10 章零锚点合计 349 正文行**（§一 12、§二 27、§六 23、
+//!     §七 29、§八 15、§十二 86、§十四 18、§十五 51、§十六 42、§十八 46）。四个只读代理逐行核对的结论：
+//!     §十八 39 卡 **漏 0／多 0／数值不符 0**；§十二 65 已实现／3 部分／2 未实现／30 非规则行；§十五 16/2/2；
+//!     §十六 11/1/8；§八 技能池 12↔12 一一对应。⇒ 规则层几乎全落地，缺口集中在**呈现层**（render.rs 只有"焰N/阈值"
+//!     纯数字，无百分比、无色档、无震屏，全仓无音频）与两处真校验缺失（§二:47-48「后排先放」只在 `ai.rs` 候选生成
+//!     生效、引擎与 Boss 不查；§一:17 成就+每日奖励零实现）。未实现清单与 6 条待人裁都在
+//!     `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`，本处只登记口径。
+//!     - 本章**不能只查锚点存在**：三行开端（774/791/808）逐字节相同、代码里是同一个 `STARTER`，只查锚点会让
+//!       1 个定义满足 3 行必检＝假绿。故新增 `every_card_row_of_section18_is_anchored_back_and_matches_field_by_field`：
+//!       卡行按**形态**推导（行首三个空白分隔 token 全为 ASCII 数字 ⇒ 卡行；列头、阵营小节标题、`---` 自然排除，
+//!       不像 §廿二 那样硬写 `"情况 处理"` 字面量——那条只跳一次，文档一加第四阵营就静默漏），再与 `faction_cards`
+//!       逐字段（费/数值/阈值/卡名）比死，并断言三行开端逐字节相同、小节顺序与 `Faction` 顺序一致。
+//!     - 假绿反证实测两次：改 `影仆` 阈值 3→4 ⇒ 红 `md:809 文档[…阈3] ≠ 代码[…阈4]`；摘掉 `// md:809` ⇒ 红
+//!       `md:809 ← 1 2 3 影仆 无 从技能池随机 没有任何锚点指回`；复原 ⇒ 106 全绿（基线 104 ＋ 本测 ＋ 献祭越界回归测）。
+//!     - **仍未纳入**：§廿三 速查表、§十二 的编号步骤（411-509 是 ``` 围栏内的 `1.` 与 `   a.` 两级步骤，要第三档
+//!       推导器）、以及九张散文章。语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 
 use std::fmt;
 
@@ -341,7 +361,7 @@ impl TraitKind {
         }
     }
 
-    /// 评分用特性价值（§19 量化表）。
+    /// 评分用特性价值（§十九:832 量化表，逐条数值见 835-842）。
     pub fn ai_value(self) -> f64 {
         match self {
             TraitKind::None | TraitKind::Starter => 0.0,
@@ -377,54 +397,54 @@ pub const STARTER: CardDef = CardDef {
     tr: TraitKind::Starter,
 };
 
-/// 卡牌表（§18）。索引 0 为开端（各阵营共用同一开端定义）。
+/// 卡牌表（§十八:769）。索引 0 为开端（各阵营共用同一开端定义，三行开端逐字节相同）。
 pub fn faction_cards(f: Faction) -> &'static [CardDef] {
     use Faction::*;
     match f {
         Ember => &[
-            STARTER,
-            CardDef { name: "火苗", faction: Ember, cost: 1, power: 2, threshold: 4, tr: TraitKind::None },
-            CardDef { name: "引燃者", faction: Ember, cost: 2, power: 3, threshold: 5, tr: TraitKind::AttackAdjacent },
-            CardDef { name: "焚稿人", faction: Ember, cost: 3, power: 4, threshold: 6, tr: TraitKind::ThresholdSameColFlame2 },
-            CardDef { name: "余温", faction: Ember, cost: 2, power: 2, threshold: 4, tr: TraitKind::SelfDmgOnAttack },
-            CardDef { name: "续炭", faction: Ember, cost: 2, power: 1, threshold: 3, tr: TraitKind::ThresholdAllyColFlame2 },
-            CardDef { name: "炉壁", faction: Ember, cost: 3, power: 3, threshold: 8, tr: TraitKind::AllyColDamageTakenMinus1 },
-            CardDef { name: "火星", faction: Ember, cost: 2, power: 3, threshold: 3, tr: TraitKind::BattleCrySameColFlame2 },
-            CardDef { name: "雷烬", faction: Ember, cost: 4, power: 4, threshold: 7, tr: TraitKind::ThresholdAdjColFlame3 },
-            CardDef { name: "燎原", faction: Ember, cost: 3, power: 3, threshold: 5, tr: TraitKind::SelfFlameOnAttack1 },
-            CardDef { name: "山火", faction: Ember, cost: 5, power: 6, threshold: 10, tr: TraitKind::ThresholdFullColDamage3 },
-            CardDef { name: "守夜人", faction: Ember, cost: 3, power: 2, threshold: 6, tr: TraitKind::ThresholdAllyTurnFlame2 },
-            CardDef { name: "回燃", faction: Ember, cost: 4, power: 3, threshold: 7, tr: TraitKind::DeathRattleSameColFlame3 },
+            STARTER, // md:774
+            CardDef { name: "火苗", faction: Ember, cost: 1, power: 2, threshold: 4, tr: TraitKind::None }, // md:775
+            CardDef { name: "引燃者", faction: Ember, cost: 2, power: 3, threshold: 5, tr: TraitKind::AttackAdjacent }, // md:776
+            CardDef { name: "焚稿人", faction: Ember, cost: 3, power: 4, threshold: 6, tr: TraitKind::ThresholdSameColFlame2 }, // md:777
+            CardDef { name: "余温", faction: Ember, cost: 2, power: 2, threshold: 4, tr: TraitKind::SelfDmgOnAttack }, // md:778
+            CardDef { name: "续炭", faction: Ember, cost: 2, power: 1, threshold: 3, tr: TraitKind::ThresholdAllyColFlame2 }, // md:779
+            CardDef { name: "炉壁", faction: Ember, cost: 3, power: 3, threshold: 8, tr: TraitKind::AllyColDamageTakenMinus1 }, // md:780
+            CardDef { name: "火星", faction: Ember, cost: 2, power: 3, threshold: 3, tr: TraitKind::BattleCrySameColFlame2 }, // md:781
+            CardDef { name: "雷烬", faction: Ember, cost: 4, power: 4, threshold: 7, tr: TraitKind::ThresholdAdjColFlame3 }, // md:782
+            CardDef { name: "燎原", faction: Ember, cost: 3, power: 3, threshold: 5, tr: TraitKind::SelfFlameOnAttack1 }, // md:783
+            CardDef { name: "山火", faction: Ember, cost: 5, power: 6, threshold: 10, tr: TraitKind::ThresholdFullColDamage3 }, // md:784
+            CardDef { name: "守夜人", faction: Ember, cost: 3, power: 2, threshold: 6, tr: TraitKind::ThresholdAllyTurnFlame2 }, // md:785
+            CardDef { name: "回燃", faction: Ember, cost: 4, power: 3, threshold: 7, tr: TraitKind::DeathRattleSameColFlame3 }, // md:786
         ],
         Frost => &[
-            STARTER,
-            CardDef { name: "初霜", faction: Frost, cost: 1, power: 2, threshold: 4, tr: TraitKind::None },
-            CardDef { name: "望哨", faction: Frost, cost: 2, power: 3, threshold: 5, tr: TraitKind::AttackAdjacent },
-            CardDef { name: "霜序", faction: Frost, cost: 3, power: 4, threshold: 6, tr: TraitKind::ThresholdSameColFlame2 },
-            CardDef { name: "寒哨", faction: Frost, cost: 2, power: 3, threshold: 4, tr: TraitKind::EnemyColAttackMinus1 },
-            CardDef { name: "暖誓", faction: Frost, cost: 2, power: 1, threshold: 3, tr: TraitKind::ThresholdAllyColFlame2 },
-            CardDef { name: "壁", faction: Frost, cost: 3, power: 5, threshold: 8, tr: TraitKind::AllyColDamageTakenMinus1 },
-            CardDef { name: "冰刺", faction: Frost, cost: 2, power: 3, threshold: 3, tr: TraitKind::BattleCrySameColFlame2 },
-            CardDef { name: "极光", faction: Frost, cost: 4, power: 4, threshold: 7, tr: TraitKind::ThresholdAdjColFlame3 },
-            CardDef { name: "雪线", faction: Frost, cost: 3, power: 3, threshold: 5, tr: TraitKind::SelfFlameOnAttack1 },
-            CardDef { name: "冰川", faction: Frost, cost: 5, power: 8, threshold: 10, tr: TraitKind::ThresholdFullColDamage3 },
-            CardDef { name: "冻时", faction: Frost, cost: 3, power: 2, threshold: 6, tr: TraitKind::ThresholdAllyTurnFlame2 },
-            CardDef { name: "霜葬", faction: Frost, cost: 4, power: 4, threshold: 7, tr: TraitKind::DeathRattleSameColFlame3 },
+            STARTER, // md:791
+            CardDef { name: "初霜", faction: Frost, cost: 1, power: 2, threshold: 4, tr: TraitKind::None }, // md:792
+            CardDef { name: "望哨", faction: Frost, cost: 2, power: 3, threshold: 5, tr: TraitKind::AttackAdjacent }, // md:793
+            CardDef { name: "霜序", faction: Frost, cost: 3, power: 4, threshold: 6, tr: TraitKind::ThresholdSameColFlame2 }, // md:794
+            CardDef { name: "寒哨", faction: Frost, cost: 2, power: 3, threshold: 4, tr: TraitKind::EnemyColAttackMinus1 }, // md:795
+            CardDef { name: "暖誓", faction: Frost, cost: 2, power: 1, threshold: 3, tr: TraitKind::ThresholdAllyColFlame2 }, // md:796
+            CardDef { name: "壁", faction: Frost, cost: 3, power: 5, threshold: 8, tr: TraitKind::AllyColDamageTakenMinus1 }, // md:797
+            CardDef { name: "冰刺", faction: Frost, cost: 2, power: 3, threshold: 3, tr: TraitKind::BattleCrySameColFlame2 }, // md:798
+            CardDef { name: "极光", faction: Frost, cost: 4, power: 4, threshold: 7, tr: TraitKind::ThresholdAdjColFlame3 }, // md:799
+            CardDef { name: "雪线", faction: Frost, cost: 3, power: 3, threshold: 5, tr: TraitKind::SelfFlameOnAttack1 }, // md:800
+            CardDef { name: "冰川", faction: Frost, cost: 5, power: 8, threshold: 10, tr: TraitKind::ThresholdFullColDamage3 }, // md:801
+            CardDef { name: "冻时", faction: Frost, cost: 3, power: 2, threshold: 6, tr: TraitKind::ThresholdAllyTurnFlame2 }, // md:802
+            CardDef { name: "霜葬", faction: Frost, cost: 4, power: 4, threshold: 7, tr: TraitKind::DeathRattleSameColFlame3 }, // md:803
         ],
         Shadow => &[
-            STARTER,
-            CardDef { name: "影仆", faction: Shadow, cost: 1, power: 2, threshold: 3, tr: TraitKind::None },
-            CardDef { name: "暗哨", faction: Shadow, cost: 2, power: 2, threshold: 5, tr: TraitKind::AttackAdjacent },
-            CardDef { name: "蚀", faction: Shadow, cost: 3, power: 3, threshold: 6, tr: TraitKind::ThresholdSameColFlame2 },
-            CardDef { name: "低语", faction: Shadow, cost: 2, power: 2, threshold: 4, tr: TraitKind::EnemyColAttackMinus1 },
-            CardDef { name: "余光", faction: Shadow, cost: 2, power: 1, threshold: 3, tr: TraitKind::ThresholdAllyColFlame2 },
-            CardDef { name: "渊壁", faction: Shadow, cost: 3, power: 4, threshold: 8, tr: TraitKind::AllyColDamageTakenMinus1 },
-            CardDef { name: "无痕", faction: Shadow, cost: 2, power: 3, threshold: 3, tr: TraitKind::BattleCrySameColFlame2 },
-            CardDef { name: "幽雷", faction: Shadow, cost: 4, power: 3, threshold: 7, tr: TraitKind::ThresholdAdjColFlame3 },
-            CardDef { name: "夜行", faction: Shadow, cost: 3, power: 3, threshold: 5, tr: TraitKind::SelfFlameOnAttack1 },
-            CardDef { name: "深壑", faction: Shadow, cost: 5, power: 6, threshold: 10, tr: TraitKind::ThresholdFullColDamage3 },
-            CardDef { name: "止时", faction: Shadow, cost: 3, power: 2, threshold: 6, tr: TraitKind::ThresholdAllyTurnFlame2 },
-            CardDef { name: "引渡", faction: Shadow, cost: 4, power: 3, threshold: 7, tr: TraitKind::DeathRattleSameColFlame3 },
+            STARTER, // md:808
+            CardDef { name: "影仆", faction: Shadow, cost: 1, power: 2, threshold: 3, tr: TraitKind::None }, // md:809
+            CardDef { name: "暗哨", faction: Shadow, cost: 2, power: 2, threshold: 5, tr: TraitKind::AttackAdjacent }, // md:810
+            CardDef { name: "蚀", faction: Shadow, cost: 3, power: 3, threshold: 6, tr: TraitKind::ThresholdSameColFlame2 }, // md:811
+            CardDef { name: "低语", faction: Shadow, cost: 2, power: 2, threshold: 4, tr: TraitKind::EnemyColAttackMinus1 }, // md:812
+            CardDef { name: "余光", faction: Shadow, cost: 2, power: 1, threshold: 3, tr: TraitKind::ThresholdAllyColFlame2 }, // md:813
+            CardDef { name: "渊壁", faction: Shadow, cost: 3, power: 4, threshold: 8, tr: TraitKind::AllyColDamageTakenMinus1 }, // md:814
+            CardDef { name: "无痕", faction: Shadow, cost: 2, power: 3, threshold: 3, tr: TraitKind::BattleCrySameColFlame2 }, // md:815
+            CardDef { name: "幽雷", faction: Shadow, cost: 4, power: 3, threshold: 7, tr: TraitKind::ThresholdAdjColFlame3 }, // md:816
+            CardDef { name: "夜行", faction: Shadow, cost: 3, power: 3, threshold: 5, tr: TraitKind::SelfFlameOnAttack1 }, // md:817
+            CardDef { name: "深壑", faction: Shadow, cost: 5, power: 6, threshold: 10, tr: TraitKind::ThresholdFullColDamage3 }, // md:818
+            CardDef { name: "止时", faction: Shadow, cost: 3, power: 2, threshold: 6, tr: TraitKind::ThresholdAllyTurnFlame2 }, // md:819
+            CardDef { name: "引渡", faction: Shadow, cost: 4, power: 3, threshold: 7, tr: TraitKind::DeathRattleSameColFlame3 }, // md:820
         ],
     }
 }
@@ -524,6 +544,8 @@ mod tests {
 /// 语义是否被曲解无法机检——那仍靠人向设计逐条核对。
 #[cfg(test)]
 mod anchor_tests {
+    use super::{Faction, faction_cards};
+
     const NUM: &[char] = &['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '廿'];
 
     fn cn2int(s: &str) -> Option<u32> {
@@ -716,12 +738,43 @@ mod anchor_tests {
         out
     }
 
+    /// 机检可见面上的全部文档锚点行号。排除口径同裁定26：
+    /// ① 测试代码自身——断言文案里的 `md:945` 和 `//!` 一样是叙述，算进来＝谁都能在测试里补一句行号，
+    ///    把没实现的行判成已覆盖（本轮实测踩过一次：存档模块的 `///` 文档写了 §廿二 排除行的行号，
+    ///    机检立刻红在"排除表过期"上）。判据取"`#[cfg(test)]` 之后紧跟 `mod`"，不是"看见 `#[cfg(test)]`
+    ///    就跳过后半份文件"：函数级的那一个（`rng.rs` 的 `state()`）后面还有几十行真实现，
+    ///    一并跳过等于机检自己造出一个假缺口——比漏锚点更难发现，因为它看起来像是照规则排除掉了。
+    /// ② 裁定登记区的 `//!` 行里也写行号，但那是**叙述**不是实现锚点——算进来的话，
+    ///    在注释里补一句"md:947"就能把一条没实现的规则判成已覆盖。
+    fn referenced_doc_lines() -> Vec<u32> {
+        let mut referenced: Vec<u32> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
+            let mut idx = 0;
+            while idx < ls.len() {
+                let t = ls[idx];
+                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
+                if (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || t.starts_with("mod anchor_tests") {
+                    break;
+                }
+                if !t.starts_with("//!") {
+                    referenced.extend(anchor_numbers(t));
+                }
+                idx += 1;
+            }
+        }
+        referenced
+    }
+
     /// **反向**覆盖机检（裁定26）：§廿二 边界表的每一行，src/ 里必须有至少一个锚点指回它。
     /// 正向机检只问"已有锚点指对了吗"，天生问不出"整条规则没落地"——md:945（死亡后业火达阈值不触发特性）
     /// 就是这么漏掉的：实现早在 `try_trigger_col` 的 `hp <= 0` 闸里，锚点一个没有，正向一路绿灯。
     /// 必检集合**从文档结构推导**（§廿二 表头之后的连续非空行，到 `---` 为止），不是手挑清单；
     /// 唯一的人工入口是下面的 `NOT_A_RULE` 排除表，每条必须写理由。
-    /// 残留盲区（如实登记）：本检查只覆盖 §廿二 一张表；§廿三 速查表与其它章的同类清单行仍未反向纳入。
+    /// 残留盲区（如实登记）：本检查只覆盖 §廿二 一张表；§十八 由
+    /// `every_card_row_of_section18_is_anchored_back_and_matches_field_by_field` 单独覆盖（它额外要求逐字段等值，
+    /// 原因见该测试的注释），§廿三 速查表与其它章的同类清单行仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_from_src() {
         let Some(lines) = doc_or_skip() else { return };
@@ -751,31 +804,7 @@ mod anchor_tests {
         let required: Vec<usize> = rows.iter().copied().filter(|n| !excluded.contains(n)).collect();
         assert!(required.len() >= 25, "§廿二 表体至少 25 行，实测 {} 行 ⇒ 结构推导失效", required.len());
 
-        let mut referenced: Vec<u32> = Vec::new();
-        for fp in src_rs_files() {
-            let src = std::fs::read_to_string(&fp).unwrap();
-            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
-            let mut idx = 0;
-            while idx < ls.len() {
-                let t = ls[idx];
-                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
-                // 排除②：**测试代码自身**。断言文案里的 `md:945` 和 `//!` 一样是叙述，算进来＝
-                //        谁都能在测试里补一句行号，把没实现的行判成已覆盖（本轮实测踩过一次：
-                //        存档模块的 `///` 文档写了 §廿二 排除行的行号，机检立刻红在"排除表过期"上）。
-                //        判据取"`#[cfg(test)]` 之后紧跟 `mod`"，不是"看见 `#[cfg(test)]` 就跳过后半份文件"：
-                //        函数级的那一个（`rng.rs` 的 `state()`）后面还有几十行真实现，一并跳过等于机检自己
-                //        造出一个假缺口——比漏锚点更难发现，因为它看起来像是照规则排除掉了。
-                if (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || t.starts_with("mod anchor_tests") {
-                    break;
-                }
-                // 裁定登记区的 `//!` 行里也写行号，但那是**叙述**不是实现锚点——算进来的话，
-                // 在注释里补一句"md:947"就能把一条没实现的规则判成已覆盖。
-                if !t.starts_with("//!") {
-                    referenced.extend(anchor_numbers(t));
-                }
-                idx += 1;
-            }
-        }
+        let referenced = referenced_doc_lines();
         let missing: Vec<String> = required
             .iter()
             .filter(|&&n| !referenced.contains(&(n as u32)))
@@ -791,6 +820,71 @@ mod anchor_tests {
         for (n, why) in NOT_A_RULE {
             assert!(!referenced.contains(&(*n as u32)), "{why}，所以 md:{n} 本不该有锚点；现在有了⇒ 排除表过期，请连理由一起删掉");
         }
+    }
+
+    /// §十八 卡牌总表：每一卡行既要有锚点指回，又要把 费/数值/阈值/卡名 与代码逐字段比死。
+    /// 只查"有没有锚点"在这一章会假绿——三行开端共用同一个 `STARTER` 定义，1 个定义能满足 3 行必检；
+    /// 加上逐字段等值比对，"照抄零遗漏"才成为可证的（抄错一个阈值即红）。
+    /// 行集合仍从**结构**推导：行首三个空白分隔 token 全为 ASCII 数字 ⇒ 卡行；阵营小节标题、三条列头、
+    /// `---` 都不符合该形态 ⇒ 文档增删阵营或改列头措辞时，推导器不用改（不需要像 §廿二 那样硬写 `"情况 处理"`）。
+    #[test]
+    fn every_card_row_of_section18_is_anchored_back_and_matches_field_by_field() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十八、卡牌总表")
+            .expect("§十八 标题必须存在（文档结构变了就要同步改本检查）");
+        let is_num = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        let factions = [Faction::Ember, Faction::Frost, Faction::Shadow];
+        // (文档行, 阵营序号, 卡名, 费, 数值, 阈值)
+        let mut rows: Vec<(usize, usize, &str, i32, i32, i32)> = Vec::new();
+        let mut heads: Vec<&str> = Vec::new();
+        for (off, l) in lines[head + 1..].iter().enumerate() {
+            let n = head + 2 + off;
+            let t = l.trim();
+            if t == "---" {
+                break;
+            }
+            if t.is_empty() {
+                continue;
+            }
+            let tk: Vec<&str> = t.split_whitespace().collect();
+            let is_card = tk.len() >= 4 && is_num(tk[0]) && is_num(tk[1]) && is_num(tk[2]);
+            if is_card {
+                rows.push((n, heads.len() - 1, tk[3], tk[0].parse().unwrap(), tk[1].parse().unwrap(), tk[2].parse().unwrap()));
+            } else if !t.starts_with("费 ") {
+                heads.push(t); // 阵营小节标题：每出现一次换一张表
+            }
+        }
+        assert_eq!(heads.len(), factions.len(), "§十八 阵营小节应有 {} 个，实测 {} 个 ⇒ 文档加了阵营，本检查的卡表映射要同步", factions.len(), heads.len());
+        assert_eq!(rows.len(), 39, "§十八 卡行按形态推导应得 39 行，实测 {} 行", rows.len());
+        // 小节顺序与代码 `faction_cards` 的阵营顺序绑定：文档换序即红，避免"按位置取表"静默指向另一阵营。
+        for (g, h) in heads.iter().enumerate() {
+            assert!(h.starts_with(factions[g].name()), "§十八 第 {} 个小节是「{h}」，代码 faction_cards 的第 {} 个阵营是 {} ⇒ 两边顺序不一致", g + 1, g + 1, factions[g].name());
+        }
+        // 三行开端必须逐字节相同——这是"代码只有一份 STARTER 定义"的前提。文档一旦给某阵营的开端加了差异，
+        // 共享定义立刻不成立；这条比"每行都有锚点"更早发现。
+        for n in [791usize, 808] {
+            assert_eq!(at(n), at(774), "开端行 {n} 与 774 不再逐字节相同 ⇒ 三阵营共用 STARTER 的前提破了，须拆成三份定义");
+        }
+        let referenced = referenced_doc_lines();
+        let mut bad: Vec<String> = Vec::new();
+        for (n, g, name, cost, power, threshold) in &rows {
+            if !referenced.contains(&(*n as u32)) {
+                bad.push(format!("  md:{n} ← {} 没有任何锚点指回", at(*n)));
+                continue;
+            }
+            let table = faction_cards(factions[*g]);
+            match table.iter().find(|d| d.name == *name) {
+                None => bad.push(format!("  md:{n} 文档卡「{name}」在 {} 表里不存在", factions[*g].name())),
+                Some(d) if (d.name, d.cost, d.power, d.threshold) != (*name, *cost, *power, *threshold) => bad.push(
+                    format!("  md:{n} 文档[{name} 费{cost} 值{power} 阈{threshold}] ≠ 代码[{} 费{} 值{} 阈{}]", d.name, d.cost, d.power, d.threshold),
+                ),
+                Some(_) => {}
+            }
+        }
+        assert!(bad.is_empty(), "{} 处 §十八 卡表与文档不符：\n{}", bad.len(), bad.join("\n"));
     }
 
     fn check(
