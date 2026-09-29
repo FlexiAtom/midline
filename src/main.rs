@@ -21,6 +21,7 @@ mod boss;
 mod command;
 mod meta;
 mod model;
+mod progress;
 mod render;
 mod rng;
 mod save;

@@ -27,6 +27,7 @@
 
 use crate::battle::Battle;
 use crate::boss;
+use crate::model::{CardInst, short_card};
 use crate::render;
 
 /// 帮助行。逐字抄自改前的 `meta.rs`，它是这局游戏里唯一被机检钉住的 UI 文案。
@@ -85,9 +86,9 @@ fn parse_slot(s: &str) -> Result<usize, &'static str> {
     }
 }
 
-/// 手牌下标：读不懂就交一个必定越界的数，让引擎去报它自己那句「手牌下标越界」，
-/// 命令行这一层不另造一套措辞（改前即如此，逐字节对账要它不变）。
-fn parse_hand_idx(s: &str) -> usize {
+/// 下标（手牌位／继承堆位）：读不懂就交一个必定越界的数，让执行方去报它自己那句
+/// 「手牌下标越界」／「下标无效」，命令行这一层不另造一套措辞（改前即如此，逐字节对账要它不变）。
+fn parse_index(s: &str) -> usize {
     s.parse().unwrap_or(99)
 }
 
@@ -100,14 +101,14 @@ pub fn parse(line: &str) -> Command<'_> {
     let b = it.next();
     match (word, a, b, it.next()) {
         ("p", Some(idx), Some(slot), None) => match parse_slot(slot) {
-            Ok(col) => Command::Place { hand_idx: parse_hand_idx(idx), slot: col },
+            Ok(col) => Command::Place { hand_idx: parse_index(idx), slot: col },
             Err(why) => Command::Reject(why),
         },
         ("s", Some(slot), None, None) => match parse_slot(slot) {
             Ok(col) => Command::SacrificeField { slot: col },
             Err(why) => Command::Reject(why),
         },
-        ("sh", Some(idx), None, None) => Command::SacrificeHand { hand_idx: parse_hand_idx(idx) },
+        ("sh", Some(idx), None, None) => Command::SacrificeHand { hand_idx: parse_index(idx) },
         ("di", _, _, _) => Command::DrawInherit,
         ("ds", _, _, _) => Command::DrawStarter,
         ("e", _, _, _) => Command::EndTurn,
@@ -143,6 +144,148 @@ pub fn execute(b: &mut Battle, cmd: Command<'_>) -> Exec {
         Ok(()) => Exec::Done,
         Err(e) => Exec::Refused(e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 准备／结算阶段（关与关之间）：第二张词表。
+// ---------------------------------------------------------------------------
+
+/// 结算阶段的一条命令。词表与 arity 逐条抄自改前 `meta.rs::settle_phase`。
+#[derive(Debug)]
+pub enum SettleCommand<'a> {
+    /// `go`——进入下一关（准备阶段＝直接开战）。
+    Go,
+    /// `q`/`quit`/`exit`。旧实现在这里 `process::exit(0)` 且**不输出任何文本**，那个"无文案"也是行为的一部分。
+    Quit,
+    Fuse { main: usize, sub: usize },
+    Drop(usize),
+    Move { from: usize, to: usize },
+    Up { idx: usize, kind: &'a str },
+    Blank,
+    Unknown(&'a str),
+}
+
+/// 结算阶段一条命令的产出。
+#[derive(Debug)]
+pub enum SettleStep {
+    /// 阶段继续，先把这些行显示出去。
+    Stay(Vec<String>),
+    /// 阶段结束（`go`，与旧实现里 stdin 读到 EOF 走的是同一条路）。
+    Go,
+    /// 整个程序退出（旧实现在这里 `process::exit(0)` 且**不输出任何文本**）。
+    Quit,
+}
+
+/// 一行输入 → 结算阶段的一条命令。
+pub fn parse_settle(line: &str) -> SettleCommand<'_> {
+    let mut it = line.split_whitespace();
+    let Some(word) = it.next() else { return SettleCommand::Blank };
+    let a = it.next();
+    let b = it.next();
+    match (word, a, b, it.next()) {
+        ("go", _, _, _) => SettleCommand::Go,
+        ("q", _, _, _) | ("quit", _, _, _) | ("exit", _, _, _) => SettleCommand::Quit,
+        ("fuse", Some(m), Some(s), None) => SettleCommand::Fuse { main: parse_index(m), sub: parse_index(s) },
+        ("drop", Some(i), None, None) => SettleCommand::Drop(parse_index(i)),
+        ("move", Some(f), Some(t), None) => SettleCommand::Move { from: parse_index(f), to: parse_index(t) },
+        ("up", Some(i), Some(k), None) => SettleCommand::Up { idx: parse_index(i), kind: k },
+        _ => SettleCommand::Unknown(word),
+    }
+}
+
+/// 执行结算阶段的一条命令。
+///
+/// 返回的是**成品行**（含各自的 `✓ `/`✖ `），不是"前缀＋理由"两截。理由：这张词表历史上就有三种写法
+/// ——`✓ {msg}`、`✖ {e}`、以及 `drop` 那种无前缀的「弃置 …（进弃牌堆…）」，还有 `move` 把 ✓ 写在串内的
+/// 「✓ 排序：…」。拆成两截要么改文案（撞逐字节尺），要么让壳去猜哪条该加什么。归一属"文案改造"另一帧的事，
+/// 现在登记不实现。
+/// `up_used` 是"本次结算限 1 张"的闸（§十一:402），由调用方按阶段持有——它不进存档，所以跨关自然归零。
+pub fn execute_settle(
+    inherit: &mut Vec<CardInst>,
+    karma: &mut i32,
+    up_used: &mut bool,
+    post_battle: bool,
+    cmd: SettleCommand<'_>,
+) -> SettleStep {
+    let one = |s: String| vec![s];
+    match cmd {
+        SettleCommand::Go => SettleStep::Go,
+        SettleCommand::Quit => SettleStep::Quit,
+        SettleCommand::Blank => SettleStep::Stay(Vec::new()),
+        SettleCommand::Unknown(w) => SettleStep::Stay(one(format!("✖ 未知命令：{w}"))),
+        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {
+            Ok(msg) => SettleStep::Stay(one(format!("✓ {msg}"))),
+            Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
+        },
+        SettleCommand::Drop(i) => {
+            if i < inherit.len() {
+                let c = inherit.remove(i);
+                SettleStep::Stay(one(format!("弃置 {}（进弃牌堆，本关不再使用；自造弃牌永久消失）", short_card(&c))))
+            } else {
+                SettleStep::Stay(one("✖ 下标无效".into()))
+            }
+        }
+        SettleCommand::Move { from, to } => {
+            if from < inherit.len() && to < inherit.len() {
+                let c = inherit.remove(from);
+                inherit.insert(to, c);
+                SettleStep::Stay(one(format!("✓ 排序：第{from}位 → 第{to}位（抽牌从堆顶起）")))
+            } else {
+                SettleStep::Stay(one("✖ 下标无效".into()))
+            }
+        }
+        SettleCommand::Up { idx, kind } => {
+            if !post_battle {
+                return SettleStep::Stay(one("✖ 升级是通关奖励，仅结算阶段可用".into()));
+            }
+            if *up_used {
+                return SettleStep::Stay(one("✖ 每次通关只能升级1张（§十一:402 / §廿二:965）".into()));
+            }
+            match crate::progress::upgrade_card(inherit, idx, kind) {
+                Ok(msg) => {
+                    *up_used = true;
+                    SettleStep::Stay(one(format!("✓ {msg}")))
+                }
+                Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
+            }
+        }
+    }
+}
+
+/// 继承堆的一条清单行。改前住在 `meta.rs` 的循环里，文案逐字搬来。
+pub fn inherit_line(i: usize, c: &CardInst) -> String {
+    format!(
+        "  [{i}] {} | 特性:{} | 死过{}次{}",
+        short_card(c),
+        c.def.tr.label(),
+        c.deaths,
+        if c.is_starter() { "〈开端·不可融合〉" } else { "" }
+    )
+}
+
+/// 阶段提示行（`post_battle` 决定是通关奖励口径还是纯准备口径）。
+pub fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
+    if post_battle {
+        format!(
+            "（可保留业力 {karma}：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张{}）；drop <idx>；move <从> <到>；go）",
+            if up_used { "已用完" } else { "余1" }
+        )
+    } else {
+        "（准备阶段：可 fuse/drop/move 后 go；go 直接开战）".to_string()
+    }
+}
+
+/// 一整个「继承堆清单 + 提示」文本块（每行自带换行）。调用方接 `> ` 提示符。
+/// 它是逐字搬来的：改前三段 `println!` 的顺序、括号、全角冒号一个字没动。
+pub fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {
+    let mut s = format!("继承堆（{}张）：\n", inherit.len());
+    for (i, c) in inherit.iter().enumerate() {
+        s.push_str(&inherit_line(i, c));
+        s.push('\n');
+    }
+    s.push_str(&settle_hint(karma, post_battle, up_used));
+    s.push('\n');
+    s
 }
 
 #[cfg(test)]
@@ -261,5 +404,99 @@ mod tests {
             }
         }
         assert!(offenders.is_empty(), "command.rs 的非注释行里出现了输出/退出/stdin：{offenders:?}");
+    }
+
+    // ---------------- 结算阶段 ----------------
+
+    fn pile(n: usize) -> Vec<CardInst> {
+        (0..n).map(|i| CardInst::new(i as u64 + 1, crate::model::faction_cards(Faction::Ember)[i])).collect()
+    }
+
+    fn run(lines: &[&str], inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool) -> Vec<String> {
+        let mut used = false;
+        let mut out = Vec::new();
+        for l in lines {
+            match execute_settle(inherit, karma, &mut used, post_battle, parse_settle(l)) {
+                SettleStep::Stay(v) => out.extend(v),
+                SettleStep::Go => out.push("«GO»".into()),
+                SettleStep::Quit => out.push("«QUIT»".into()),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_settle_word_table_maps_every_recognised_line() {
+        use SettleCommand::*;
+        assert!(matches!(parse_settle("go"), Go));
+        assert!(matches!(parse_settle("go 1 2"), Go), "arity 不卡：改前 `\"go\" => return` 没有长度守卫");
+        for w in ["q", "quit", "exit"] {
+            assert!(matches!(parse_settle(w), Quit), "{w}");
+        }
+        assert!(matches!(parse_settle("fuse 1 2"), Fuse { main: 1, sub: 2 }));
+        assert!(matches!(parse_settle("drop 3"), Drop(3)));
+        assert!(matches!(parse_settle("move 0 1"), Move { from: 0, to: 1 }));
+        assert!(matches!(parse_settle("up 2 thr"), Up { idx: 2, kind: "thr" }));
+        assert!(matches!(parse_settle(""), Blank));
+        assert!(matches!(parse_settle("  "), Blank));
+        // arity 不足 → 落进 Unknown（改前 `"fuse" if parts.len()==3` 失配后走 `other` 分支）。
+        for (line, word) in [("fuse 1", "fuse"), ("fuse", "fuse"), ("drop", "drop"), ("move 1", "move"), ("up 1", "up"), ("nope", "nope")] {
+            assert!(matches!(parse_settle(line), Unknown(w) if w == word), "{line}");
+            assert_eq!(run(&[line], &mut pile(2), &mut 0, true), vec![format!("✖ 未知命令：{word}")]);
+        }
+    }
+
+    #[test]
+    fn settle_output_lines_are_the_ones_the_cli_printed() {
+        // 成品行逐字钉住：这张词表历史上就有三种前缀（`✓ x`／`✖ x`／`x`），归一属文案改造，不在本帧。
+        let mut inherit = pile(4);
+        let mut k = 9;
+        // 下标 0 是开端，故这一对用 1(火苗) 与 3(焚稿人)——副牌 3 费 → 收 2 业力。
+        let out = run(&["fuse 1 3"], &mut inherit, &mut k, true);
+        assert!(out.len() == 1 && out[0].starts_with("✓ "), "{out:?}");
+        assert_eq!(k, 7, "融合扣业力");
+        assert_eq!(run(&["fuse 1 3"], &mut inherit, &mut k, true), vec!["✖ 下标无效"], "副牌已被摘走（不进弃牌堆，堆长 4→3）");
+        assert_eq!(run(&["drop 9"], &mut inherit, &mut k, true), vec!["✖ 下标无效"]);
+        assert_eq!(run(&["move 9 0"], &mut inherit, &mut k, true), vec!["✖ 下标无效"]);
+        assert_eq!(run(&["", "xx 1"], &mut inherit, &mut k, true), vec!["✖ 未知命令：xx"], "空行零输出");
+        assert_eq!(run(&["go"], &mut inherit, &mut k, true), vec!["«GO»"]);
+        assert_eq!(run(&["q"], &mut inherit, &mut k, true), vec!["«QUIT»"], "退出口径＝无文案");
+
+        let mut one = pile(1);
+        let mut zero = 0;
+        assert_eq!(run(&["drop 0"], &mut one, &mut zero, true), vec![format!("弃置 {}（进弃牌堆，本关不再使用；自造弃牌永久消失）", short_card(&CardInst::new(1, crate::model::faction_cards(Faction::Ember)[0])))]);
+        assert!(one.is_empty());
+    }
+
+    #[test]
+    fn the_upgrade_gate_is_the_phase_not_the_index() {
+        // 顺序与改前一致：先判阶段、再判额度，最后才轮到 `progress::upgrade_card` 的下标检查。
+        let mut inherit = pile(2);
+        let mut k = 0;
+        assert_eq!(run(&["up 0 power"], &mut inherit, &mut k, false), vec!["✖ 升级是通关奖励，仅结算阶段可用"]);
+        assert_eq!(run(&["up 99 power"], &mut inherit, &mut k, false), vec!["✖ 升级是通关奖励，仅结算阶段可用"]);
+        let mut probe = pile(2);
+        let first = crate::progress::upgrade_card(&mut probe, 0, "power").unwrap();
+        assert_eq!(
+            run(&["up 0 power", "up 1 thr"], &mut inherit, &mut k, true),
+            vec![format!("✓ {first}"), "✖ 每次通关只能升级1张（§十一:402 / §廿二:965）".to_string()]
+        );
+        assert_eq!(inherit[0].upgrades, 1, "限1张＝只升了一张");
+    }
+
+    #[test]
+    fn the_listing_and_hint_keep_the_pre_refactor_wording() {
+        let mut list = pile(2);
+        list[0].deaths = 2;
+        list[1] = CardInst::new(7, crate::model::STARTER);
+        let starter = &list[1];
+        let txt = settle_listing(&list, 5, true, false);
+        assert_eq!(txt.lines().next().unwrap(), "继承堆（2张）：");
+        assert!(txt.contains("  [0] ") && txt.contains("死过2次"), "{txt}");
+        assert!(txt.contains("〈开端·不可融合〉"), "{txt}");
+        assert!(txt.ends_with("（可保留业力 5：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张余1）；drop <idx>；move <从> <到>；go）\n"), "{txt}");
+        assert!(settle_listing(&[], 0, false, false).ends_with("（准备阶段：可 fuse/drop/move 后 go；go 直接开战）\n"));
+        assert!(settle_listing(&[], 0, true, true).contains("本结算限1张已用完"));
+        assert_eq!(inherit_line(3, &starter), format!("  [3] {} | 特性:{} | 死过0次〈开端·不可融合〉", short_card(&starter), starter.def.tr.label()));
     }
 }

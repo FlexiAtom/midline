@@ -16,7 +16,7 @@
 //! 元游戏：跨关继承堆、融合/升级/弃置（准备·结算阶段）、每日种子、自动对局冒烟。
 
 use crate::battle::{Battle, Difficulty, Outcome};
-use crate::model::{CardInst, Faction, Skill, short_card};
+use crate::model::{CardInst, Faction};
 use crate::save::{self, Progress};
 use std::path::PathBuf;
 
@@ -380,7 +380,9 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
                 Outcome::Draw => println!("平局（30回合蜡烛判定/双烛尽）。"),
             }
             if has_next {
-                collect_survivors(&mut b, inherit);
+                for l in crate::progress::collect_survivors(&mut b, inherit) {
+                    println!("{l}");
+                }
                 // §廿二:967 保留战斗结束时的业力进结算阶段（融合定价花它）；下一关的战斗业力由 `Battle::new`
                 // 重新起算＝"进入下一关重置为0"。本行只在这两个用途之间传递，不做跨关战斗业力累积。
                 *carry_karma = b.p_karma.max(0);
@@ -421,40 +423,13 @@ fn execute_player_command(b: &mut Battle, line: &str) {
     }
 }
 
-/// §廿二:947 继承堆上限 10 张，超出弃最早入堆的牌（永久消失）。
-/// 幸存者回继承堆（手牌+堆底+场上），上限10，超出弃最早。
-fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) {
-    let mut survivors = b.battle_survivors();
-    survivors.sort_by_key(|c| c.id);
-    inherit.append(&mut survivors);
-    while inherit.len() > 10 {
-        let c = inherit.remove(0);
-        println!("继承堆超10张 → 弃置（永久消失）：{}", short_card(&c));
-    }
-}
-
-/// 准备/结算阶段命令循环：查看/融合/升级（结算限定，每通关限1张）/弃置/排序/go。
+/// 准备/结算阶段命令循环。词表、语义、文案都在 `command`/`progress`，这里只剩两件 CLI 才有的事：
+/// 把行打到终端、从 stdin 读下一行（EOF 视作 `go`，与改前同一分支）。
 fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool) {
+    use crate::command::{SettleStep, execute_settle, parse_settle, settle_listing};
     let mut up_used = false;
     loop {
-        println!("继承堆（{}张）：", inherit.len());
-        for (i, c) in inherit.iter().enumerate() {
-            let tr = c.def.tr.label();
-            println!(
-                "  [{i}] {} | 特性:{tr} | 死过{}次{}",
-                short_card(c),
-                c.deaths,
-                if c.is_starter() { "〈开端·不可融合〉" } else { "" }
-            );
-        }
-        if post_battle {
-            println!(
-                "（可保留业力 {karma}：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张{}）；drop <idx>；move <从> <到>；go）",
-                if up_used { "已用完" } else { "余1" }
-            );
-        } else {
-            println!("（准备阶段：可 fuse/drop/move 后 go；go 直接开战）");
-        }
+        print!("{}", settle_listing(inherit, *karma, post_battle, up_used));
         print!("> ");
         use std::io::Write;
         std::io::stdout().flush().ok();
@@ -462,107 +437,17 @@ fn settle_phase(inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool)
         if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
             return;
         }
-        let parts: Vec<&str> = line.trim().split_whitespace().collect();
-        match parts.first().copied().unwrap_or("") {
-            "go" => return,
-            "q" | "quit" | "exit" => std::process::exit(0),
-            "fuse" if parts.len() == 3 => match fuse_cards(inherit, parse_idx(parts[1]), parse_idx(parts[2]), karma) {
-                Ok(msg) => println!("✓ {msg}"),
-                Err(e) => println!("✖ {e}"),
-            },
-            "drop" if parts.len() == 2 => {
-                let i = parse_idx(parts[1]);
-                if i < inherit.len() {
-                    let c = inherit.remove(i);
-                    println!("弃置 {}（进弃牌堆，本关不再使用；自造弃牌永久消失）", short_card(&c));
-                } else {
-                    println!("✖ 下标无效");
+        match execute_settle(inherit, karma, &mut up_used, post_battle, parse_settle(&line)) {
+            SettleStep::Stay(lines) => {
+                for l in lines {
+                    println!("{l}");
                 }
             }
-            "move" if parts.len() == 3 => {
-                let (from, to) = (parse_idx(parts[1]), parse_idx(parts[2]));
-                if from < inherit.len() && to < inherit.len() {
-                    let c = inherit.remove(from);
-                    inherit.insert(to, c);
-                    println!("✓ 排序：第{from}位 → 第{to}位（抽牌从堆顶起）");
-                } else {
-                    println!("✖ 下标无效");
-                }
-            }
-            "up" if parts.len() == 3 => {
-                if !post_battle {
-                    println!("✖ 升级是通关奖励，仅结算阶段可用");
-                    continue;
-                }
-                if up_used {
-                    println!("✖ 每次通关只能升级1张（§十一:402 / §廿二:965）");
-                    continue;
-                }
-                match upgrade_card(inherit, parse_idx(parts[1]), parts[2]) {
-                    Ok(msg) => {
-                        up_used = true;
-                        println!("✓ {msg}");
-                    }
-                    Err(e) => println!("✖ {e}"),
-                }
-            }
-            "" => {}
-            other => println!("✖ 未知命令：{other}"),
+            SettleStep::Go => return,
+            // 改前这里直接 `process::exit(0)`，一个字节都不输出——"没有文案"也是行为的一部分。
+            SettleStep::Quit => std::process::exit(0),
         }
     }
-}
-
-fn parse_idx(s: &str) -> usize {
-    s.parse().unwrap_or(99)
-}
-
-/// §廿二:946 融合后新牌费用＝主牌费用（副牌只贡献技能，不贡献费用）。
-/// §廿二:950 副牌直接消失——**不进弃牌堆**，故也不会有死亡返还、不会再被抽到。
-pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &mut i32) -> Result<String, String> {
-    if main >= inherit.len() || sub >= inherit.len() || main == sub {
-        return Err("下标无效".into());
-    }
-    if inherit[main].is_starter() || inherit[sub].is_starter() {
-        return Err("开端不可融合（无论在手牌还是继承堆）".into());
-    }
-    let price = (inherit[sub].def.cost - 1).max(0);
-    if *karma < price {
-        return Err(format!("业力不足：融合需{price}，当前{karma}"));
-    }
-    *karma -= price;
-    let s = inherit.remove(sub);
-    // 先按原下标校正主牌位置：sub 被摘除后，其后的下标整体前移一位
-    let m = &mut inherit[if main > sub { main - 1 } else { main }];
-    let n = s.skills.len();
-    for sk in s.skills {
-        m.skills.push(sk); // 同名技能叠加
-    }
-    m.crafted = true; // 自造牌：任何离场永久消失（§十372）
-    Ok(format!("{} 吸收副牌「{}」的{n}个技能 → {}", m.def.name, s.def.name, short_card(m)))
-}
-
-pub fn upgrade_card(inherit: &mut Vec<CardInst>, idx: usize, kind: &str) -> Result<String, String> {
-    if idx >= inherit.len() {
-        return Err("下标无效".into());
-    }
-    let c = &mut inherit[idx];
-    if c.upgrades >= 3 {
-        return Err("该牌已达升级上限3次".into());
-    }
-    match kind {
-        "power" => {
-            c.def.power += 1;
-            c.hp = c.def.power; // 升级即时可见（每关本就重置满格）
-        }
-        "thr" => c.def.threshold = (c.def.threshold - 1).max(1),
-        "skill" => {
-            let pool = Skill::list();
-            c.skills.push(pool[c.upgrades as usize % pool.len()]);
-        }
-        _ => return Err("power|thr|skill".into()),
-    }
-    c.upgrades += 1;
-    Ok(format!("升级后：{}", short_card(c)))
 }
 
 /// 自动对局冒烟：玩家侧也走贪心，验证规则闭环不 panic、能分胜负。
@@ -582,7 +467,9 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
             last = b.over.unwrap_or(Outcome::Draw);
             match last {
                 Outcome::PlayerWin => {
-                    collect_survivors(&mut b, &mut inherit);
+                    for l in crate::progress::collect_survivors(&mut b, &mut inherit) {
+                        println!("{l}");
+                    }
                     // 融合/升级：验证跨关持有与 meta 决策路径
                     let mut k = b.p_karma.max(0);
                     apply_meta_plan(&mut inherit, &mut k, diff, 1);
@@ -601,18 +488,18 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
 fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, diff: Difficulty, upgrades_left: u8) {
     if diff != Difficulty::Expert {
         if inherit.len() >= 2 {
-            let _ = fuse_cards(inherit, 0, 1, karma);
+            let _ = crate::progress::fuse_cards(inherit, 0, 1, karma);
         }
         return;
     }
     // plan 的下标基于同一快照；先执行不改长度的升级，再执行会摘牌的融合
     let plan = crate::ai::plan_meta(inherit, *karma, upgrades_left);
     let mut run = |m: &crate::ai::MetaMove| match m {
-        crate::ai::MetaMove::Upgrade { idx, kind } => match upgrade_card(inherit, *idx, kind) {
+        crate::ai::MetaMove::Upgrade { idx, kind } => match crate::progress::upgrade_card(inherit, *idx, kind) {
             Ok(msg) => println!("AI·升级[{kind}] {msg}"),
             Err(e) => println!("✖ AI·升级 {e}"),
         },
-        crate::ai::MetaMove::Fuse { main, sub } => match fuse_cards(inherit, *main, *sub, karma) {
+        crate::ai::MetaMove::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, *main, *sub, karma) {
             Ok(msg) => println!("AI·融合 {msg}"),
             Err(e) => println!("✖ AI·融合 {e}"),
         },
@@ -699,7 +586,7 @@ pub(crate) fn auto_turn(b: &mut Battle) {
 mod meta_tests {
     use super::*;
     use crate::boss::BossId;
-    use crate::model::{faction_cards, Skill};
+    use crate::model::faction_cards;
 
     #[test]
     fn encounter_for_mounts_boss_only_on_chapter_ends() {
@@ -713,33 +600,6 @@ mod meta_tests {
         assert_eq!(encounter_for(36), (Faction::Shadow, Some(BossId::Yingzhang)));
         assert_eq!(encounter_for(48), (Faction::Ember, Some(BossId::YanBing)));
         assert_eq!(encounter_for(60), (Faction::Shadow, Some(BossId::ZhongYing)));
-    }
-
-    #[test]
-    fn fuse_moves_skills_keeps_main_and_costs_sub_minus_one() {
-        let mut inherit: Vec<CardInst> = vec![
-            CardInst::new(1, faction_cards(Faction::Ember)[3]), // 主牌 焚稿人 3费
-            CardInst::new(2, faction_cards(Faction::Ember)[8]), // 副牌 雷烬 4费
-        ];
-        inherit[1].skills.push(Skill::AtkSelfFlame1);
-        let mut karma = 5;
-        let msg = fuse_cards(&mut inherit, 0, 1, &mut karma).expect("融合应成功");
-        assert!(msg.contains("吸收"));
-        assert_eq!(karma, 5 - (4 - 1), "融合消耗=副牌费用-1");
-        assert_eq!(inherit.len(), 1, "副牌消失、总数不变");
-        assert_eq!(inherit[0].def.cost, 3, "费用取主牌");
-        assert_eq!(inherit[0].skills, vec![Skill::AtkSelfFlame1]);
-    }
-
-    #[test]
-    fn starter_cannot_fuse() {
-        let mut inherit = vec![
-            CardInst::new(1, crate::model::STARTER),
-            CardInst::new(2, faction_cards(Faction::Ember)[1]),
-        ];
-        let mut k = 9;
-        assert!(fuse_cards(&mut inherit, 0, 1, &mut k).is_err());
-        assert!(fuse_cards(&mut inherit, 1, 0, &mut k).is_err());
     }
 
     #[test]
