@@ -28,14 +28,14 @@ use crate::model::{CardInst, Skill, short_card};
 
 /// §廿二:946 融合后新牌费用＝主牌费用（副牌只贡献技能，不贡献费用）。
 /// §廿二:950 副牌直接消失——**不进弃牌堆**，故也不会有死亡返还、不会再被抽到。
-pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &mut i32) -> Result<String, String> {
+pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &mut i32) -> Result<String, String> {  // §廿三:1002 技能合并、特性取主牌、副牌消失
     if main >= inherit.len() || sub >= inherit.len() || main == sub {
         return Err("下标无效".into());
     }
     if inherit[main].is_starter() || inherit[sub].is_starter() {
         return Err("开端不可融合（无论在手牌还是继承堆）".into());
     }
-    let price = (inherit[sub].def.cost - 1).max(0);
+    let price = (inherit[sub].def.cost - 1).max(0);  // §廿三:1001 融合费用＝副牌费用-1，最低 0
     if *karma < price {
         return Err(format!("业力不足：融合需{price}，当前{karma}"));
     }
@@ -79,7 +79,7 @@ pub fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str) -> Result<
 /// §廿二:947 继承堆上限 10 张，超出弃最早入堆的牌（永久消失）。
 /// 幸存者回继承堆（手牌+堆底+场上），上限10，超出弃最早。
 /// 返回那些"被上限挤出去"的牌该显示的文案——本层不打印，打印归调用方。
-pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<String> {  // §十二:503 存活牌收进继承堆＝带入下一关
+pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<String> {  // §十二:503 存活牌收进继承堆＝带入下一关；§廿三:1003 跨关继承（阵亡永久消失见 battle.rs:1134）
     let mut out = Vec::new();
     let mut survivors = b.battle_survivors();
     survivors.sort_by_key(|c| c.id);

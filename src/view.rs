@@ -69,7 +69,7 @@ pub struct RuleView {
     pub text: &'static str,
 }
 
-/// 一帧完整战况。12 个格位固定 4 列（P1-P4 / E1-E8），空格为 `None`。
+/// 一帧完整战况。12 个格位固定 4 列（P1-P4 / E1-E8），空格为 `None`。 §廿三:981 我方4×1＋敌方4×2 共用一张 4 列棋盘。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Board {
     /// 敌方持业者，1 或 2 根（双持只在炎与冰）。

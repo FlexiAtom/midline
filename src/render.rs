@@ -36,7 +36,7 @@ fn row_cells(row: &[Option<CardView>; 4]) -> [String; 4] {
     std::array::from_fn(|i| row[i].as_ref().map(face).unwrap_or_else(blank))
 }
 
-pub fn candle_bar(hp: i32, cap: i32) -> String {
+pub fn candle_bar(hp: i32, cap: i32) -> String {  // §廿三:1013 持业者画成蜡烛，条长按 hp/cap
     let hp = hp.max(0);
     let filled = (hp * 10 / cap.max(1)).min(10) as usize;
     format!("🕯️[{:<10}]{}{}/{cap}", "#".repeat(filled), if hp == 0 { "烛尽 " } else { "" }, hp)

@@ -155,7 +155,7 @@ pub fn execute(b: &mut Battle, cmd: Command<'_>) -> Exec {
         Command::SacrificeHand { hand_idx } => b.player_sacrifice_hand(hand_idx),
         Command::DrawInherit => b.action_draw(false),
         Command::DrawStarter => b.action_draw(true),
-        Command::EndTurn => {  // §十二:437 结束回合→我方攻击阶段
+        Command::EndTurn => {  // §十二:437 结束回合→我方攻击阶段；§廿三:979 我方回合由「e」手动结束
             b.end_player_turn();
             Ok(())
         }
@@ -240,7 +240,7 @@ pub fn execute_settle(
         SettleCommand::Quit => SettleStep::Quit,
         SettleCommand::Blank => SettleStep::Stay(Vec::new()),
         SettleCommand::Unknown(w) => SettleStep::Stay(one(format!("✖ 未知命令：{w}"))),
-        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）
+        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）
             Ok(msg) => SettleStep::Stay(one(format!("✓ {msg}"))),
             Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
         },
