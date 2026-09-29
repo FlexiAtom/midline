@@ -931,6 +931,91 @@ mod anchor_tests {
         assert!(bad.is_empty(), "{} 处 §十八 卡表与文档不符：\n{}", bad.len(), bad.join("\n"));
     }
 
+    /// §十二 完整回合流程：``` 围栏内的**每一条内容行**都必须被锚点指回，或挂成债——排除表在本围栏不作数。
+    /// 集合从结构推导：章标题之后第一对 ``` 之间，非空且不以 `【` 开头的行全算必检——
+    /// `【…】` 是阶段版式不是规则，其余（编号步、`a.` 子步、`- ` 列表、`→` 子步）一律是。
+    /// **为什么不用行首形态筛**（`^\d+\. ` / `^\s+[a-z]\. ` / `^\s+- ` 三种，本帧先前量出的 55 行）：
+    /// 那种筛法静默漏掉 md:452「- 若开端在场，我方获得1业力」与 §结算 的 494/495/496（行首无缩进）、
+    /// 以及 443-449 七条 `→` 子步——共 17 行。一把用来堵"漏登记"盲区的尺子，自己不能带漏登的口径。
+    /// 它补的是债表**唯一**证不到的那一面：`the_unimplemented_debt_table...` 能证债条没过期、不自我洗白，
+    /// 证不了债表**完整**；这里按章推导"该登记的行"，漏记且漏锚 ⇒ 当场红。
+    /// 残留盲区（如实登记）：① 只覆盖 §十二 一章，其余章同类清单仍未纳入（§十八 卡表另有逐字段等值检查）；
+    /// ② 它只问"这一行有没有被认领"，不问"认领得对不对"——锚点指错实现由正向机检与卡表比对分担；
+    /// ③ **假债仍然证伪不了**：一行已实现却被挂成"未实现"，去处只要格式合规（点名 `.rs` 或壳）机器就放行。
+    ///    围栏**外**的章也仍能被排除表单边认领——那是①的推论：没有推导器的章，没有"这条认领走不通"的红。
+    #[test]
+    fn every_step_line_of_section12_is_anchored_back_or_debited() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十二、完整回合流程")
+            .expect("§十二 标题必须存在（文档结构变了就要同步改本检查）");
+        let open = head + 1 + lines[head + 1..]
+            .iter()
+            .position(|l| l.trim() == "```")
+            .expect("§十二 标题之后应有 ``` 围栏（改了版式就要同步改本检查）");
+        let inner = &lines[open + 1..];
+        let close = inner
+            .iter()
+            .position(|l| l.trim() == "```")
+            .expect("§十二 的 ``` 围栏应有收尾");
+        let mut steps: Vec<usize> = Vec::new();
+        let mut headers = 0usize;
+        for (off, l) in inner[..close].iter().enumerate() {
+            let n = open + 2 + off; // 1 起的文档行号
+            let t = l.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if t.starts_with('【') {
+                headers += 1;
+                continue;
+            }
+            steps.push(n);
+        }
+        assert_eq!(steps.len(), 72, "§十二 围栏内内容行按结构推导应得 72 行，实测 {} 行 ⇒ 文档改了流程条目，或推导口径失效", steps.len());
+        assert_eq!(headers, 11, "§十二 应有 11 个【…】阶段标题，实测 {} 个", headers);
+
+        let referenced = referenced_doc_lines();
+        let debited: Vec<usize> = NOT_IMPLEMENTED.iter().map(|d| d.doc).collect();
+        // **排除表在本围栏不作数**：§十二 围栏内的行只有"锚点指回"与"挂债"两条认领路。
+        // 这条不是设想，是量出来的：曾做过一次两段式洗白——删掉 md:452 的两处行尾锚点、同时把 452 塞进
+        // `NOT_A_RULE`——全量 136 测一路绿。把排除表从认领路径摘掉后，同一条变异当场红（见下面的断言）。
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !steps.contains(n),
+                "md:{n} 落在 §十二 围栏内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+        let missing: Vec<String> = steps
+            .iter()
+            .filter(|&&n| !referenced.contains(&(n as u32)) && !debited.contains(&n))
+            .map(|&n| format!("  md:{n} ← {}", at(n)))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "§十二 有 {} 行回合流程既无锚点指回、也不在债表里（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+
+        // 假绿反证：推导器两头都要有牙——标题确实被剔出集合、三种形态的规则行确实留在集合里。
+        // 只钉"总行数 72"不够：把筛选条件同时放宽/收紧的改动可以让总数不变而成员换掉。
+        for h in [413usize, 420, 425, 439, 451, 454, 461, 469, 481, 493, 498] {
+            assert!(!steps.contains(&h), "md:{h} 是【…】阶段标题，不该进必检集（现在进了⇒ 筛选条件失效）");
+        }
+        for (n, form) in [(414, "编号步"), (431, "a. 子步"), (427, "缩进 - 步"), (443, "→ 子步"), (452, "行首无缩进的 - 步"), (479, "编号步尾条")] {
+            assert!(steps.contains(&n), "md:{n}（{form}）被剔出必检集 ⇒ 推导器漏了这种形态");
+        }
+        // 债表/排除表只允许"认领"确实存在的行：认领到空行或标题行＝登记与推导口径不一致。
+        for n in &debited {
+            if *n > open + 1 && *n < open + 1 + close {
+                assert!(steps.contains(n), "债表条目 md:{n} 落在 §十二 围栏里却不在必检集⇒ 两边推导口径不一致");
+            }
+        }
+    }
+
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
     /// 规则层欠的是校验（引擎收了它不该收的走法）。后者会让同一局打出不同结果，前者不会。
     #[derive(Clone, Copy, PartialEq, Debug)]
@@ -968,9 +1053,10 @@ mod anchor_tests {
 
     /// 未实现债表（`reverse-coverage-multi-chapter` 的 D3）。逐条按"文档行 + 原文 + 证据 + 去处"录，
     /// 读数由本帧现取：呈现层 14 行（§十五 665/666 ＋ §十六 702/705/706/707/708/709/715/716/717/718/721
-    /// ＋ §十二 479；704 是列头「状态 表现」，属非规则行不入债表）、规则层 2 行（§二 47/48）、
-    /// 豁免改登记 1 行（§一 17）＝**17 条**。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，
-    /// 本表以文档实测为准。
+    /// ＋ §十二 479；704 是列头「状态 表现」，属非规则行不入债表）、规则层 4 行（§二 47/48 ＋ §十二 416/456）、
+    /// 豁免改登记 1 行（§一 17）＝**19 条**。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，
+    /// 本表以文档实测为准。§十二 那三条由
+    /// `every_step_line_of_section12_is_anchored_back_or_debited` 从文档结构推导出来，不是手挑。
     const NOT_IMPLEMENTED: &[Debt] = &[
         Debt {
             doc: 17,
@@ -995,6 +1081,22 @@ mod anchor_tests {
             tier: Tier::Rule,
             evidence: "上一条同一道闸——「后排满后才能放前排」没有任何引擎校验，敌方（含 Boss）可直接往前排落子",
             dest: "与上一条同一道闸、同一条自决 #4：不加引擎闸。改判时与 47 一次改两处，闸位 battle.rs::enemy_place_legal，开工点 pool/back-row-placement-gate",
+        },
+        Debt {
+            doc: 416,
+            section: 12,
+            row: "3. 卡牌升级（可选）",
+            tier: Tier::Rule,
+            evidence: "command.rs:264-267 的 `if !post_battle` 直接回「升级是通关奖励，仅结算阶段可用」——§十二 把「卡牌升级」同时列在 416 准备阶段与 501 结算阶段，引擎只认后者",
+            dest: "已按自决 #1（reverse-coverage-multi-chapter 实现侧自决第 1 行）定为仅结算阶段可升；缺口照挂不洗白。真要两处都开＝把 `up_used` 持久化进 save.rs 的 progress.kv（撞裁定27 的存档语义，须单独一帧）",
+        },
+        Debt {
+            doc: 456,
+            section: 12,
+            row: "1. 献祭阶段：评估献祭得分，决定是否献祭",
+            tier: Tier::Rule,
+            evidence: "ai.rs::run 把献祭与放置放进同一个候选池逐轮择优（`greedy_key` 沿用 §廿「放不出才祭」的门控），文档这里把献祭写成先于放置的独立一步；只有业力 0 时的 `starter_sac_at_zero` 算一个前置特例",
+            dest: "两条路只能择一：按文档拆成「先献祭后放置」两段（改 ai.rs 决策序 ⇒ 敌方走法变，整族逐字节基线要有意重铺），或以 §廿 决策树为准把这一行降为描述性措辞。择哪条属设计侧，本帧只登记",
         },
         Debt {
             doc: 479,
@@ -1163,14 +1265,14 @@ mod anchor_tests {
         assert!(bad.is_empty(), "未实现债表有 {} 处失效：\n{}", bad.len(), bad.join("\n"));
         assert_eq!(
             NOT_IMPLEMENTED.len(),
-            17,
+            19,
             "债表条数变了。偿了债 ⇒ 删条目并把本数字与下面的分档数一起改小；真要新增债 ⇒ 连同文档出处、证据、去处一起写"
         );
         let pres = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Presentation).count();
         let rule = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Rule).count();
         let washed = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Washed).count();
         // 分档不许互相挪：把规则层挪进呈现层＝把"引擎收了它不该收的走法"说成"只是没画出来"，缺口的性质就变了。
-        assert_eq!((pres, rule, washed), (14, 2, 1), "债表应为 呈现层14／规则层2／豁免改登记1，实测 ({pres},{rule},{washed})");
+        assert_eq!((pres, rule, washed), (14, 4, 1), "债表应为 呈现层14／规则层4／豁免改登记1，实测 ({pres},{rule},{washed})");
     }
 
     fn check(

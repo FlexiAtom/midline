@@ -227,8 +227,8 @@ impl Battle {
         let p_starter = mk(&mut id, &mut rng, faction_cards(player_faction)[0], false);
         let e_starter = mk(&mut id, &mut rng, faction_cards(enemy_faction)[0], false);
 
-        let mut hand = vec![p_starter];
-        for _ in 0..3 {
+        let mut hand = vec![p_starter];  // §十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）
+        for _ in 0..3 {  // §十二:421 开局从继承堆抽 3 张（裁定11：按堆顶顺序取）
             if !draw_pile.is_empty() {
                 hand.push(draw_pile.remove(0)); // 开局手牌按继承堆顺序取（裁定11）
             }
@@ -254,11 +254,11 @@ impl Battle {
                 enemy_faction.name()
             )],
             player_faction,
-            p_karma: 0,
+            p_karma: 0,  // §十二:422 战斗开始业力 0；§十二:504 进入下一关重新起算
             e_karma: 0,
             p_candle: CANDLE_HP,
             e_candle: CANDLE_HP,
-            p_front: Default::default(),
+            p_front: Default::default(),  // §十二:423 战斗开始场上为空
             e_back: Default::default(),
             e_front: Default::default(),
             hand,
@@ -396,7 +396,7 @@ impl Battle {
 
     // ---------- 抽牌 ----------
 
-    /// §廿二:948 手牌上限 8 张，超出弃置**最早进入手牌**的牌（`hand` 尾插 ⇒ 堆头即最早）；
+    /// §廿二:948 手牌上限 8 张，超出弃置**最早进入手牌**的牌（`hand` 尾插 ⇒ 堆头即最早）；§十二:429 满 8 张时弃置最早进入手牌的牌。
     /// §廿二:949 弃的牌进弃牌堆、本关不再使用（自造牌例外：任何离场永久消失，§十:372）。
     fn push_hand(&mut self, c: CardInst) {
         self.hand.push(c);
@@ -411,7 +411,7 @@ impl Battle {
         }
     }
 
-    pub fn player_turn_start(&mut self) {
+    pub fn player_turn_start(&mut self) {  // §十二:426 我方回合「抽牌」步的入口
         self.turn += 1;
         if self.karma_penalty_next > 0 {
             let before = self.p_karma;
@@ -421,7 +421,7 @@ impl Battle {
             }
         }
         self.karma_penalty_next = 0;
-        if !self.draw_pile.is_empty() {
+        if !self.draw_pile.is_empty() {  // §十二:427 每回合自动从继承堆抽 1 张
             let mut c = self.draw_pile.remove(0); // 堆顶抽取，继承堆顺序有意义（裁定11）
             if c.skills.is_empty() && !c.is_starter() {
                 let pool = Skill::list();
@@ -433,7 +433,7 @@ impl Battle {
         } else {
             self.log.push(format!("回合{}·继承堆已空，无法抽牌（开端堆仍可抽）", self.turn));
         }
-        self.pf.manual_draws = 2;
+        self.pf.manual_draws = 2;  // §十二:428 主动抽牌每回合 2 次，两堆可混合来源
         self.pf.starter_draws = 1;
         self.pf.sacrifice_used = false;
         self.pf.sacrificed_names.clear();
@@ -497,7 +497,7 @@ impl Battle {
 
     // ---------- 献祭 ----------
 
-    /// 场上献祭（P 格 0..3）：每回合1次、在场≥1回合、全额不递减、禁同名牌回置。
+    /// 场上献祭（P 格 0..3）：每回合1次、在场≥1回合、全额不递减、禁同名牌回置。§十二:431 献祭己方 P1-P4、在场 1 回合以上、全额不递减。
     /// §廿二:964 的"阵营限制"（§四:160 不能献祭敌方阵营的卡）由 API 形状保证：只有我方 `p_front`
     /// 与 `hand` 可寻址，敌方卡传不进来，故无需运行期检查。
     pub fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {
@@ -508,7 +508,7 @@ impl Battle {
             return Err("本回合献祭次数已用完（每回合最多1次）".into());
         }
         let c = self.p_front[col].take().ok_or("该格没有卡牌")?;
-        if self.turn - c.placed_turn < 1 {
+        if self.turn - c.placed_turn < 1 {  // §十二:431 在场不足 1 回合不可献祭
             self.p_front[col] = Some(c);
             return Err("在场不足1回合，不可献祭".into());
         }
@@ -584,7 +584,7 @@ impl Battle {
     /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
     /// §廿二:944 越线死亡统一走 `on_death(.., DeathCause::Cross)`：触发亡语、按死亡返还递减获得业力。
     fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
-        let cost = if card.is_starter() { 0 } else { card.def.cost };
+        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）
         match side {
             SideK::Player => self.p_karma -= cost,
             SideK::Enemy => self.e_karma -= cost,
@@ -598,7 +598,7 @@ impl Battle {
             (SideK::Enemy, Row::Front) => &mut self.e_front[col],
             (SideK::Enemy, Row::Back) => &mut self.e_back[col],
         };
-        let old = slot.take();
+        let old = slot.take();  // §十二:434 空格直接放；§十二:435 有卡则新卡占位、旧卡待越线
         let (tr, skills) = (c.def.tr, c.skills.clone());
         self.log.push(format!(
             "{}放置 {} → {}{}",
@@ -610,8 +610,8 @@ impl Battle {
         *slot = Some(c);
         let _ = slot;
         if let Some(old) = old {
-            self.log.push(format!("挤压：{} 越线死亡", short_card(&old)));
-            self.on_death(old, side, Some(col), DeathCause::Cross);
+            self.log.push(format!("挤压：{} 越线死亡", short_card(&old)));  // §十二:435 旧卡越线死亡
+            self.on_death(old, side, Some(col), DeathCause::Cross);  // §十二:435 越线死亡按死亡返还递减返业力
         }
         let slot_now = match (side, row) {
             (SideK::Player, _) => &self.p_front[col],
@@ -638,7 +638,7 @@ impl Battle {
         self.check_all_triggers();
     }
 
-    pub fn player_place(&mut self, hand_idx: usize, col: usize) -> Result<(), String> {
+    pub fn player_place(&mut self, hand_idx: usize, col: usize) -> Result<(), String> {  // §十二:432 放置到 P1-P4 的唯一入口
         if col >= 4 {
             return Err("格位为 P1-P4".into());
         }
@@ -650,7 +650,7 @@ impl Battle {
         if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {
             return Err(format!("本回合献祭过同名牌「{}」，不能再放置", self.hand[hand_idx].def.name));
         }
-        if self.p_karma < cost {
+        if self.p_karma < cost {  // §十二:433 业力不足即拒绝
             return Err(format!("业力不足：需{cost}，当前{}", self.p_karma));
         }
         let c = self.hand.remove(hand_idx);
@@ -676,7 +676,7 @@ impl Battle {
             Row::Back => self.e_back[col].is_some(),
         };
         let squeeze = self.boss_rule() == crate::boss::BossRule::ShadowPush && row == Row::Front;
-        if occupied && !squeeze {
+        if occupied && !squeeze {  // §十二:490 AI 不会主动把 E5-E8 挤越线
             return Err("AI 不挤压（不会主动挤越线）".into());
         }
         Ok(())
@@ -757,9 +757,9 @@ impl Battle {
         }
     }
 
-    /// §廿二:962 攻击顺序＝按卡牌入场顺序（`seq` 单调递增，见 `place_side`），不按列位。
+    /// §廿二:962 攻击顺序＝按卡牌入场顺序（`seq` 单调递增，见 `place_side`），不按列位。§十二:440 P1-P4 按卡牌入场顺序依次攻击。
     fn row_seq_order(&self, side: SideK, row: Row) -> Vec<u64> {
-        let mut v: Vec<u64> = (0..4)
+        let mut v: Vec<u64> = (0..4)  // §十二:448 hp≤0 的卡不进序列＝攻击前已死亡则跳过
             .filter_map(|c| self.slot(side, row, c).as_ref().filter(|x| x.hp > 0).map(|x| x.seq))
             .collect();
         v.sort();
@@ -786,25 +786,25 @@ impl Battle {
             let tr = atk.def.tr;
             let base = atk.hp;
             let id = atk.id;
-            let target = self.pick_target(SideK::Player, col, tr);
+            let target = self.pick_target(SideK::Player, col, tr);  // §十二:441 同列中线对面有敌卡→攻击该卡
             self.log.push(format!("⚔ 我方 {} 攻击", short_card(&atk)));
             let dmg = match target {
                 Some(dcol) => self.card_hit_damage(SideK::Player, id, col, dcol, base, atk.is_starter()),
-                None => self.holder_hit_damage(SideK::Player, id, col, base),
+                None => self.holder_hit_damage(SideK::Player, id, col, base),  // §十二:442 同列对面无卡→攻击中线
             };
-            if let Some(dcol) = target {
+            if let Some(dcol) = target {  // §十二:443 我方攻击阶段伤害立即结算
                 let eb = self.boost_for(SideK::Enemy);
                 if let Some(def) = self.e_front[dcol].as_mut() {
-                    def.hp -= dmg;
-                    def.flame += dmg + eb;
+                    def.hp -= dmg;  // §十二:444 目标数值降低
+                    def.flame += dmg + eb;  // §十二:445 目标业火值 += 伤害
                 }
                 self.dealt_this_turn += dmg;
                 self.log.push(format!("  → 敌第{}列受{dmg}", dcol + 1));
             } else {
                 self.dealt_this_turn += dmg;
-                self.damage_enemy_holder(dmg, Some(col), HolderHit::Direct);
+                self.damage_enemy_holder(dmg, Some(col), HolderHit::Direct);  // §十二:442 直击中线→敌方持业者掉血
             }
-            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Player);
+            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Player);  // §十二:447 攻击时自动触发特性+技能
             let atk_dead = atk.hp <= 0;
             self.p_front[col] = Some(atk);
             if let Some(dcol) = target {
@@ -816,7 +816,7 @@ impl Battle {
                     }
                 }
             }
-            if atk_dead {
+            if atk_dead {  // §十二:449 攻击后死亡不影响下一张（for 继续）
                 let a = self.p_front[col].take().unwrap();
                 self.on_death(a, SideK::Player, Some(col), DeathCause::Battle);
             }
@@ -837,7 +837,7 @@ impl Battle {
         if self.boss.is_some() {
             crate::boss::run(self);
         } else {
-            crate::ai::run(self);
+            crate::ai::run(self);  // §十二:455 敌方回合 AI 行动入口
         }
         self.enemy_resolve_turn_end();
     }
@@ -847,12 +847,12 @@ impl Battle {
     pub fn enemy_resolve_turn_end(&mut self) {
         self.enemy_attack_phase();
         self.enemy_settle();
-        self.enemy_advance();
+        self.enemy_advance();  // §十二:459 推进阶段；§十二:488 前排被击杀后由下一次推进补上
         self.starter_turn_end(SideK::Enemy);
     }
 
     fn enemy_attack_phase(&mut self) {
-        let order = self.row_seq_order(SideK::Enemy, Row::Front);
+        let order = self.row_seq_order(SideK::Enemy, Row::Front);  // §十二:458 所有可攻击卡依次攻击；§十二:462 E5-E8 每张
         let mut card_d: Vec<(usize, i32)> = Vec::new();
         let mut candle_d: i32 = 0;
         for sq in order {
@@ -864,20 +864,20 @@ impl Battle {
             let tr = atk.def.tr;
             let base = atk.hp;
             let id = atk.id;
-            let target = self.pick_target(SideK::Enemy, col, tr);
+            let target = self.pick_target(SideK::Enemy, col, tr);  // §十二:463 同列对面有我方卡→攻击该卡
             self.log.push(format!("⚔ 敌方 {} 攻击", short_card(&atk)));
             match target {
                 Some(dcol) => {
-                    // 伤害累积（攻击时点即时计算攻击+受伤修正，不立即扣血/业火）
+                    // 伤害累积（攻击时点即时计算攻击+受伤修正，不立即扣血/业火）§十二:465 伤害累积不立即结算；§十二:467 业火值此时暂不增加。
                     let dmg = self.card_hit_damage(SideK::Enemy, id, col, dcol, base, atk.is_starter());
                     card_d.push((dcol, dmg));
                 }
                 None => {
                     let dmg = self.holder_hit_damage(SideK::Enemy, id, col, base);
-                    candle_d += dmg;
+                    candle_d += dmg;  // §十二:464 同列无卡→打中线，累积到我方持业者
                 }
             }
-            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Enemy);
+            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Enemy);  // §十二:466 攻击时触发的特性/技能立即生效
             let atk_dead = atk.hp <= 0;
             self.e_front[col] = Some(atk);
             if atk_dead {
@@ -886,7 +886,7 @@ impl Battle {
             }
             self.check_all_triggers();
         }
-        self.pending_card_d = card_d;
+        self.pending_card_d = card_d;  // §十二:465 累积额留到回合末统一结算才落地
         self.pending_candle_d = candle_d;
     }
 
@@ -897,43 +897,43 @@ impl Battle {
     /// §廿二:953 超额部分按我方攻击顺序分配，优先攻击敌方卡牌、无卡则攻击敌方持业者（`distribute_excess`）；
     /// §廿二:943 我方烛尽的同一结算里敌方烛也已尽 → 平局（双方同时致命不判一方胜）。
     fn enemy_settle(&mut self) {
-        let d = std::mem::take(&mut self.pending_candle_d);
+        let d = std::mem::take(&mut self.pending_candle_d);  // §十二:470 统一结算先算我方持业者受到的总伤害 D
         if d > 0 && self.over.is_none() {
-            if d >= self.p_candle && self.rollback_left > 0 {
-                let a = self.dealt_this_turn;
-                let remain = (d - a).max(0);
-                let excess = (a - d).max(0);
+            if d >= self.p_candle && self.rollback_left > 0 {  // §十二:471 D ≥ 当前蜡烛长度 → 触发伤害回滚
+                let a = self.dealt_this_turn;  // §十二:472 A＝我方本回合攻击阶段已打出的伤害总和
+                let remain = (d - a).max(0);  // §十二:473 剩余伤害 = max(0, D - A)
+                let excess = (a - d).max(0);  // §十二:474 超额伤害 = max(0, A - D)
                 self.rollback_left -= 1;
                 self.karma_penalty_next = 1;
-                self.p_candle -= remain;
+                self.p_candle -= remain;  // §十二:475 回滚后蜡烛减短＝剩余伤害
                 self.log.push(format!(
                     "[红光亮起·伤害回滚 余{}] D={d} A={a} → 剩余{remain}削烛（我方蜡烛剩 {}）",
                     self.rollback_left, self.p_candle
                 ));
                 if excess > 0 {
-                    self.distribute_excess(excess);
+                    self.distribute_excess(excess);  // §十二:476 超额伤害另行分配
                 }
             } else {
                 self.p_candle -= d;
                 self.log.push(format!("我方蜡烛 -{d}（剩 {}）", self.p_candle));
             }
-            if self.p_candle <= 0 && self.over.is_none() {
+            if self.p_candle <= 0 && self.over.is_none() {  // §十二:496 持业者蜡烛燃尽 → 游戏结束
                 self.log.push("我方烛尽…".into());
                 self.over = Some(if self.enemy_candle_ref() <= 0 { Outcome::Draw } else { Outcome::PlayerLose });
             }
         }
-        // 统一结算累积卡牌伤害：先数值降低，后业火增加
+        // 统一结算累积卡牌伤害：先数值降低，后业火增加§十二:477 统一结算＝目标数值降低 + 业火值增加。
         let card_d = std::mem::take(&mut self.pending_card_d);
         for (col, dmg) in &card_d {
             if let Some(def) = self.p_front[*col].as_mut() {
-                def.hp -= dmg;
+                def.hp -= dmg;  // §十二:477 数值降低
                 self.log.push(format!("  结算：{} 受{dmg} → hp {}", def.def.name, def.hp));
             }
         }
         let pb = self.boost_for(SideK::Player);
         for (col, dmg) in &card_d {
             if let Some(def) = self.p_front[*col].as_mut() {
-                def.flame += dmg + pb;
+                def.flame += dmg + pb;  // §十二:477 业火值增加
             }
         }
         for col in 0..4 {
@@ -945,10 +945,10 @@ impl Battle {
                 }
             }
         }
-        self.check_all_triggers();
+        self.check_all_triggers();  // §十二:478 结算后业火 ≥ 阈值 → 触发特性
     }
 
-    /// 超额伤害：按我方攻击顺序轮转，每名存活攻击者至多分配其当前数值点。
+    /// 超额伤害：按我方攻击顺序轮转，每名存活攻击者至多分配其当前数值点。§十二:476 按我方攻击顺序依次分配，优先敌方卡牌、无卡则打敌方持业者。
     fn distribute_excess(&mut self, mut excess: i32) {
         let order = self.attack_order.clone();
         let eb = self.boost_for(SideK::Enemy);
@@ -972,7 +972,7 @@ impl Battle {
                 }
                 progressed = true;
                 excess -= give;
-                if self.e_front[col].is_some() {
+                if self.e_front[col].is_some() {  // §十二:476 该列有敌卡→优先分配给卡牌
                     if let Some(def) = self.e_front[col].as_mut() {
                         def.hp -= give;
                         def.flame += give + eb;
@@ -983,7 +983,7 @@ impl Battle {
                         self.on_death(dd, SideK::Enemy, Some(col), DeathCause::Battle);
                     }
                 } else {
-                    self.damage_enemy_holder(give, Some(col), HolderHit::Excess(give));
+                    self.damage_enemy_holder(give, Some(col), HolderHit::Excess(give));  // §十二:476 该列无卡→攻击敌方持业者
                 }
             }
             if !progressed {
@@ -1031,13 +1031,13 @@ impl Battle {
         }
     }
 
-    /// §廿二:963 推进＝单卡、按列独立：只有前排空的列才把该列后排顶上来，每列每次至多1张。
+    /// §廿二:963 推进＝单卡、按列独立：只有前排空的列才把该列后排顶上来，每列每次至多1张。§十二:482 单卡推进按列独立结算；§十二:483 每列各判一次。
     fn enemy_advance(&mut self) {
         for col in 0..4 {
-            if self.e_front[col].is_none() {
-                if let Some(c) = self.e_back[col].take() {
+            if self.e_front[col].is_none() {  // §十二:484 前排空→后排推进；§十二:485 前排有卡→不推进
+                if let Some(c) = self.e_back[col].take() {  // §十二:486 后排空→不推进；§十二:487 推进后 E1-E4 空出；§十二:489 每列后排仅 1 格⇒天然只推最靠近前排的那张
                     self.log.push(format!("敌方推进：第{}列后排 {} → 前排", col + 1, c.def.name));
-                    self.e_front[col] = Some(c);
+                    self.e_front[col] = Some(c);  // §十二:491 落到 E5-E8 即紧贴中线，没有再往前一步的路径
                 }
             }
         }
@@ -1056,13 +1056,13 @@ impl Battle {
             SideK::Player => &mut self.pf,
             SideK::Enemy => &mut self.ef,
         };
-        if flags.starter_gains >= 2 {
+        if flags.starter_gains >= 2 {  // §十二:452 开端回合末业力每关上限 2 次
             return;
         }
         flags.starter_gains += 1;
         match side {
             SideK::Player => {
-                self.p_karma += 1;
+                self.p_karma += 1;  // §十二:452 开端在场→我方获得 1 业力
                 self.log.push(format!("开端在场：我方业力+1（每关上限2，已用 {}/2）", self.pf.starter_gains));
             }
             SideK::Enemy => {
@@ -1077,7 +1077,7 @@ impl Battle {
     /// 死亡统一入口。去向路由（裁定7）：
     /// 开端 → 离场（每关固定发放，永不入堆）；自造牌 → 永久消失（§十:372）；
     /// 其余基础牌 → 弃牌堆，本关不再使用，下关并入继承堆（§廿二:949 使返还递减跨关可达）。
-    /// §廿二:961 亡语在本函数内即刻结算，调用方的 `check_all_triggers` 在其后 ⇒ 亡语先于特性。
+    /// §廿二:961 亡语在本函数内即刻结算，调用方的 `check_all_triggers` 在其后 ⇒ 亡语先于特性。§十二:494 数值≤0 与 §十二:495 越线共用本入口：亡语→业力＝费用→业火清零。
     /// §廿二:960 业火跨回合保留（没有任何按回合清空的路径），只在死亡这一处清零。
     pub fn on_death(&mut self, mut c: CardInst, side: SideK, col: Option<usize>, cause: DeathCause) {
         let devour = cause == DeathCause::Sacrifice
@@ -1101,7 +1101,7 @@ impl Battle {
                 if c.is_starter() {
                     2
                 } else {
-                    let pct = refund_pct(c.deaths);
+                    let pct = refund_pct(c.deaths);  // §十二:494 业力＝卡牌费用，按死亡返还递减
                     c.deaths += 1;
                     c.def.cost * pct / 100
                 }
@@ -1117,7 +1117,7 @@ impl Battle {
             short_card(&c),
             if side == SideK::Player { "我方" } else { "敌方" }
         ));
-        if let Some(col) = col {
+        if let Some(col) = col {  // §十二:494 触发亡语（若有）
             if c.def.tr == TraitKind::DeathRattleSameColFlame3 {
                 self.add_flame_col(side, col, 3, None);
             }
@@ -1127,7 +1127,7 @@ impl Battle {
                 }
             }
         }
-        c.flame = 0;
+        c.flame = 0;  // §十二:494 业火值清零
         c.seq = 0;
         c.placed_turn = i64::MIN;
         c.triggered_turn = i64::MIN;
@@ -1236,7 +1236,7 @@ impl Battle {
     }
 
     /// 攻击后追加结算。`col` = 目标列（直击中线时回退为攻击者列）——§八"攻击后对同列+1"锚定目标列。
-    fn attacker_aftermath(&mut self, atk: &mut CardInst, col: usize, side: SideK) {
+    fn attacker_aftermath(&mut self, atk: &mut CardInst, col: usize, side: SideK) {  // §十二:447/466 攻击时点的特性+技能触发
         let bo = self.boost_for(side);
         match atk.def.tr {
             TraitKind::SelfFlameOnAttack1 => atk.flame += 1 + bo,
@@ -1324,13 +1324,13 @@ impl Battle {
             if snap.hp <= 0 || snap.triggered_turn == turn || !is_threshold_trait(snap.def.tr) {
                 continue;
             }
-            let thr = self.effective_threshold(side, col, &snap);
+            let thr = self.effective_threshold(side, col, &snap);  // §十二:446 业火 ≥ 阈值才触发特性
             if snap.flame < thr {
                 continue;
             }
             {
                 let c = self.slot_mut(side, row, col).as_mut().unwrap();
-                c.flame -= thr;
+                c.flame -= thr;  // §十二:446 触发后业火值 -= 阈值
                 c.triggered_turn = turn;
             }
             let tr = snap.def.tr;

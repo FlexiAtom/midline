@@ -226,7 +226,7 @@ pub fn card_field_value(c: &CardInst) -> f64 {
     c.hp as f64 * 1.5 + (trait_value(c.def.tr) + sv) * 2.0
 }
 
-/// 放置得分（§廿:870）＝卡牌价值 + 本列威胁度×2（文档字面：本列，越大越优 → 裁定14）。
+/// 放置得分（§廿:870）＝卡牌价值 + 本列威胁度×2（文档字面：本列，越大越优 → 裁定14）。§十二:457 放置阶段＝评估放置得分后决定是否放置。
 fn placement_score_at(b: &Battle, idx: usize, col: usize) -> f64 {
     card_field_value(&b.enemy_hand[idx]) + col_threat(b, col) * 2.0
 }

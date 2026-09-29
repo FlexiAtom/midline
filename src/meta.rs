@@ -182,7 +182,7 @@ pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf
                     let ch = crate::boss::chapter_of(level);
                     println!("第{ch}章通关（Boss「{}」已灭）→ 第{}章解锁。", crate::boss::BossId::all()[ch as usize - 1].name(), ch + 1);
                 }
-                level += 1;
+                level += 1;  // §十二:505 进入下一关准备
             }
             _ => {
                 println!("本局终结于第{level}关。seed={seed} 可复现整局。");

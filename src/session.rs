@@ -76,7 +76,7 @@ pub fn run_level<H: Host>(host: &mut H, cfg: &LevelCfg, inherit: &mut Vec<CardIn
         return t;
     }
     host.snapshot_entry(cfg.level, inherit, *karma);
-    let mut b = host.new_battle(inherit, cfg.level);
+    let mut b = host.new_battle(inherit, cfg.level);  // §十二:418 进入战斗
     loop {
         host.board(&b);
         if let Some(out) = b.over {
@@ -86,7 +86,7 @@ pub fn run_level<H: Host>(host: &mut H, cfg: &LevelCfg, inherit: &mut Vec<CardIn
         let Some(line) = host.read() else {
             return Terminus::Quit { msg: Some("输入结束，退出。".to_string()) };
         };
-        if let Some(t) = battle_line(host, &mut b, &line) {
+        if let Some(t) = battle_line(host, &mut b, &line) {  // §十二:430 行动阶段不限时；§十二:436 重复 a/b 直至业力用完或无操作（献祭另受 §四:162 每回合1次约束）
             return t;
         }
     }
@@ -120,7 +120,7 @@ fn after_battle<H: Host>(
     karma: &mut i32,
     out: Outcome,
 ) -> Terminus {
-    host.log_tail(b);
+    host.log_tail(b);  // §十二:499 查看战果
     match out {
         Outcome::PlayerWin => host.write("胜：敌方烛尽（或蜡烛优势）。\n"),
         Outcome::PlayerLose => {
@@ -132,7 +132,7 @@ fn after_battle<H: Host>(
     if !cfg.has_next {
         return Terminus::Done(out);
     }
-    for l in crate::progress::collect_survivors(b, inherit) {
+    for l in crate::progress::collect_survivors(b, inherit) {  // §十二:503 自造牌带入下一关
         host.write(&format!("{l}\n"));
     }
     // §廿二:967 保留战斗结束时的业力进结算阶段（融合定价花它）；下一关的战斗业力由 `Battle::new`

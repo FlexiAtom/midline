@@ -79,7 +79,7 @@ pub fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str) -> Result<
 /// §廿二:947 继承堆上限 10 张，超出弃最早入堆的牌（永久消失）。
 /// 幸存者回继承堆（手牌+堆底+场上），上限10，超出弃最早。
 /// 返回那些"被上限挤出去"的牌该显示的文案——本层不打印，打印归调用方。
-pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<String> {
+pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<String> {  // §十二:503 存活牌收进继承堆＝带入下一关
     let mut out = Vec::new();
     let mut survivors = b.battle_survivors();
     survivors.sort_by_key(|c| c.id);

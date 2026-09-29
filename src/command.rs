@@ -138,7 +138,7 @@ pub fn parse(line: &str) -> Command<'_> {
         ("sh", Some(idx), None, None) => Command::SacrificeHand { hand_idx: parse_index(idx) },
         ("di", _, _, _) => Command::DrawInherit,
         ("ds", _, _, _) => Command::DrawStarter,
-        ("e", _, _, _) => Command::EndTurn,
+        ("e", _, _, _) => Command::EndTurn,  // §十二:437「结束回合」的命令词
         ("l", _, _, _) => Command::ShowLog,
         ("b", _, _, _) => Command::ShowDossier,
         ("q", _, _, _) => Command::Quit,
@@ -155,7 +155,7 @@ pub fn execute(b: &mut Battle, cmd: Command<'_>) -> Exec {
         Command::SacrificeHand { hand_idx } => b.player_sacrifice_hand(hand_idx),
         Command::DrawInherit => b.action_draw(false),
         Command::DrawStarter => b.action_draw(true),
-        Command::EndTurn => {
+        Command::EndTurn => {  // §十二:437 结束回合→我方攻击阶段
             b.end_player_turn();
             Ok(())
         }
@@ -236,15 +236,15 @@ pub fn execute_settle(
 ) -> SettleStep {
     let one = |s: String| vec![s];
     match cmd {
-        SettleCommand::Go => SettleStep::Go,
+        SettleCommand::Go => SettleStep::Go,  // §十二:418 `go`＝离开准备阶段进入战斗
         SettleCommand::Quit => SettleStep::Quit,
         SettleCommand::Blank => SettleStep::Stay(Vec::new()),
         SettleCommand::Unknown(w) => SettleStep::Stay(one(format!("✖ 未知命令：{w}"))),
-        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {
+        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）
             Ok(msg) => SettleStep::Stay(one(format!("✓ {msg}"))),
             Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
         },
-        SettleCommand::Drop(i) => {
+        SettleCommand::Drop(i) => {  // §十二:417 管理继承堆·弃置；§十二:502 结算阶段同一动作
             if i < inherit.len() {
                 let c = inherit.remove(i);
                 SettleStep::Stay(one(format!("弃置 {}（进弃牌堆，本关不再使用；自造弃牌永久消失）", short_card(&c))))
@@ -252,7 +252,7 @@ pub fn execute_settle(
                 SettleStep::Stay(one("✖ 下标无效".into()))
             }
         }
-        SettleCommand::Move { from, to } => {
+        SettleCommand::Move { from, to } => {  // §十二:417 管理继承堆·调整；§十二:502 结算阶段同一动作
             if from < inherit.len() && to < inherit.len() {
                 let c = inherit.remove(from);
                 inherit.insert(to, c);
@@ -261,7 +261,7 @@ pub fn execute_settle(
                 SettleStep::Stay(one("✖ 下标无效".into()))
             }
         }
-        SettleCommand::Up { idx, kind } => {
+        SettleCommand::Up { idx, kind } => {  // §十二:501 结算阶段的卡牌升级（可选）
             if !post_battle {
                 return SettleStep::Stay(one("✖ 升级是通关奖励，仅结算阶段可用".into()));
             }
@@ -304,7 +304,7 @@ pub fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
 
 /// 一整个「继承堆清单 + 提示」文本块（每行自带换行）。调用方接 `> ` 提示符。
 /// 它是逐字搬来的：改前三段 `println!` 的顺序、括号、全角冒号一个字没动。
-pub fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {
+pub fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆
     let mut s = format!("继承堆（{}张）：\n", inherit.len());
     for (i, c) in inherit.iter().enumerate() {
         s.push_str(&inherit_line(i, c));
