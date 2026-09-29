@@ -238,7 +238,10 @@
 //!     §十八 39 卡 **漏 0／多 0／数值不符 0**；§十二 65 已实现／3 部分／2 未实现／30 非规则行；§十五 16/2/2；
 //!     §十六 11/1/8；§八 技能池 12↔12 一一对应。⇒ 规则层几乎全落地，缺口集中在**呈现层**（render.rs 只有"焰N/阈值"
 //!     纯数字，无百分比、无色档、无震屏，全仓无音频）与两处真校验缺失（§二:47-48「后排先放」只在 `ai.rs` 候选生成
-//!     生效、引擎与 Boss 不查；§一:17 成就+每日奖励零实现）。未实现清单与 6 条待人裁都在
+//!     生效、引擎与 Boss 不查；§一:17 成就+每日奖励零实现）。**D3 已落**：这 **17** 条真未实现的文档行现在以
+//!     `NOT_IMPLEMENTED` 债表的形式住在下面的锚点机检里（呈现层 14／规则层 2／豁免改登记 1，逐条带原文、证据与去处，
+//!     偿一条就当场红）。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，本表以文档实测为准。
+//!     计划、读数与 6 条待人裁都在
 //!     `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`，本处只登记口径。
 //!     - 本章**不能只查锚点存在**：三行开端（774/791/808）逐字节相同、代码里是同一个 `STARTER`，只查锚点会让
 //!       1 个定义满足 3 行必检＝假绿。故新增 `every_card_row_of_section18_is_anchored_back_and_matches_field_by_field`：
@@ -678,11 +681,11 @@ mod anchor_tests {
         assert!(bad.is_empty(), "许可证头不一致：\n{}", bad.join("\n"));
     }
 
-    #[test]
-    fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
-        let Some(lines_s) = doc_or_skip() else { return };
-        let lines: Vec<&str> = lines_s.iter().map(String::as_str).collect();
-        // 章标题表：编号必须严格递增，否则文中任何「一、二」式散文都会被误认成章节头。
+    /// 章头表与"某文档行属第几章"的判据，正向锚点机检与未实现债表**共用这一份**。
+    /// 编号必须严格递增，否则文中任何「一、二」式散文都会被误认成章节头。
+    /// 为什么摘出来：两处各写一遍章号映射，一旦 `cn2int` 少一支（`廿→20` 就是这么缺过一次的），
+    /// 两边会**朝不同方向**错，而"债条归属第几章"这种断言恰恰要靠两边同错才算成立。
+    fn doc_sections(lines: &[&str]) -> impl Fn(u32) -> Option<u32> {
         let mut heads: Vec<(u32, u32)> = Vec::new();
         for (i, l) in lines.iter().enumerate() {
             let Some((num, _)) = l.trim().split_once('、') else { continue };
@@ -691,7 +694,14 @@ mod anchor_tests {
                 heads.push((v, (i + 1) as u32));
             }
         }
-        let section_at = |line: u32| heads.iter().filter(|(_, at)| *at <= line).map(|(v, _)| *v).last();
+        move |line: u32| heads.iter().filter(|(_, at)| *at <= line).map(|(v, _)| *v).last()
+    }
+
+    #[test]
+    fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
+        let Some(lines_s) = doc_or_skip() else { return };
+        let lines: Vec<&str> = lines_s.iter().map(String::as_str).collect();
+        let section_at = doc_sections(&lines);
 
         let mut bad: Vec<String> = Vec::new();
         for fp in src_rs_files() {
@@ -709,7 +719,7 @@ mod anchor_tests {
                     if md || quick {
                         if let Some((n, end)) = digits_at(&cs, i + 3) {
                             let claim = if quick { Some(23) } else { None };
-                            check(&mut bad, &name, idx + 1, n, claim, &lines, section_at);
+                            check(&mut bad, &name, idx + 1, n, claim, &lines, &section_at);
                             i = end;
                             continue;
                         }
@@ -725,7 +735,7 @@ mod anchor_tests {
                             j += 1;
                         }
                         if let (Some(claim), Some((n, end))) = (claim, digits_at(&cs, j)) {
-                            check(&mut bad, &name, idx + 1, n, Some(claim), &lines, section_at);
+                            check(&mut bad, &name, idx + 1, n, Some(claim), &lines, &section_at);
                             i = end;
                             continue;
                         }
@@ -797,6 +807,14 @@ mod anchor_tests {
         referenced
     }
 
+    /// 反向覆盖机检的**唯一人工入口**（§廿二 表体里不算规则的行），逐条必须写理由。
+    /// 提到模块级而不藏在测试函数里：债表机检要拿它做交叉核对——同一条缺口不能既躺在排除表里
+    /// 「不算规则」、又躺在债表里「算债」，两头下注等于两头都不负责。
+    const NOT_A_RULE: &[(usize, &str)] = &[
+        (970, "商业模式 挂Github——不是游戏规则，是发行渠道备注"),
+        (971, "激励系统 通关进度+收集+成就+每日奖励——§廿二 这一行只是 §一:17 的复述，同一缺口不在排除表里洗白，已挂成有去处的显式债（见 NOT_IMPLEMENTED）"),
+    ];
+
     /// **反向**覆盖机检（裁定26）：§廿二 边界表的每一行，src/ 里必须有至少一个锚点指回它。
     /// 正向机检只问"已有锚点指对了吗"，天生问不出"整条规则没落地"——md:945（死亡后业火达阈值不触发特性）
     /// 就是这么漏掉的：实现早在 `try_trigger_col` 的 `hp <= 0` 闸里，锚点一个没有，正向一路绿灯。
@@ -825,11 +843,7 @@ mod anchor_tests {
             }
             rows.push(head + 2 + off);
         }
-        // 人工排除表（机检的唯一自由入口，逐条写理由）：
-        const NOT_A_RULE: &[(usize, &str)] = &[
-            (970, "商业模式 挂Github——不是游戏规则，是发行渠道备注"),
-            (971, "激励系统 通关进度+收集+成就+每日奖励——规则层范围外（存档包只存进度，收集/成就/金币一个字节不存）"),
-        ];
+        // 人工排除表见模块级 `NOT_A_RULE`（债表机检要交叉核对它）。
         let excluded: Vec<usize> = NOT_A_RULE.iter().map(|(n, _)| *n).collect();
         let required: Vec<usize> = rows.iter().copied().filter(|n| !excluded.contains(n)).collect();
         assert!(required.len() >= 25, "§廿二 表体至少 25 行，实测 {} 行 ⇒ 结构推导失效", required.len());
@@ -917,6 +931,248 @@ mod anchor_tests {
         assert!(bad.is_empty(), "{} 处 §十八 卡表与文档不符：\n{}", bad.len(), bad.join("\n"));
     }
 
+    /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
+    /// 规则层欠的是校验（引擎收了它不该收的走法）。后者会让同一局打出不同结果，前者不会。
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Tier {
+        Presentation,
+        Rule,
+        /// 曾经躺在 `NOT_A_RULE` 里当"规则层范围外"，按裁定26 改挂成有去处的债。
+        Washed,
+    }
+
+    impl Tier {
+        fn label(self) -> &'static str {
+            match self {
+                Tier::Presentation => "呈现层·设施缺失",
+                Tier::Rule => "规则层·真校验缺失",
+                Tier::Washed => "豁免改登记",
+            }
+        }
+    }
+
+    /// 一条**显式债**：文档里有这一行，代码里没有它。
+    struct Debt {
+        /// 文档行号（1 起）。
+        doc: usize,
+        /// 该行所属章——与 `row` 一起把条目钉死在文档内容上，行号漂移当场红。
+        section: u32,
+        /// 文档该行 `trim()` 后的**逐字**原文。
+        row: &'static str,
+        tier: Tier,
+        /// 现状证据：现有的闸只管到哪一步，为什么这一行不算已落地。
+        evidence: &'static str,
+        /// 去处：偿这条债要动的位置/设施。**没有去处的债＝把缺口换个地方再洗一次**。
+        dest: &'static str,
+    }
+
+    /// 未实现债表（`reverse-coverage-multi-chapter` 的 D3）。逐条按"文档行 + 原文 + 证据 + 去处"录，
+    /// 读数由本帧现取：呈现层 14 行（§十五 665/666 ＋ §十六 702/705/706/707/708/709/715/716/717/718/721
+    /// ＋ §十二 479；704 是列头「状态 表现」，属非规则行不入债表）、规则层 2 行（§二 47/48）、
+    /// 豁免改登记 1 行（§一 17）＝**17 条**。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，
+    /// 本表以文档实测为准。
+    const NOT_IMPLEMENTED: &[Debt] = &[
+        Debt {
+            doc: 17,
+            section: 1,
+            row: "激励 通关进度 + 卡牌收集 + 成就系统 + 每日挑战奖励",
+            tier: Tier::Washed,
+            evidence: "存档只落进度与每日完成位，成就/卡牌收集/奖励三样一个字段都没有；文档也没给出成就条目表",
+            dest: "save.rs 扩表 + 呈现层展示；前置是文档先给成就与奖励清单（已挂 pool/）",
+        },
+        Debt {
+            doc: 47,
+            section: 2,
+            row: "E1-E4 ✅（先放） ❌",
+            tier: Tier::Rule,
+            evidence: "敌方放置闸 battle.rs:663-683 只查业力／同名牌／本格占用，不查「该列后排还空着」；这条只在 ai.rs 的候选生成里成立",
+            dest: "已按自决 #4（reverse-coverage-multi-chapter 实现侧自决第 4 行）定成 AI 行为约束、不加引擎闸；缺口照挂不洗白。若设计回话改判，开工点在 pool/back-row-placement-gate，闸位 battle.rs::enemy_place_legal",
+        },
+        Debt {
+            doc: 48,
+            section: 2,
+            row: "E5-E8 ✅（后排满后） ✅",
+            tier: Tier::Rule,
+            evidence: "上一条同一道闸——「后排满后才能放前排」没有任何引擎校验，敌方（含 Boss）可直接往前排落子",
+            dest: "与上一条同一道闸、同一条自决 #4：不加引擎闸。改判时与 47 一次改两处，闸位 battle.rs::enemy_place_legal，开工点 pool/back-row-placement-gate",
+        },
+        Debt {
+            doc: 479,
+            section: 12,
+            row: "7. 红光渐渐消失",
+            tier: Tier::Presentation,
+            evidence: "battle.rs:910 的回滚日志打了「红光亮起」四个字，但没有「渐渐消失」这一步——全仓没有时间轴/渐隐设施",
+            dest: "呈现层壳的一帧过渡；CLI 侧不重复计账（日志字串已在）",
+        },
+        Debt {
+            doc: 665,
+            section: 15,
+            row: "触发时：屏幕周围变红",
+            tier: Tier::Presentation,
+            evidence: "render.rs 全文只输出字符棋盘，没有「屏幕周围」这个区域概念，更没有按事件染红",
+            dest: "TUI/2D 壳的屏幕后处理；CLI 无对应物",
+        },
+        Debt {
+            doc: 666,
+            section: 15,
+            row: "回滚完成后：红光渐渐消失（约0.5~1秒过渡）",
+            tier: Tier::Presentation,
+            evidence: "同上，且这一条带时长（0.5~1 秒渐退）——全仓无时间轴设施",
+            dest: "壳的动画层；时长区间文档已给，可直接用",
+        },
+        Debt {
+            doc: 702,
+            section: 16,
+            row: "百分比 = 当前业火值 / 阈值。颜色随百分比动态变化。",
+            tier: Tier::Presentation,
+            evidence: "render.rs 的业火条是「焰N/阈值」两个纯数字，无百分比",
+            dest: "render.rs：现成的 N/M 相除即可，这一条 CLI 就能偿",
+        },
+        Debt {
+            doc: 705,
+            section: 16,
+            row: "0-30% 暗红色，火焰微弱",
+            tier: Tier::Presentation,
+            evidence: "四档色带（暗红/橙红/亮橙/金红）在 src/ 全文 0 命中",
+            dest: "CLI 可偿一半（四档字符条），真颜色留给壳",
+        },
+        Debt {
+            doc: 706,
+            section: 16,
+            row: "30-60% 橙红色，火焰稳定",
+            tier: Tier::Presentation,
+            evidence: "同上——色档判定与配色都不存在",
+            dest: "CLI 四档字符条 + 壳的颜色表",
+        },
+        Debt {
+            doc: 707,
+            section: 16,
+            row: "60-90% 亮橙色，火焰旺盛",
+            tier: Tier::Presentation,
+            evidence: "同上——色档判定与配色都不存在",
+            dest: "CLI 四档字符条 + 壳的颜色表",
+        },
+        Debt {
+            doc: 708,
+            section: 16,
+            row: "90-99% 金红色，火焰跳动",
+            tier: Tier::Presentation,
+            evidence: "同上；「跳动」还是一帧动画，render.rs 没有帧序列概念",
+            dest: "壳（颜色档 + 动画）",
+        },
+        Debt {
+            doc: 709,
+            section: 16,
+            row: "100% 白金色，火焰爆发，屏幕微震",
+            tier: Tier::Presentation,
+            evidence: "白金色与震屏设施都没有，且文档未给震幅/时长",
+            dest: "壳的屏幕后处理；震幅与时长待人给数，不自行取默认值",
+        },
+        Debt {
+            doc: 715,
+            section: 16,
+            row: "1. 业火条火焰由橙红转为紫红",
+            tier: Tier::Presentation,
+            evidence: "特性触发只有一行日志，无「橙红→紫红」的过渡态",
+            dest: "壳的过渡动画",
+        },
+        Debt {
+            doc: 716,
+            section: 16,
+            row: "2. 卡牌爆发出紫红色火焰",
+            tier: Tier::Presentation,
+            evidence: "同上：src/ 全文无「紫红」",
+            dest: "壳的爆发特效",
+        },
+        Debt {
+            doc: 717,
+            section: 16,
+            row: "3. 屏幕四周出现玻璃裂纹",
+            tier: Tier::Presentation,
+            evidence: "「裂纹」在 src/ 全文 0 命中",
+            dest: "2D/3D 壳的覆盖层；render.rs 不出图形，CLI 无等价物",
+        },
+        Debt {
+            doc: 718,
+            section: 16,
+            row: "4. 裂纹扩散，伴随碎裂音效",
+            tier: Tier::Presentation,
+            evidence: "全仓无一行音频代码（「音效」0 命中），文档也未给音效资源名与时长",
+            dest: "2D/3D 壳 + 资源清单待人给",
+        },
+        Debt {
+            doc: 721,
+            section: 16,
+            row: "7. 玻璃碎片消散，火焰回落",
+            tier: Tier::Presentation,
+            evidence: "「碎片」0 命中——裂纹既不存在，也就没有消散",
+            dest: "壳的粒子层（与 md:717 同一套设施）",
+        },
+    ];
+
+    /// 未实现债表的机检（裁定26 的同族要求：缺口不许靠排除表洗白，必须挂成**有去处的显式债**）。四条：
+    /// ① 每条目指向的文档行**逐字**仍是登记时那一行、且归属同一章——行号漂移当场红，债条不会悄悄换了对象；
+    /// ② 机检可见面上**不许有任何锚点指回**这些行：谁实现并挂上锚点，本测就当场红"债已偿，请删条目"，
+    ///    这是"债只减不增"唯一能被机器看见的形式；
+    /// ③ 每条必须写去处，且去处要点名文件（`.rs`）或点名壳——"以后再说"不是去处；
+    /// ④ 同一条文档行不许既躺在 `NOT_A_RULE`（不算规则）又躺在债表（算债），两头下注等于两头都不负责。
+    /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
+    /// **诚实盲区（登记，不在本测解）**：这张表是**手录**的。机器能证它没过期、不自我洗白，证不了它**完整**——
+    /// 一行没实现、又没被记进来的文档行，本测照样绿。补这个盲区的前置是按章推导"规则行集合"（D2 的第三步），
+    /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
+    #[test]
+    fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {
+        let Some(lines_s) = doc_or_skip() else { return };
+        let lines: Vec<&str> = lines_s.iter().map(String::as_str).collect();
+        let section_at = doc_sections(&lines);
+        let referenced = referenced_doc_lines();
+        let mut bad: Vec<String> = Vec::new();
+        let mut prev: usize = 0;
+        for d in NOT_IMPLEMENTED {
+            let tag = format!("债条目 md:{}「{}」（{}）", d.doc, d.row, d.tier.label());
+            if d.doc <= prev {
+                bad.push(format!("{tag}：未按文档行号严格升序（上一条 md:{prev}）——重复或乱序会让「还剩几条债」数不出来"));
+            }
+            prev = d.doc;
+            match lines.get(d.doc - 1) {
+                None => bad.push(format!("{tag}：越界，全文仅 {} 行", lines.len())),
+                Some(l) if l.trim() != d.row => bad.push(format!(
+                    "{tag}：文档该行现在是「{}」⇒ 债条指向的对象变了，先分清是文档改了措辞还是行号漂移",
+                    l.trim()
+                )),
+                Some(_) => {
+                    let got = section_at(d.doc as u32);
+                    if got != Some(d.section) {
+                        bad.push(format!("{tag}：登记写第 {} 章，实际归属第 {got:?}", d.section));
+                    }
+                }
+            }
+            if referenced.contains(&(d.doc as u32)) {
+                bad.push(format!(
+                    "{tag}：src/ 已有锚点指回 ⇒ 债已偿，请把这条删掉，并把条数与分档两个数字一起改小。登记的证据是「{}」——先确认那份实现真的覆盖了这一行",
+                    d.evidence
+                ));
+            }
+            if NOT_A_RULE.iter().any(|(n, _)| *n == d.doc) {
+                bad.push(format!("{tag}：同时躺在 NOT_A_RULE 里＝既「不算规则」又「算债」"));
+            }
+            if !(d.dest.contains(".rs") || d.dest.contains("壳")) {
+                bad.push(format!("{tag}：去处没点名文件也没点名壳：{}", d.dest));
+            }
+        }
+        assert!(bad.is_empty(), "未实现债表有 {} 处失效：\n{}", bad.len(), bad.join("\n"));
+        assert_eq!(
+            NOT_IMPLEMENTED.len(),
+            17,
+            "债表条数变了。偿了债 ⇒ 删条目并把本数字与下面的分档数一起改小；真要新增债 ⇒ 连同文档出处、证据、去处一起写"
+        );
+        let pres = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Presentation).count();
+        let rule = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Rule).count();
+        let washed = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Washed).count();
+        // 分档不许互相挪：把规则层挪进呈现层＝把"引擎收了它不该收的走法"说成"只是没画出来"，缺口的性质就变了。
+        assert_eq!((pres, rule, washed), (14, 2, 1), "债表应为 呈现层14／规则层2／豁免改登记1，实测 ({pres},{rule},{washed})");
+    }
+
     fn check(
         bad: &mut Vec<String>,
         file: &str,
@@ -924,7 +1180,7 @@ mod anchor_tests {
         n: u32,
         claim: Option<u32>,
         lines: &[&str],
-        section_at: impl Fn(u32) -> Option<u32>,
+        section_at: &dyn Fn(u32) -> Option<u32>,
     ) {
         let tag = format!("{file}:{line} → 文档行 {n}");
         if n as usize > lines.len() {
