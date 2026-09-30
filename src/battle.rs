@@ -195,7 +195,7 @@ impl Battle {
         let mk = |id: &mut u64, rng: &mut Rng, def: CardDef, skill: bool| -> CardInst {  // §廿三:998 卡牌＝固定特性(def.tr)＋随机附加技能，在这里合成
             let mut c = CardInst::new(*id, def);
             *id += 1;
-            if skill && !c.is_starter() {
+            if skill && !c.is_starter() {  // §五:183 技能 无——发牌处就跳过抽技能（开端天生不带技能）
                 let pool = Skill::list();
                 let s = pool[rng.below(pool.len())];
                 c.skills.push(s);
@@ -219,7 +219,7 @@ impl Battle {
                 c.placed_turn = i64::MIN;
                 c.triggered_turn = i64::MIN;
             }
-            // 开局手牌：继承堆不足3张 → 从基础牌堆补齐
+            // §五:191 开局手牌：继承堆不足3张 → 从基础牌堆补齐（文档那句括号的落点）
             if draw_pile.len() < 3 {
                 let mut pool: Vec<CardDef> = faction_cards(player_faction)[1..].to_vec();
                 rng.shuffle(&mut pool);
@@ -236,7 +236,7 @@ impl Battle {
         let p_starter = mk(&mut id, &mut rng, faction_cards(player_faction)[0], false);
         let e_starter = mk(&mut id, &mut rng, faction_cards(enemy_faction)[0], false);
 
-        let mut hand = vec![p_starter];  // §十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）
+        let mut hand = vec![p_starter];  // §十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）；§五:191 开局手牌＝开端＋3 张 ｜ §五:185 开端每关固定发放（不从堆里来）
         for _ in 0..3 {  // §十二:421 开局从继承堆抽 3 张（裁定11：按堆顶顺序取）；§廿三:992 开局手牌（固定开端＋3张，不经 manual_draws）
             if !draw_pile.is_empty() {
                 hand.push(draw_pile.remove(0)); // 开局手牌按继承堆顺序取（裁定11）
@@ -263,11 +263,11 @@ impl Battle {
                 enemy_faction.name()
             )],
             player_faction,
-            p_karma: 0,  // §十二:422 战斗开始业力 0；§十二:504 进入下一关重新起算；§廿三:982 业力是唯一资源，不自动恢复（回合开始无任何补给）
+            p_karma: 0,  // §十二:422 战斗开始业力 0；§十二:504 进入下一关重新起算；§廿三:982 业力是唯一资源，不自动恢复（回合开始无任何补给）；§五:193 战斗开始：业力 0
             e_karma: 0,
             p_candle: CANDLE_HP,  // §十四:590 我方持业者一侧的起点
             e_candle: CANDLE_HP,  // §十四:595 敌方持业者一侧的起点
-            p_front: Default::default(),  // §十二:423 战斗开始场上为空
+            p_front: Default::default(),  // §十二:423 战斗开始场上为空；§五:192 战斗开始：场上空
             e_back: Default::default(),
             e_front: Default::default(),
             hand,
@@ -595,7 +595,7 @@ impl Battle {
     /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
     /// §廿二:944 越线死亡统一走 `on_death(.., DeathCause::Cross)`：触发亡语、按死亡返还递减获得业力。
     fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
-        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力
+        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力；§五:198 开端放到 P1＝0 费、不消耗业力
         match side {
             SideK::Player => self.p_karma -= cost,
             SideK::Enemy => self.e_karma -= cost,
@@ -1080,13 +1080,13 @@ impl Battle {
             SideK::Player => &mut self.pf,
             SideK::Enemy => &mut self.ef,
         };
-        if flags.starter_gains >= 2 {  // §十二:452 开端回合末业力每关上限 2 次
+        if flags.starter_gains >= 2 {  // §十二:452 开端回合末业力每关上限 2 次；§五:200「每关最多 2 次」这道闸
             return;
         }
         flags.starter_gains += 1;
         match side {
             SideK::Player => {
-                self.p_karma += 1;  // §十二:452 开端在场→我方获得 1 业力
+                self.p_karma += 1;  // §十二:452 开端在场→我方获得 1 业力；§五:200 开端在场→我方回合结束 +1 业力
                 self.log.push(format!("开端在场：我方业力+1（每关上限2，已用 {}/2）", self.pf.starter_gains));
             }
             SideK::Enemy => {
@@ -1108,7 +1108,7 @@ impl Battle {
             && side == SideK::Player
             && self.boss_rule() == crate::boss::BossRule::DevourName;
         let gain = match cause {  // §廿三:983 死亡/献祭的业力收益只在这一处算，基数＝卡牌费用
-            DeathCause::Sacrifice => {  // §廿三:986 开端献祭定额 2 业力，不走递减（裁定1）
+            DeathCause::Sacrifice => {  // §廿三:986 开端献祭定额 2 业力，不走递减（裁定1）；§五:204 献祭开端 → 获得 2 业力（来源：特性）
                 if c.is_starter() {
                     2
                 } else if devour {
@@ -1122,7 +1122,7 @@ impl Battle {
                 }
             }
             DeathCause::Battle | DeathCause::Cross => {
-                if c.is_starter() {
+                if c.is_starter() {  // §五:182 特性第一子句「死亡获 2 业力」：自然死亡/越线也不走递减
                     2
                 } else {
                     let pct = refund_pct(c.deaths);  // §十二:494 业力＝卡牌费用，按死亡返还递减；§廿三:989 业力＝费用
@@ -1219,7 +1219,7 @@ impl Battle {
         v
     }
 
-    /// §九354：同名技能/特性效果按出现次数叠加（特性计1层）。
+    /// §九:354：同名技能/特性效果按出现次数叠加（特性计1层）。
     fn skill_count(cards: &[&CardInst], sk: Skill) -> i32 {
         cards.iter().filter(|x| x.hp > 0).flat_map(|x| x.skills.iter()).filter(|s| **s == sk).count() as i32
     }
@@ -1473,13 +1473,13 @@ impl Battle {
         }
     }
 
-    /// 跨关继承 = 上一关剩余：场上未阵亡 + 手牌 + 牌堆未抽 + 弃牌堆基础牌；开端不入堆（§五185/§十382）。
+    /// 跨关继承 = 上一关剩余：场上未阵亡 + 手牌 + 牌堆未抽 + 弃牌堆基础牌；开端不入堆（§五:185／§十:382）。
     pub fn battle_survivors(&mut self) -> Vec<CardInst> {
         let mut v = std::mem::take(&mut self.draw_pile);
         v.extend(std::mem::take(&mut self.hand));
         v.extend(self.p_front.iter_mut().map(|s| s.take()).flatten());
         v.extend(std::mem::take(&mut self.discard_pile));
-        v.retain(|c| !c.is_starter());
+        v.retain(|c| !c.is_starter());  // §五:185 入继承堆 ❌（这一行就是那个 ❌）
         v
     }
 }
@@ -2262,7 +2262,7 @@ mod rule_tests {
         assert_eq!(returned.flame, 0, "死亡业火清零");
         let before = b.p_karma;
         b.on_death(returned, SideK::Player, Some(0), DeathCause::Battle);
-        assert_eq!(b.p_karma - before, 2, "同一实例第二次死亡→50%（§三91行）");
+        assert_eq!(b.p_karma - before, 2, "同一实例第二次死亡→50%（§三:91 行）");
         assert_eq!(b.discard_pile.pop().unwrap().deaths, 2);
     }
 
@@ -2277,7 +2277,7 @@ mod rule_tests {
         let k0 = b.p_karma;
         b.on_death(fused, SideK::Player, Some(0), DeathCause::Battle);
         assert_eq!(b.p_karma, k0 + 3, "自造牌死亡返还照给（3费100%）");
-        assert!(b.discard_pile.is_empty(), "自造牌阵亡永久消失（§十372）");
+        assert!(b.discard_pile.is_empty(), "自造牌阵亡永久消失（§十:372）");
     }
 
     #[test]
@@ -2289,7 +2289,7 @@ mod rule_tests {
         b.on_death(c, SideK::Player, None, DeathCause::Sacrifice);
         assert_eq!(b.p_karma - k0, 4, "献祭全额");
         let d = &b.discard_pile[0];
-        assert_eq!(d.deaths, 1, "献祭不使死亡计数+1（返还互斥递减，§三100行）");
+        assert_eq!(d.deaths, 1, "献祭不使死亡计数+1（返还互斥递减，§三:100 行）");
     }
 
     #[test]

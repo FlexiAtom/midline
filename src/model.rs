@@ -497,13 +497,13 @@ pub struct CardDef {
     pub tr: TraitKind, // 特性（固定，卡牌自带）
 }
 
-pub const STARTER: CardDef = CardDef {  // §廿三:990 开端（0费/数值1/阈值4）；余下子句：免费放置 battle.rs:587、祭2业力 1088、在场每回合+1 1059、不可融合 progress.rs:35、不入继承堆 1457
+pub const STARTER: CardDef = CardDef {  // §廿三:990 开端（0费/数值1/阈值4）；§五:176 这张卡＝§五 那张表的本体（表体逐字段等值见 §五 推导器；旧注释里那几个裸行号已换成带锚的落点）
     name: "开端",
     faction: Faction::Ember,
-    cost: 0,
-    power: 1,
-    threshold: 4,
-    tr: TraitKind::Starter,
+    cost: 0, // §五:179 费用 0
+    power: 1, // §五:180 数值 1（文档同一行写「血量=伤害=1」⇒ 一个字段两处用，见 §七:265／§七:266）
+    threshold: 4, // §五:181 阈值 4
+    tr: TraitKind::Starter, // §五:182 特性＝四子句的类型标签；四子句各自的落点都带自己的锚（免费放置、献祭得 2、在场回合末 +1 且每关上限 2、死亡得 2）
 };
 
 /// 卡牌表（§十八:769）。索引 0 为开端（各阵营共用同一开端定义，三行开端逐字节相同）。

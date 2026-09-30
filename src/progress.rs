@@ -34,7 +34,7 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
         return Err("下标无效".into());
     }
     if inherit[main].is_starter() || inherit[sub].is_starter() {
-        // §九:363 开端不可融合——主牌、副牌**两侧都查**，且不论它此刻在手牌还是继承堆
+        // §九:363 开端不可融合——主牌、副牌**两侧都查**，且不论它此刻在手牌还是继承堆；§五:184 可融合 ❌（同一条规则的两种文档措辞）
         return Err("开端不可融合（无论在手牌还是继承堆）".into());
     }
     let price = (inherit[sub].def.cost - 1).max(0);  // §廿三:1001 融合费用＝副牌费用-1，最低 0；§九:326 §九:350 同一条规则的两种文档措辞（流程第 3 步／设计意图行）
@@ -50,7 +50,7 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
         // §九:332 技能＝主牌技能＋副牌技能：逐条 append，不去重、不折叠成集合
         m.skills.push(sk); // §九:352 §九:354 同名技能叠加（§九:357 那条 1+1=2 的等式就是它的落点）
     }
-    m.crafted = true; // 自造牌：任何离场永久消失（§十372）
+    m.crafted = true; // 自造牌：任何离场永久消失（§十:372）
     Ok(format!("{} 吸收副牌「{}」的{n}个技能 → {}", m.def.name, s.def.name, short_card(m)))
 }
 
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(inherit[0].def.cost, 3, "费用取主牌");
         assert_eq!(inherit[0].def.tr, tr_main, "特性取主牌——副牌特性不参与融合（§廿三:1002／§七:279）");
         assert_eq!(inherit[0].skills, vec![Skill::AtkSelfFlame1]);
-        assert!(inherit[0].crafted, "融合产物转自造（§十372）");
+        assert!(inherit[0].crafted, "融合产物转自造（§十:372）");
     }
 
     #[test]

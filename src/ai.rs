@@ -93,7 +93,7 @@ fn trace_turn(b: &mut Battle) {
         b.log.push("  AI 简单档：随机放置，不评估（§廿「简单」）→ 三类评分不适用".to_string());
         return;
     }
-    if b.e_karma == 0 && b.enemy_hand.iter().any(|c| c.is_starter()) {
+    if b.e_karma == 0 && b.enemy_hand.iter().any(|c| c.is_starter()) {  // §五:210 设计意图那句取舍在机器侧的落点：业力 0 且有开端就献祭＝选了「短期爆发」这一侧
         b.log.push(format!("  献祭条件1（§廿:893）命中：业力0且手有开端 → 献祭开端 {}", sac_labels(1 << SacReason::StarterAtZero as u8)));
     }
     b.log.push(format!("  放置评分（§廿:870 数值×1.5+特性/技能×2+本列威胁×2）：{}", if best_place(b).is_some() { "候选↓" } else { "无可负担可放牌" }));

@@ -592,7 +592,7 @@ mod meta_tests {
             4 + (hand_before - 1) + pile_before + 1,
             "剩余 = 场上+手牌+牌堆+弃牌堆，开端被过滤（-1），弃牌堆回归（+1）"
         );
-        assert!(survivors.iter().all(|c| !c.is_starter()), "§五185：开端不入继承堆");
+        assert!(survivors.iter().all(|c| !c.is_starter()), "§五:185：开端不入继承堆");
         assert!(b.hand.is_empty() && b.draw_pile.is_empty() && b.discard_pile.is_empty());
     }
 
