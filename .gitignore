@@ -21,3 +21,6 @@
 # 本协议入口与工具会话目录（不入库）
 AGENTS.md
 .qoder
+
+# 电池预检的临时副本（带 PID，退出即删；防被 SIGKILL 后残留）
+scripts/.battery-preflight.*.sh

@@ -17,8 +17,11 @@
 # 用法：python3 scripts/coverage-probe.py [中线.MD 路径]｜不给则取 $MIDLINE_DOC，再退到 ~/中线.MD
 # 进度盘点探针：把 src/*.rs 里所有文档锚点（§X:N 与 md:N／速查:N）按**文档行区间**归到章，
 # 再与挂债数、推导器有无并列。
-# 面口径与 src/model.rs 的 referenced_doc_lines() 一致：跳过 //! 行；
-# 遇 #[cfg(test)]+mod 或 mod anchor_tests 截断＝其后算测试面。
+# 面口径与 src/model.rs 的 production_face() **同规则、独立实现**：跳过 //! 行；遇 `#[cfg(test)]`+`mod`
+# 或 `mod anchor_tests` 截断＝其后全算测试面；`#[cfg(test)]` 挂在**普通 item** 上时只跳那一个 item 的区间
+# （按"与属性行同缩进的收尾"定界）。这一条是 2026-10-01 §九 帧补的：探针当时只认 `+mod`，于是把解析器
+# 那些测试专用 item 里的 `/// md:311` 也算成生产锚点——一章的锚点数虚高，盲区就从这张表上看不见了。
+# 两边各数一遍是刻意的：同一串字两套口径，偏移只会露出来，不会互相圆过去。
 import glob, re, os, sys
 
 CN = '零一二三四五六七八九'
@@ -50,16 +53,59 @@ def chapter_of(lineno):
     return 0
 
 prod, testf = {}, {}
-for p in sorted(glob.glob('src/*.rs')):
-    ls = [x.strip() for x in open(p, encoding='utf8').read().split('\n')]
-    face = 'prod'
-    for i, t in enumerate(ls):
+item_tested = 0  # 只数「测试专用 item 被跳掉」那部分锚点出现次数：口径改动的可观测副作用，与 mod 截断不同源
+
+
+def indent_of(s):
+    return len(s) - len(s.lstrip())
+
+
+def face_of(raw):
+    """每行标 prod／test。规则同 production_face：看见测试 mod 就到此为止；看见挂在普通 item 上的
+    #[cfg(test)] 只跳那一个 item——按与属性行同缩进的收尾（'}' 或无花括号时的 ';' 行）定界。"""
+    ls = [x.strip() for x in raw]
+    face = ['prod'] * len(ls)
+    i, tail = 0, False
+    while i < len(ls):
+        t = ls[i]
         nxt = next((x for x in ls[i + 1:] if x), '')
-        if face == 'prod' and ((t.startswith('#[cfg(test)]') and nxt.startswith('mod ')) or t.startswith('mod anchor_tests')):
-            face = 'test'
+        if t.startswith('mod anchor_tests') or (t.startswith('#[cfg(test)]') and nxt.startswith('mod ')):
+            tail = True
+            break
+        if t.startswith('#[cfg(test)]'):
+            ind, j, opened = indent_of(raw[i]), i + 1, False
+            while j < len(raw):
+                lt = raw[j].strip()
+                if indent_of(raw[j]) == ind and lt:
+                    if lt == '}':
+                        j += 1
+                        break
+                    if not opened and lt.endswith(';'):
+                        j += 1
+                        break
+                    opened |= '{' in lt
+                j += 1
+            for k in range(i, min(j, len(ls))):
+                face[k] = 'item'
+            i = j
+            continue
+        i += 1
+    if tail:
+        for k in range(i, len(ls)):
+            face[k] = 'tail'
+    return face
+
+
+for p in sorted(glob.glob('src/*.rs')):
+    raw = open(p, encoding='utf8').read().split('\n')
+    ls = [x.strip() for x in raw]
+    face = face_of(raw)
+    for i, t in enumerate(ls):
         if t.startswith('//!') or not t:
             continue
-        d = prod if face == 'prod' else testf
+        d = prod if face[i] == 'prod' else testf
+        if face[i] == 'item':
+            item_tested += len(re.findall(r'§[一二三四五六七八九十廿]+:\d+|\bmd:\d+|速查:\d+', t))
         for mm in re.finditer(r'§([一二三四五六七八九十廿]+):(\d+)', t):
             d.setdefault(cn2int(mm.group(1)), set()).add(int(mm.group(2)))
         for mm in re.finditer(r'\bmd:(\d+)', t):
@@ -88,6 +134,7 @@ print()
 print(f'生产面锚点唯一文档行合计 = {sum(len(v) for v in prod.values())}')
 ov = sum(len(v & testf.get(n, set())) for n, v in prod.items())
 print(f'测试面锚点唯一文档行合计 = {sum(len(v) for v in testf.values())}（其中 {ov} 行生产面也锚过 ⇒ 两行不可相加当总覆盖）')
+print(f'测试专用 item 里被剔出生产面的锚点出现次数 = {item_tested}（那些是解析器／夹具的形状注释，不是实现锚点）')
 print(f'挂债合计 = {sum(len(v) for v in debt.values())}')
 print(f'有推导器的章 = {sorted(deriv)}')
 print(f'生产锚点=0 且 挂债=0 的章：{[n for n, s, e, t in rng if not prod.get(n) and not debt.get(n)]}')

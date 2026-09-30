@@ -19,15 +19,22 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（11 秒量完 58 条记录的补丁有没有真打上；
+# 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
+# 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
 REAL="${MIDLINE_REAL_DOC:-$HOME/中线.MD}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)/src"
 [ -f "$REAL" ] || { echo "找不到规格文档 $REAL（可用 MIDLINE_REAL_DOC 指定）"; exit 1; }
 D="$(mktemp -d)"; trap 'rm -rf "$D"' EXIT
 cp "$(dirname "$SRC")/Cargo.toml" "$(dirname "$SRC")/Cargo.lock" "$D/"
-restore() { cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$D/src"; cp "$SRC"/*.rs "$D/src/"; }; cp "$REAL" "$D/doc.md"; }
-run() { local o; o="$(cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1)"; printf '%s\n' "$o" | grep -E -- "--- FAILED|test result:"; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -12; }
-py() { python3 -c "$1"; }
+restore() { PATCH_FAIL=""; cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$D/src"; cp "$SRC"/*.rs "$D/src/"; }; cp "$REAL" "$D/doc.md"; }
+# PATCH_FAIL：补丁没打上时 run() 先喊出来，**不**假装"这条变异撞红了"。§九 帧整族复跑就撞上一条静默假绿——
+# M46 的 `assert s.count(n)==1` 因 §九 推导器照抄了同一行守卫而变成 2，python 抛 AssertionError 后 cargo 照旧
+# 151 全绿，日志里那行 traceback 只会被当成噪音（本帧之前从没查过它）。`bash -n` 也只验 shell 语法，验不到内嵌
+# Python——所以判据不能靠人读，得让 run() 自己拒。
+run() { local o; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，下面的读数一律不算落点\n' "$PATCH_FAIL"; fi; o="$(cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1)"; printf '%s\n' "$o" | grep -E -- "--- FAILED|test result:"; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -12; printf '%s\n' "$o" | grep -E -- "^Traceback|AssertionError" | head -3; }
+py() { local e rc; e="$(python3 -c "$1" 2>&1)"; rc=$?; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; return 0; }
 
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
 echo "### M1 抹掉 md:452 的两处行尾锚点 ⇒ 应红在 §十二 推导器（漏登记）"
@@ -368,10 +375,104 @@ ls[592]=ls[592].replace('≤0','≤5'); ls[597]=ls[597].replace('≤0','≤5')
 open(p,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
 echo "### M46 形状路的围栏守卫改成只看空行（围栏内的行也进 rows）⇒ 应红在「围栏外应得表体三行」（正证：同一串字两套口径必分叉）"
+# 本条在 §九 帧复跑时**漂了**：那台推导器照抄了同一行守卫，`assert s.count(n)==1` 当场 AssertionError(2)，
+# 补丁没打上而 cargo 照旧 151 全绿——电池自己的假绿，只有整族复跑＋逐条看 traceback 才露头。
+# 现在把落点扩到"守卫＋它下面那一行"，两章那行字面同形、下一行不同，用它定唯一。
 restore; py "
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
-n='            if t.is_empty() || fence {'
+n='            if t.is_empty() || fence {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb = next_non_blank(n);'
 assert s.count(n)==1, s.count(n)
-open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'))"
+open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb = next_non_blank(n);'))"
+run
+# ── M47–M56：§九 帧。本章是本仓第一条**四条路同章并用**的章（锚点／挂债／实测／示例），所以这十条里
+#    有四条专门量"层与层不互替"：M47 只红双记账、M48 只红示例禁锚、M51 红三处、M52 只红债表；
+#    M53–M56 四条动的是**判据与文档**（不是代码）——M54 更是本帧正证 `production_face` 那处机检自身缺陷：
+#    修复前测试 item 的注释被算成生产锚点，摘掉两处真锚、在 cfg(test) 枚举里补一句假锚就能骗过整族。
+echo "### M47 摘掉 §九:324 的锚点（那行走的是实测路）⇒ 应只红在双记账层，配比 6／1／20 不动"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='§九:324 新牌占用主牌那一格；'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,''))"
+run
+echo "### M48 给示例行 md:341 补一枚锚点 ⇒ 应只红在示例禁锚层（341 走实测路，配比看不见这层）"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='    *karma -= price;'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+'  // §九:341 变异检验：给示例行补一枚锚'))"
+run
+echo "### M49 只改融合价的一侧（progress.rs 的 -1→-2，ai.rs 不动）⇒ 应红在 ⑤ 逐字同式计数 2→1 ＋ 三条扣费测"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='(inherit[sub].def.cost - 1).max(0)'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'(inherit[sub].def.cost - 2).max(0)'))"
+run
+echo "### M50 开端闸只查主牌一侧 ⇒ 应红在 ⑤ 体内 is_starter() 2→1 ＋ 复现测 ＋ 正向拒绝测"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='if inherit[main].is_starter() || inherit[sub].is_starter() {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'if inherit[main].is_starter() {'))"
+run
+echo "### M51 从债表删掉 md:335 那条（实现一字不动）⇒ 应红在债表条数 26→25 ＋ §九 配比 1→0（335 落进实测桶）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+i=s.index('Debt {'+chr(10)+'            doc: 335,')
+k=s.rindex(chr(10), 0, i)+1
+j=s.index(chr(10)+'        },'+chr(10), i)+len(chr(10)+'        },'+chr(10))
+open(p,'w',encoding='utf8').write(s[:k]+s[j:])"
+run
+echo "### M52 给债行 md:335 补一枚锚点、债条不删 ⇒ 应只红在债表「债已偿，请删条目」（配比与双记账两层都不认它）"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='    m.crafted = true;'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+' // §九:335 变异检验：拿锚点替债行作证'))"
+run
+echo "### M53 摘掉标签判据里那条「不以全角冒号收尾」的否决 ⇒ 应红在标签计数（354 又被当标签吞了）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n=\"if arity(n) == 1 && !t.ends_with('：') && (nb_text\"
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'if arity(n) == 1 && (nb_text'))"
+run
+echo "### M54 摘掉 battle.rs 两处 §十二:452 真锚，改在 cfg(test) 的枚举里补一句同名假锚 ⇒ 应仍红（正证 production_face 不把测试注释算成锚）"
+# 修复前这条会**假绿**：`referenced_doc_lines` 当年看见 `#[cfg(test)]` 就跳后半份文件，把测试注释一并算进锚点面。
+# 现在只跳那一个 item，所以 452 的锚在测试面就是没锚——本条是这把尺自己那颗牙的实证。
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='  // §十二:452 开端回合末业力每关上限 2 次'
+b='  // §十二:452 开端在场→我方获得 1 业力'
+assert s.count(a)==1 and s.count(b)==1, (s.count(a), s.count(b))
+open(p,'w',encoding='utf8').write(s.replace(a,'').replace(b,''))
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='    Definition,'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'    /// §十二:452 变异检验：测试注释里的锚点不算实现'+chr(10)+n))"
+run
+echo "### M55 文档副本把 md:324 保留清单里的「费用」写成「花费」（引擎与 md:328–331 不动）⇒ 应只红在 ④ 文档两处对撞"
+# 曾试过改 md:328 那行的字段名（特性→特性值）：撞红的位置不是 ④，而是解析器的形状守卫 progress.rs:180
+# 「『特性值』的右边不是「主牌特性值」而是「主牌特性」」——改一半的措辞根本进不到跨行对撞那一层。
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split(chr(10))
+assert ls[323]=='1. 选择主牌（保留其特性+数值+阈值+费用）', ls[323]
+ls[323]='1. 选择主牌（保留其特性+数值+阈值+花费）'
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M56 文档副本把 md:342 副牌费用 3→4 ⇒ 应红在 ④（344 被减的数≠342 的费用）＋ 复现测（引擎卡表那一侧没变）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split(chr(10))
+assert ls[341].startswith('副牌：燎原（3费'), ls[341]
+ls[341]=ls[341].replace('3费','4费',1)
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M57 §九 那台推导器的同一行围栏守卫做同样降级 ⇒ 实测红在**标签计数**（347／363 被吞成标签）而非 rows：同一处降级在两章落在不同层，这条落点是量出来的不是推的"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='            if t.is_empty() || fence {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'))"
 run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run

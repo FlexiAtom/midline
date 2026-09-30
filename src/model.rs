@@ -333,7 +333,7 @@
 //!     §十六 11/1/8；§八 技能池 12↔12 一一对应。⇒ 规则层几乎全落地，缺口集中在**呈现层**（render.rs 只有"焰N/阈值"
 //!     纯数字，无百分比、无色档、无震屏，全仓无音频）与两处真校验缺失（§二:47-48「后排先放」只在 `ai.rs` 候选生成
 //!     生效、引擎与 Boss 不查；§一:17 成就+每日奖励零实现）。**D3 已落、D2 第三步续之**：这些真未实现的文档行现在以
-//!     `NOT_IMPLEMENTED` 债表的形式住在下面的锚点机检里（**23 条＝呈现层 15／规则层 4／豁免改登记 1／模式层 3**，
+//!     `NOT_IMPLEMENTED` 债表的形式住在下面的锚点机检里（**当时 23 条＝呈现层 15／规则层 4／豁免改登记 1／模式层 3**，
 //!     逐条带原文、证据与去处，偿一条就当场红）。提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，
 //!     本表以文档实测为准；多出的几条是 §十二:456、§廿三:980（横屏）与本帧 §廿一:915/922/923（Roguelike 与
 //!     每日挑战的固定卡组、金币），全部由各自章的推导器列出，不是手挑。
@@ -792,7 +792,7 @@ mod anchor_tests {
         let mut idx = 0usize;
         while idx < raw.len() {
             let t = raw[idx].trim();
-            let next = raw[idx + 1..].iter().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or(&"");
+            let next = raw[idx + 1..].iter().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("");
             if t.starts_with("mod anchor_tests") || (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) {
                 return out;
             }
