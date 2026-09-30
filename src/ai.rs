@@ -561,7 +561,7 @@ pub enum MetaMove {
     Upgrade { idx: usize, kind: &'static str },
 }
 
-/// 专家档战斗外决策（§二十「含融合决策」；融合时机＝准备/结算阶段，人裁定 2026-09-28）。
+/// 专家档战斗外决策（§二十「含融合决策」；融合时机＝§九:317 准备阶段／§九:319 结算阶段，人裁定 2026-09-28）。
 /// 只产出意图，由既有规则函数执行——AI 不自开一套结算，规则合法性单一来源。
 pub fn plan_meta(inherit: &[CardInst], karma: i32, upgrades_left: u8) -> Vec<MetaMove> {
     let mut moves = Vec::new();
@@ -576,7 +576,7 @@ pub fn plan_meta(inherit: &[CardInst], karma: i32, upgrades_left: u8) -> Vec<Met
             if sub == main || !eligible(sub) {
                 continue;
             }
-            let price = (inherit[sub].def.cost - 1).max(0);
+            let price = (inherit[sub].def.cost - 1).max(0); // §九:326 AI 不得自算一套价：这一行与 progress.rs::fuse_cards 里那一行逐字同式（§九 推导器第④层拿字符串数次数）
             if price > karma {
                 continue;
             }

@@ -36,6 +36,8 @@ pub const HELP: &str = "p <手牌idx> <P1-P4> 放置 | s <Pn> 场上献祭 | sh 
 /// 一条已解析的战斗内命令。
 #[derive(Debug)]
 pub enum Command<'a> {
+    // §九:318 战斗阶段不可融合＝这张战斗内词表里**没有** fuse 这一项（融合只长在下面那张 SettleCommand 词表上）。
+    // 封闭名单（谁在调 fuse_cards）由 model.rs 的 §九 推导器逐条点名，锚点指回证不了"战斗里没有这个东西"。
     Place { hand_idx: usize, slot: usize },
     SacrificeField { slot: usize },
     SacrificeHand { hand_idx: usize },
@@ -240,7 +242,7 @@ pub fn execute_settle(
         SettleCommand::Quit => SettleStep::Quit,
         SettleCommand::Blank => SettleStep::Stay(Vec::new()),
         SettleCommand::Unknown(w) => SettleStep::Stay(one(format!("✖ 未知命令：{w}"))),
-        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）
+        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）；§九:317 §九:319 §九 时机表那两行的 ✅ 就落在这一条上
             Ok(msg) => SettleStep::Stay(one(format!("✓ {msg}"))),
             Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
         },

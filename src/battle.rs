@@ -781,6 +781,13 @@ impl Battle {
         (0..4).find(|i| self.slot(side, row, *i).as_ref().is_some_and(|c| c.seq == sq))
     }
 
+    /// 九章那条叠加等式的实测入口（仅测试构建）：走**真实的**我方攻击阶段，
+    /// 不在测试里另抄一份「技能逐条 +1」的累积逻辑——抄了就等于测壳不测引擎。
+    #[cfg(test)]
+    pub(crate) fn s9_run_player_attack_phase(&mut self) {
+        self.player_attack_phase();
+    }
+
     fn player_attack_phase(&mut self) {
         let order = self.row_seq_order(SideK::Player, Row::Front);
         self.attack_order = order.clone();
@@ -1543,7 +1550,7 @@ pub(crate) struct S15Line {
 /// 取一行里所有连续 ASCII 数字段。示例行的算术全是半角数字，符号（`：` `≥` `－`）不参与解析，
 /// 所以"数出几个数"本身就是形态判据的一部分：多写或少写一个数都当场 panic，不会静默走错分支。
 #[cfg(test)]
-fn s15_digits(s: &str) -> Vec<i32> {
+pub(crate) fn s15_digits(s: &str) -> Vec<i32> {
     let mut out = Vec::new();
     let mut run = String::new();
     for c in s.chars() {

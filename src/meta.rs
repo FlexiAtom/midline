@@ -455,7 +455,7 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
     }
 }
 
-/// 战斗外（准备/结算阶段）的托管决策落地（§二十「专家含融合决策」；时机按 §九 融合时机表）。
+/// 战斗外（准备/结算阶段）的托管决策落地（§二十「专家含融合决策」；时机按 §九:317／§九:319 那张融合时机表，战斗内没有这条路）。
 /// 只把 `ai::plan_meta` 的意图回灌既有规则函数执行，AI 不自开一套结算。
 /// 非专家档保持既有冒烟行为：固定融合前两牌、不代管升级。
 fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, diff: Difficulty, upgrades_left: u8) {
