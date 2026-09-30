@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十一张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十二张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -210,7 +210,7 @@
 //!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
 //!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
 //!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
-//!       §一/§二/§三/§四/§五/§六/§九/§十/§十一/§十三/§十九/§廿 那十二章的散文行——那里"整条规则没落地"仍查不出；
+//!       §一/§二/§三/§四/§五/§六/§十/§十一/§十三/§十九/§廿 那十一章的散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       以及本帧的 §十四 持业者·蜡烛（**第一条同章并用两条路、且九行双记账的章**：12 行＝围栏外表体 3
 //!       （走锚点）＋围栏内 9（走"文档数字驱动引擎复现"，**同时**一行都不许缺锚点）。配比钉死 锚点3／挂债0／实测9，
@@ -243,6 +243,31 @@
 //!       （正证第三条路真在读文档的数字跑引擎，不是把期望硬编码在测里）；M26 摘掉同回合上限闸 ⇒ 示例实测与
 //!       既有 `flame_12_over_thr6_triggers_once_keeps_6` 双双红而推导器绿（M22 那条边界在业火线上复现）；
 //!       M27 把已挂债的 705 塞进排除表 ⇒ 排除表断言与债表交叉核对**同时**红（两头下注被两头拒）。
+//!     - 以及本帧的 §九 融合系统（**第一条四条路在同一章并用满的章**：
+//!       27 行＝围栏外 6（时机表体 3＋设计意图 350＋冲突处理 352／354，全走锚点）＋围栏内 21——其中 14 条
+//!       **规则**行走实测**且**一行不许缺锚（双记账，同 §十四），6 条**示例**行走实测**且不许有锚**
+//!       （§十五/§十六 那条纪律第一次落到"由解析器变体 `is_example` 判"，推导器不写行号清单），1 条挂债
+//!       （md:335「继承堆总数不变」，引擎 2 张进 1 张出，正好相反）。配比钉死 锚点6／挂债1／实测20。
+//!       两处形状判据是实测改的：① 标签判据加一条**否决「以全角冒号收尾」**——md:354 单 token 且下一非空正是
+//!       ```，按 §十四 那条会被吞成标签，可它是条件句、取值在下一道围栏里（否决前 labels 多出 354、围栏外只剩 5 行）；
+//!       ② 本章有五道围栏＝10 个 ``` 符，§十四「只读第一道」的口径在这里会把四道一起放尺外，所以围栏符数量本身钉死。
+//!       一处**计数顺序**与前三章相反：债排在实测之前——唯一那条债就躺在流程围栏里，按 §十四 的顺序它会被记成
+//!       "实测 21"，那条与文档相反的账就此隐身。md:357 那条等式判成**规则**不判成示例：它不点名任何一对牌，
+//!       它是「冲突则叠加」的通式，于是它既在 progress.rs:51 有锚、又被等式两侧对撞引擎的累积值实测。
+//!       本仓第一次在尺子里加了一层**文档自己两处对撞**（不碰引擎也能红）：第 1 步「保留其特性+数值+阈值+费用」
+//!       ↔ 第 4 步逐行那四条 `- X = 主牌X`；示例的价 3-1=2 ↔ 副牌那一行的费用 ↔ 流程第 3 步的「-1，最低0」；
+//!       等式左边合计 ↔ 右边。
+//!       **本帧最大的收获不在这章，而在机检自身**：`referenced_doc_lines` 原先只把"`#[cfg(test)]` 紧跟 `mod`"
+//!       之后当测试面，于是挂在**普通 item**（enum／struct／fn／impl）上的 cfg(test) 整段仍被算成生产码面——
+//!       `progress.rs` 那个测试专用 enum 的变体注释「md:341」立刻被读成锚点，**一条发布构建里不存在的注释
+//!       差点替一条示例"作证"**，而示例行的纪律恰恰是不许有锚（这条红是本帧第一次由推导器抓到机检自己漏计，
+//!       不是抓到实现漏计）。现三段 walk（锚点面／字面次数面／蜡烛写点面）共用一份 `production_face`，
+//!       item 边界按**与属性同缩进的收尾**判；缩进这一步也是实测逼出来的——首版按"顶格 `}`"找收尾，
+//!       `battle.rs:786`（impl 块里的一个 cfg(test) 方法）一路吞到 impl 收尾，十章锚点集体消失、10 条测红，
+//!       那批红正是注释里写着要避免、这帧仍然撞上的那种「机检自己造出的假缺口」。
+//!       盲区照登：335 那条债**不复现**（复现＝替文档把反账做平）；⑤ 只核"命令词在不在词表里"这个形状，
+//!       不核准备／结算阶段的执行序（属 §十二:415/500）；`crafted` 之后"离场永久消失"属 §十:372，不在本章配比；
+//!       语义曲解仍不可机检——把「叠加」实现成「取最大」，④ 那层量不到，只有引擎实测那层与 §八 的效果尺能兜。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -740,6 +765,69 @@ mod anchor_tests {
         files
     }
 
+    /// **生产码面**的行序列（trim 后）。反向覆盖的三段 walk——`referenced_doc_lines`／`code_occurrences`／
+    /// `s14_candle_writes`——共用这一份口径。为什么摘成一份：三段各写一遍时，改一处另两处不跟着红，
+    /// 而"某个串在实现里出现几次""某行有没有锚点指回"这类断言恰恰要靠三份同口径才算成立
+    /// （同 `doc_sections`／`table_body`／`s7_fn_body` 摘出来的理由）。
+    ///
+    /// 两条排除，性质不同，别合成一条：
+    /// ① `#[cfg(test)]` **后面紧跟 `mod`** ⇒ 从这里到文件尾一律不算（测试模块总在文件尾部）。
+    /// ② `#[cfg(test)]` 挂在**普通 item**（enum／struct／fn／impl）上 ⇒ 只跳掉那**一个** item：
+    ///    属性行之后直到**与属性同缩进的那行 `}`**（顶层 item 即 0 列，判法是 `s7_fn_body` 那条"块内花括号
+    ///    带缩进"的推广——只看缩进相等，不数花括号，字符串里的 `{}` 就骗不到它）。
+    ///    缩进这一步是实测逼出来的：`battle.rs:786` 的 `#[cfg(test)] pub(crate) fn s9_run_player_attack_phase`
+    ///    是 impl 块里的一个方法，按"顶格 `}`"去找会一路吞到 impl 收尾（1486 行），§十四～§廿三 十章的锚点
+    ///    当场集体消失——**机检自己造出的假缺口**，正是这条口径原先写著要避免的那种错。
+    /// ② 是本帧被 §九 逼出来的：`progress.rs` 的 `S9Claim` 是测试专用 enum，它的变体注释写「md:341」，
+    ///    老口径（只认 ①）把这段注释算成锚点 ⇒ 一条**发布构建里不存在**的注释替 md:341 那条示例"作证"，
+    ///    而示例行的纪律恰恰是**不许有锚**（§十五/§十六 立的那条）。这不是新增洗白口，是把它堵上：
+    ///    判据只认「该 item 不参与发布构建」这一件事，不认措辞。
+    /// 为什么不能简化成"看见 `#[cfg(test)]` 就跳过后半份文件"：函数级的那一个（`rng.rs` 的 `state()`）
+    /// 后面还有几十行真实现，一并跳过等于机检自己造出一个假缺口——比漏锚点更难发现，因为它看起来像是照规则排除掉了。
+    /// 找不到那个 item 的收尾就**当场 panic**，不平跳：静默吞掉后半份文件的代价比报一次错大。
+    fn production_face(src: &str) -> Vec<String> {
+        let raw: Vec<&str> = src.lines().collect();
+        let indent_of = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
+        let mut out: Vec<String> = Vec::new();
+        let mut idx = 0usize;
+        while idx < raw.len() {
+            let t = raw[idx].trim();
+            let next = raw[idx + 1..].iter().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or(&"");
+            if t.starts_with("mod anchor_tests") || (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) {
+                return out;
+            }
+            if t.starts_with("#[cfg(test)]") {
+                let indent = indent_of(raw[idx]);
+                let start = idx + 1;
+                idx += 1;
+                let mut opened = false;
+                loop {
+                    if idx >= raw.len() {
+                        panic!("第 {start} 行起的 `#[cfg(test)]` item 找不到与它同缩进的收尾（一路读到文件尾）⇒ 测试专用设施请收进 `#[cfg(test)] mod …`，否则本尺分不清它有多长，会静默跳过后半份文件");
+                    }
+                    let l = raw[idx];
+                    let lt = l.trim();
+                    if indent_of(l) == indent && !lt.is_empty() {
+                        if lt == "}" {
+                            idx += 1;
+                            break;
+                        }
+                        if !opened && lt.ends_with(';') {
+                            idx += 1;
+                            break;
+                        }
+                        opened |= lt.contains('{');
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+            out.push(t.to_string());
+            idx += 1;
+        }
+        out
+    }
+
     /// 许可证头机检。人原话（09-28）：「代码头要加AGPL-v3头，这个需要检查，如果没有的话补，署名用FlexiAtom」。
     /// 判据＝文件开头那段**连续的行注释**（`//` 起头、排除 `//!` 文档注释）必须与 `main.rs` 的那段逐字相同，
     /// 且其中必须含 AGPL 与署名两句话。
@@ -870,27 +958,17 @@ mod anchor_tests {
     /// 机检可见面上的全部文档锚点行号。排除口径同裁定26：
     /// ① 测试代码自身——断言文案里的 `md:945` 和 `//!` 一样是叙述，算进来＝谁都能在测试里补一句行号，
     ///    把没实现的行判成已覆盖（本轮实测踩过一次：存档模块的 `///` 文档写了 §廿二 排除行的行号，
-    ///    机检立刻红在"排除表过期"上）。判据取"`#[cfg(test)]` 之后紧跟 `mod`"，不是"看见 `#[cfg(test)]`
-    ///    就跳过后半份文件"：函数级的那一个（`rng.rs` 的 `state()`）后面还有几十行真实现，
-    ///    一并跳过等于机检自己造出一个假缺口——比漏锚点更难发现，因为它看起来像是照规则排除掉了。
+    ///    机检立刻红在"排除表过期"上）。码面边界由 `production_face` 给，那里写着两条排除各自的理由。
     /// ② 裁定登记区的 `//!` 行里也写行号，但那是**叙述**不是实现锚点——算进来的话，
     ///    在注释里补一句"md:947"就能把一条没实现的规则判成已覆盖。
     fn referenced_doc_lines() -> Vec<u32> {
         let mut referenced: Vec<u32> = Vec::new();
         for fp in src_rs_files() {
             let src = std::fs::read_to_string(&fp).unwrap();
-            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
-            let mut idx = 0;
-            while idx < ls.len() {
-                let t = ls[idx];
-                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
-                if (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || t.starts_with("mod anchor_tests") {
-                    break;
-                }
+            for t in production_face(&src) {
                 if !t.starts_with("//!") {
-                    referenced.extend(anchor_numbers(t));
+                    referenced.extend(anchor_numbers(&t));
                 }
-                idx += 1;
             }
         }
         referenced
@@ -942,18 +1020,10 @@ mod anchor_tests {
         let mut hits = 0;
         for fp in src_rs_files() {
             let src = std::fs::read_to_string(&fp).unwrap();
-            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
-            let mut idx = 0;
-            while idx < ls.len() {
-                let t = ls[idx];
-                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
-                if (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || t.starts_with("mod anchor_tests") {
-                    break;
-                }
+            for t in production_face(&src) {
                 if !t.starts_with("//") {
                     hits += t.matches(needle).count();
                 }
-                idx += 1;
             }
         }
         hits
@@ -996,7 +1066,7 @@ mod anchor_tests {
     /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）；
     /// §十四 由 `every_row_of_section14_…` 覆盖（也是按形态推，但它开了**双记账**：围栏里那 9 行既走
     /// 文档数字驱动引擎的实测，也一行都不许缺锚点，见该测试注释）。
-    /// **其余各章**（§一/§二/§三/§四/§五/§六/§九/§十/§十一/§十三/§十九/§廿）仍未反向纳入。
+    /// **其余各章**（§一/§二/§三/§四/§五/§六/§十/§十一/§十三/§十九/§廿）仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -1340,27 +1410,19 @@ mod anchor_tests {
             || t.find(" = ").is_some_and(|k| name < k)
     }
 
-    /// 蜡烛的**写点全名单**（生产码面，口径同 `code_occurrences`：走到第一个 `#[cfg(test)] mod`／
-    /// `mod anchor_tests` 即停，剔掉行尾注释与纯注释行）。§十四:583「正常燃烧…**不减短」**是条否定式
+    /// 蜡烛的**写点全名单**（生产码面，口径同 `code_occurrences`＝都走 `production_face`，再剔掉行尾注释与
+    /// 纯注释行）。§十四:583「正常燃烧…**不减短」**是条否定式
     /// 条款，锚点指回证不了"没有别的东西在减蜡烛"——只有这份**封闭名单**能证：名单里没有"回合推进／每回合
     /// 衰减"，那句"不减短"才不是空话。
     fn s14_candle_writes() -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for fp in src_rs_files() {
             let src = std::fs::read_to_string(&fp).unwrap();
-            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
-            let mut idx = 0;
-            while idx < ls.len() {
-                let raw = ls[idx];
-                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
-                if (raw.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || raw.starts_with("mod anchor_tests") {
-                    break;
-                }
+            for raw in production_face(&src) {
                 let t = raw.split("//").next().unwrap_or("").trim().to_string();
                 if !t.is_empty() && !t.starts_with("//") && (t.contains("p_candle") || t.contains("e_candle")) && s14_is_candle_write(&t) {
                     out.push(t);
                 }
-                idx += 1;
             }
         }
         out.sort();
@@ -2602,6 +2664,256 @@ mod anchor_tests {
         );
     }
 
+    /// §九 融合系统反向覆盖：27 条必检行——**第一条把四条认领路在同一章用满的章**。
+    ///
+    /// 形状：五道围栏（定义 311／流程 324–335／示例 341–347／叠加等式 357／开端 363）＝10 个 ``` 围栏符，
+    /// 外加一张三行「融合时机」表。与 §十四 那台模板有两处口径差别，都不是随手改的：
+    /// ① **标签判据多一条否决：不以全角冒号收尾。** md:354「若技能效果冲突（如两个"攻击后+1累积"），则叠加：」
+    ///    单 token、下一非空行正是 ```，按 §十四 那条会被吞成标签——可它是**条件句**，它的取值在下一道围栏里
+    ///    （357）。实测：否决前 labels 多出 354、围栏外只剩 5 行；否决后 352 与 354 双双落进必检集（两行都已有锚）。
+    /// ② **分区计数把「挂债」排在「实测」之前**（§十四/§十五/§十六 都是实测优先）。本章唯一那条债 md:335
+    ///    就躺在流程围栏里，解析器数它只为让它**可见**（它写「继承堆总数不变」，引擎 2 张进 1 张出，正好相反），
+    ///    并不复现它。按 §十四 的顺序它会被记进"实测 21"，那条与文档相反的账就此隐身。
+    ///
+    /// 配比钉死 **锚点6／挂债1／实测20**，另四层各钉一件事：
+    /// ② 示例那 6 行**不许有锚**（分界由解析器变体 `is_example` 判，这里不写行号清单）；
+    /// ③ 围栏那 14 条**规则**行一行都不许缺锚（双记账，同 §十四：摘锚只红这一层，配比看不见）；
+    /// ④ **文档自己两处对撞**——第 1 步「保留其特性+数值+阈值+费用」↔ 第 4 步那四条 `- X = 主牌X`；
+    ///    示例的价 3-1=2 ↔ 流程的「副牌费用-1，最低0」；等式左边合计 ↔ 右边；
+    /// ⑤ 复现测还在 ＋ 代码形状（时机表那三行的 ❌ 落成"战斗词表里没有 `\"fuse\"`"；
+    ///    `fuse_cards` 体内 `is_starter()` 恰两次＝两侧都查；`.remove(` 恰一次＝副牌只被摘走一次）。
+    ///
+    /// 边界如实登记：⑤ 只核到"命令词在不在词表里"这个形状，**不核执行序**——准备／结算阶段那条闸属 §十二:415/500，
+    /// 由 §十二 的推导器负责；融合把新牌标成自造牌（`m.crafted = true`）之后"离场永久消失"那半截属 §十:372，
+    /// 不在本章配比里。
+    /// 语义曲解始终不可机检：把「叠加」实现成「取最大」，④ 那层文档内部对撞量不到，靠 ⑤ 之前的引擎实测复现测
+    /// （`progress.rs::section9_fuse_rows_reproduce_on_the_engine` 真的走一遍攻击阶段）与 §八 的效果尺兜。
+    #[test]
+    fn every_row_of_section9_fusion_is_anchored_debited_or_reproduced_and_examples_never_take_anchors() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "九、融合系统")
+            .expect("§九 标题必须存在（文档结构变了就要同步改本检查）");
+        let arity = |n: usize| -> usize { at(n).split_whitespace().count() };
+        let next_non_blank = |n: usize| -> usize {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            k
+        };
+        let block_len = |n: usize| -> usize {
+            let mut k = n;
+            let mut cnt = 0usize;
+            while k <= lines.len() && !at(k).trim().is_empty() && at(k).trim() != "---" && at(k).trim() != "```" {
+                cnt += 1;
+                k += 1;
+            }
+            cnt
+        };
+
+        // 围栏外的形状路（标签／列头）＋围栏内的解析器路，两条拼成必检集。
+        const S9_HEADERS: [&str; 1] = ["时机 是否可融合"];
+        let mut rows: Vec<usize> = Vec::new();
+        let mut labels: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence = false;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                fence_ticks += 1;
+                continue;
+            }
+            if t.is_empty() || fence {
+                continue;
+            }
+            let nb_text = at(next_non_blank(n)).trim();
+            if arity(n) == 1 && !t.ends_with('：') && (nb_text == "```" || S9_HEADERS.contains(&nb_text)) {
+                labels.push(n);
+                continue;
+            }
+            if S9_HEADERS.contains(&t) {
+                assert!(block_len(n) >= 2, "md:{n}「{t}」在列头词表里却不在任何表格块的开头 ⇒ 文档改了表形，词表得跟着改（结构与字面两个方向都要对得上）");
+                headers.push(n);
+                continue;
+            }
+            rows.push(n);
+        }
+        assert_eq!(fence_ticks, 10, "§九 应有五道围栏＝10 个 ``` 围栏符（定义／流程／示例／叠加等式／开端），实测 {fence_ticks} 个 ⇒ 文档加了或拆了一道，而解析器读的正是这五道，那道里的行会从两把尺外面一起漏过去");
+        assert!(!fence, "§九 的围栏没有闭合（数到奇数个 ```）");
+        assert_eq!(
+            labels,
+            vec![308, 314, 321, 338, 360],
+            "§九 的标签应恰好是 308 基本规则／314 融合时机／321 融合流程／338 融合示例／360 开端不可融合，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据（含那条「不以全角冒号收尾」的否决）失效"
+        );
+        assert_eq!(headers, vec![316], "§九 的列头应恰好是 316「时机 是否可融合」，实测 {headers:?} ⇒ 列头判据失效（结构＋字面两个条件缺一不可）");
+        assert_eq!(
+            rows,
+            vec![317, 318, 319, 350, 352, 354],
+            "§九 围栏外应得时机表体 3 行＋设计意图 350＋冲突处理 352／354，实测 {rows:?} ⇒ 多半是 354 又被当成标签吞了（它以全角冒号收尾，见本测 ①）"
+        );
+
+        let parsed = crate::progress::parse_section9_fuse_rules(&lines);
+        let verified: Vec<usize> = parsed.iter().map(|c| c.line).collect();
+        assert_eq!(
+            verified,
+            vec![311, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 341, 342, 344, 345, 346, 347, 357, 363],
+            "§九 围栏行由解析器给，应为 定义1＋流程12＋示例6＋等式1＋开端1＝21 行，实测 {verified:?} ⇒ 解析器与本推导器对同一段围栏读法不同"
+        );
+        rows.extend(verified.iter().copied());
+        rows.sort_unstable();
+        assert_eq!(rows.len(), 27, "§九 必检行应恰好 27 行（围栏外 6＋围栏内 21），实测 {} 行 ⇒ 文档加了规则或推导口径失效", rows.len());
+        // 成员级双向钉：四种形态各钉一行必须在必检集，各类排除行各钉一行必须不在。
+        for n in [311usize, 317, 326, 335, 341, 346, 350, 354, 357, 363] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §九 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [306usize, 308, 310, 314, 316, 321, 323, 338, 356, 360, 362, 366] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／标签／列头／围栏符判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §九 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+
+        // 示例／规则的分界由**解析器的变体**判（`S9Claim::is_example`）。这里不写行号清单：写了＝推导器再认一次形状，
+        // 两处各判就会朝不同方向错，而「这行算不算示例」恰恰只在这种偏移上才静默绿。
+        let examples: Vec<usize> = parsed.iter().filter(|c| c.claim.is_example()).map(|c| c.line).collect();
+        let rule_lines: Vec<usize> = parsed.iter().filter(|c| !c.claim.is_example()).map(|c| c.line).collect();
+        assert_eq!(
+            examples,
+            vec![341, 342, 344, 345, 346, 347],
+            "§九 的示例行应恰好是「文档点名的一对牌（焚稿人＋燎原）」所在的 6 行，实测 {examples:?} ⇒ 有围栏行被重新归类，而两条路的牙不一样（示例禁锚、规则双记账）"
+        );
+        assert_eq!(rule_lines.len(), 15, "§九 围栏规则行应恰好 15 条（21 行减 6 条示例），实测 {} 条", rule_lines.len());
+        for &n in &examples {
+            assert!(
+                !referenced.contains(&(n as u32)) && !debited.contains(&n),
+                "md:{n}（「{}」）是 §九 示例行，却走了锚点／挂债路＝把「必须跑一遍」降级成「有人指过来就行」",
+                at(n)
+            );
+        }
+
+        // ① 三条认领路＋配比。这里的顺序与 §十四 相反：**先债再实测**（见文档注释 ②）。
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if debited.contains(&n) {
+                on_debt += 1;
+            } else if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§九 有 {} 行既无锚点指回、也不在债表里、又不是围栏里被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (6, 1, 20),
+            "§九 三条认领路应为 锚点6／挂债1／实测20，实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从一条路悄悄挪到另一条"
+        );
+        assert!(
+            debited.contains(&335),
+            "md:335「{}」必须仍躺在债表里：它写「继承堆总数不变」，引擎 2 张进 1 张出，正好相反。把它摘进实现＝替文档把这笔反账做平",
+            at(335)
+        );
+
+        // ③ 双记账那层：分区计数把围栏行按实测优先记，摘掉它们的锚它**看不见**——§十四 M39 实测过这条路。
+        for n in [317usize, 318, 319, 350, 352, 354] {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）是围栏外必检行，登记的处置是「锚点指回」，现在没有锚点＝实现被删或锚被摘", at(n));
+        }
+        for &n in &rule_lines {
+            if debited.contains(&n) {
+                continue;
+            }
+            assert!(
+                referenced.contains(&(n as u32)),
+                "md:{n}（「{}」）是 §九 围栏里的**规则**行，没有锚点指回 ⇒ 本章纪律是规则行既走实测又全有锚：摘锚红这里，改行为红复现测，两层的牙不一样",
+                at(n)
+            );
+        }
+
+        // ④ 文档自己两处对撞（不碰引擎，纯"文档内部两处说法必须一致"）。
+        let mut keeps: Vec<String> = Vec::new();
+        let mut fields: Vec<String> = Vec::new();
+        let mut price: Option<(i32, i32)> = None;
+        let mut sub_cost: Option<i32> = None;
+        let mut eq: Option<(i32, i32, i32)> = None;
+        let mut stack: Option<(usize, Vec<i32>, i32)> = None;
+        for c in &parsed {
+            match &c.claim {
+                crate::progress::S9Claim::MainKeeps(f) => keeps = f.clone(),
+                crate::progress::S9Claim::Field(name) => fields.push(name.clone()),
+                crate::progress::S9Claim::Price { minus, floor } => price = Some((*minus, *floor)),
+                crate::progress::S9Claim::ExampleCard { which, cost, .. } if *which == "副牌" => sub_cost = Some(*cost),
+                crate::progress::S9Claim::ExamplePrice { a, b, out } => eq = Some((*a, *b, *out)),
+                crate::progress::S9Claim::StackEquation { terms, lhs, rhs } => stack = Some((terms.len(), lhs.clone(), *rhs)),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            fields, keeps,
+            "§九 流程第 1 步（md:324）的保留清单 {keeps:?} 与第 4 步下面逐行（md:328–331）的 {fields:?} 对不上 ⇒ 文档两处不同名或不同序，融合到底保留什么读不出唯一答案"
+        );
+        let (minus, floor) = price.expect("md:326 必须给出「副牌费用-N，最低M」两个数");
+        assert_eq!((minus, floor), (1, 0), "§九:326 的价现在是 副牌费用-{minus}、最低 {floor}，而引擎两侧逐字同用的那条算式钉死是 -1 与 max(0)（见下面第 ⑤ 层的 `code_occurrences`）⇒ 文档改了价、代码没跟着改");
+        let (a, b, out) = eq.expect("md:344 必须给出 A-B=C 三个数");
+        assert_eq!((a, b, out), (3, 1, 2), "§九:344 的示例算式应恰好是 3-1=2，实测 {a}-{b}={out}");
+        assert_eq!(out, a - b, "§九:344「融合消耗：{a}-{b}={out}业力」自己的算式不平行");
+        assert_eq!(sub_cost, Some(a), "§九:344 被减的那个数（{a}）应等于 md:342 副牌的费用（实测 {sub_cost:?}）⇒ 价按哪张牌算，文档两处读法不同");
+        assert_eq!(b, minus, "§九:344 减去的 {b} 与 md:326 登记的「减 {minus}」不同 ⇒ 示例围栏与规则围栏各说一套");
+        let (n_terms, lhs, rhs) = stack.expect("md:357 必须给出那条叠加等式");
+        assert_eq!(lhs.len(), n_terms, "§九:357 左边 {n_terms} 项却数出 {} 个增量 ⇒ 有一项没带数，叠加读不出来", lhs.len());
+        assert_eq!(rhs, lhs.iter().sum::<i32>(), "§九:357 左边合计 {}、右边写 {rhs} ⇒ 文档自己的叠加口径不守恒（引擎是逐条 append，见 `progress.rs:51`）", lhs.iter().sum::<i32>());
+
+        // ⑤ 代码形状。
+        assert_eq!(
+            code_occurrences("\"fuse\""),
+            1,
+            "§九:317／318／319 那张时机表：准备 ✅／战斗 ❌／结算 ✅。全仓生产码面上命令词 `\"fuse\"` 只能有 1 处（结算词表 `command.rs:217`）——多出一次＝战斗内词表也收了 fuse，md:318 那个 ❌ 就成了假账"
+        );
+        assert_eq!(
+            code_occurrences("def.cost - 1).max(0)"),
+            2,
+            "§九:326 那条价在引擎面只能有两处**逐字同式**：`progress.rs::fuse_cards` 与 `ai.rs` 专家档（AI 不得自算一套价）。实测 {} 次 ⇒ 有人只改了其中一处 ⇒ 文档那一条与两侧结算不同步",
+            code_occurrences("def.cost - 1).max(0)")
+        );
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let prog = std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap();
+        let body = s7_fn_body(&prog, "pub fn fuse_cards(");
+        assert_eq!(
+            body.matches("is_starter()").count(),
+            2,
+            "§九:363「开端不可融合，无论在手牌还是继承堆」要求**主、副两侧都查**：`fuse_cards` 体内 `is_starter()` 应恰 2 次，实测 {} 次 ⇒ 只剩一侧（副牌是开端也照样融）",
+            body.matches("is_starter()").count()
+        );
+        assert_eq!(
+            body.matches(".remove(").count(),
+            1,
+            "§九:325／333 副牌的作用域：体内只该有一次摘除，实测 {} 次 ⇒ 有人另摘一张牌，或把摘除改成置空占位（那是拿实现去还 md:335 那笔反账，债表会跟着红）",
+            body.matches(".remove(").count()
+        );
+        engine_repro_test_exists("section9_fuse_rows_reproduce_on_the_engine");
+    }
+
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
     /// 规则层欠的是校验（引擎收了它不该收的走法）。后者会让同一局打出不同结果，前者不会。
     /// 第三档 `Mode` 是本帧被 §廿一 逼出来的：整块模式没做（Roguelike／金币／每日固定卡组）既不是
@@ -2644,8 +2956,8 @@ mod anchor_tests {
 
     /// 未实现债表（`reverse-coverage-multi-chapter` 的 D3）。逐条按"文档行 + 原文 + 证据 + 去处"录，
     /// 读数：呈现层 17 行（§十五 665/666 ＋ §十六 697/698/702/705/706/707/708/709/715/716/717/718/721
-    /// ＋ §十二 479 ＋ §廿三 980；704 是列头「状态 表现」，属非规则行不入债表）、规则层 4 行（§二 47/48 ＋
-    /// §十二 416/456）、豁免改登记 1 行（§一 17）、模式层 3 行（§廿一 915/922/923）＝**25 条**。
+    /// ＋ §十二 479 ＋ §廿三 980；704 是列头「状态 表现」，属非规则行不入债表）、规则层 5 行（§二 47/48 ＋
+    /// §九 335 ＋ §十二 416/456）、豁免改登记 1 行（§一 17）、模式层 3 行（§廿一 915/922/923）＝**26 条**。
     /// 提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，本表以文档实测为准。§十二 那三条、
     /// §廿三 980、以及本帧 §廿一 那三条都不是手挑：由各自章的推导器从文档结构里列出"无人认领"的行，
     /// 再逐行判定挂锚还是挂债。模式层这一档是 §廿一 逼出来的——"整块模式没做"塞进前两档都是改写缺口性质。
@@ -2673,6 +2985,14 @@ mod anchor_tests {
             tier: Tier::Rule,
             evidence: "上一条同一道闸——「后排满后才能放前排」没有任何引擎校验，敌方（含 Boss）可直接往前排落子",
             dest: "与上一条同一道闸、同一条自决 #4：不加引擎闸。改判时与 47 一次改两处，闸位 battle.rs::enemy_place_legal，开工点 pool/back-row-placement-gate",
+        },
+        Debt {
+            doc: 335,
+            section: 9,
+            row: "7. 继承堆总数不变（副牌消失空出1位，新牌占用1位）",
+            tier: Tier::Rule,
+            evidence: "引擎是 **2 张进 1 张出**：`progress.rs::fuse_cards` 里 `inherit.remove(sub)` 摘走副牌，新牌**就地改写主牌**（不新增元素），所以融合一次继承堆净减一张——实测 `pile.len()==1`。文档这一句「总数不变」与它自己上一句「副牌消失（不进入弃牌堆）」也打架：既消失又占位，那空出来的那位由谁填没写",
+            dest: "两条路只能择一：改语义（`progress.rs::fuse_cards` 保留副牌那个空位、新牌 append 进去 ⇒ 堆数不变，但「空位」是什么牌要先定义，且撞 §十「继承堆上限10张」的计数口径），或改文档措辞（把 335 降为「副牌消失⇒堆减一」）。择哪条属设计侧，本帧只登记，实测不复现它（复现＝替文档把反账做平）",
         },
         Debt {
             doc: 416,
@@ -2861,9 +3181,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四 十一张表／章现在各自带推导器
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九 十二张表／章现在各自带推导器
     /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十一章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§三/§四/§五/§六/§九/§十/§十一/§十三/§十九/§廿）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 其余各章（§一/§二/§三/§四/§五/§六/§十/§十一/§十三/§十九/§廿）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {
@@ -2939,7 +3259,7 @@ mod anchor_tests {
         assert!(bad.is_empty(), "未实现债表有 {} 处失效：\n{}", bad.len(), bad.join("\n"));
         assert_eq!(
             NOT_IMPLEMENTED.len(),
-            25,
+            26,
             "债表条数变了。偿了债 ⇒ 删条目并把本数字与下面的分档数一起改小；真要新增债 ⇒ 连同文档出处、证据、去处一起写"
         );
         let pres = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Presentation).count();
@@ -2949,8 +3269,8 @@ mod anchor_tests {
         // 分档不许互相挪：把规则层挪进呈现层＝把"引擎收了它不该收的走法"说成"只是没画出来"，缺口的性质就变了。
         assert_eq!(
             (pres, rule, washed, mode),
-            (17, 4, 1, 3),
-            "债表应为 呈现层17／规则层4／豁免改登记1／模式层3，实测 ({pres},{rule},{washed},{mode})"
+            (17, 5, 1, 3),
+            "债表应为 呈现层17／规则层5／豁免改登记1／模式层3，实测 ({pres},{rule},{washed},{mode})"
         );
         assert_eq!(
             pres + rule + washed + mode,
