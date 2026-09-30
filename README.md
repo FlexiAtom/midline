@@ -92,12 +92,15 @@ MIDLINE_DOC_SKIP=1 cargo test              # 明确跳过那几条推导器
 
 两个都不给时锚点推导器**报错退出**而不是静默通过——"文档不在"不该被读成"规则都已覆盖"。
 
-另外两把可复跑的尺也进了版本库：`scripts/byte-baseline.sh`（把 10 个场景跑成文本再比 md5，
+另外三把可复跑的尺也进了版本库：`scripts/byte-baseline.sh`（把 10 个场景跑成文本再比 md5，
 用来证明"只动注释、没动行为"；其中 p9＝每日挑战，种子按 UTC 日界算 ⇒ 跨天复跑它必然换 md5，
-那是日历在走，不是行为漂了）和 `scripts/mutation-battery.sh`（26 条反证变异，外加 M0 不打补丁的对照与 M19
-复原收尾，每条变异都必须把某一条测试撞红，并记下**红在哪条测**）。
+那是日历在走，不是行为漂了）、`scripts/mutation-battery.sh`（26 条反证变异，外加 M0 不打补丁的对照与 M19
+复原收尾，每条变异都必须把某一条测试撞红，并记下**红在哪条测**），以及 `scripts/coverage-probe.py`
+（盘点尺：按文档行区间把每一枚锚点归回它声称的那章，列出各章的生产面锚点数／挂债数／有无推导器。
+它**不**进 `cargo test`，因为它回答的是另一个问题——推导器只能保证那 8 张表不漏行，而这把尺回答"剩下 15 章里
+哪些实现了却一行都没指回"；0 锚 0 债就是盲区，不是没实现）。
 
 ## 许可
 
-AGPL-3.0-or-later，见 `LICENSE`。`src/*.rs` 与 `scripts/*.sh` 的文件头带署名 `Copyright (C) 2026 FlexiAtom`。
+AGPL-3.0-or-later，见 `LICENSE`。`src/*.rs` 与 `scripts/*.{sh,py}` 的文件头带署名 `Copyright (C) 2026 FlexiAtom`。
 本程序按"原样"提供，不含任何担保。
