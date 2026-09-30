@@ -307,4 +307,71 @@ n='    m.crafted = true;'
 assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n,'    m.def.tr = s.def.tr;'+n))"
 run
+# ── M39–M46：§十四 帧。这一章是本仓第一条"同章并用两条路＋九行双记账"的章，所以每条变异都指定它红在**哪一层**：
+#    双记账层（M39）／引擎实测的数字层（M40、M45）／② 封闭写点名单（M41）／③ 常量层（M42）／⑤ 对称层（M43）
+#    ／④ 撤测层（M44）／围栏双口径层（M46）。M44 顺带把 `engine_repro_test_exists` 改了——只数 `fn 名字(` 拦不住
+#    "摘掉 #[test]"，函数体一字不动而 cargo 再也不跑它；这条尺现在要求定义上方第一条非注释行恰是 #[test]。
+echo "### M39 摘掉围栏行 md:592 的锚点（那行走的是实测路）⇒ 应红在「12 行全有锚」那一层，配比 3／0／9 看不见这层"
+# 必须两处一起摘：592 在生产码面被提到两次——md:592 自己的锚点（battle.rs:929）＋另一侧写点上的交叉引用
+# 「（与 §十四:592 同一条规则的另一侧）」（battle.rs:1015）。锚点扫描是**逐处独立取号**，只摘一处那行照旧"有锚"
+# （本帧 M39 首跑实测：只摘 929 那处，整族 149 全绿）。交叉引用也算锚，这是这把尺现在的口径。
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='；§十四:592 我方每受到 1 伤害 → 蜡烛减短 1 单位'
+b='（与 §十四:592 同一条规则的另一侧）'
+assert s.count(a)==1 and s.count(b)==1, (s.count(a), s.count(b))
+open(p,'w',encoding='utf8').write(s.replace(a,'').replace(b,''))"
+run
+echo "### M40 文档副本把两侧「每受到1伤害 → 蜡烛减短1单位」的减短量 1→2 ⇒ 应只红在 §十四 引擎实测（推导器只数行，不吃数字）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[591].strip()=='- 每受到1伤害 → 蜡烛减短1单位', ls[591]
+assert ls[596].strip()=='- 每受到1伤害 → 蜡烛减短1单位', ls[596]
+ls[591]=ls[591].replace('减短1单位','减短2单位'); ls[596]=ls[596].replace('减短1单位','减短2单位')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M41 生产码面新写一条文档里根本没有的减短路（每回合自动衰减）⇒ 应只红在 §十四 ② 封闭写点名单 10→11"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='impl Battle {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+chr(10)+'    #[allow(dead_code)]'+chr(10)+'    fn s14_probe_decay(&mut self) { self.p_candle -= 1; }'))"
+run
+echo "### M42 代码面把常量 CANDLE_HP 从 20 改成 21（文档不动）⇒ 应红在 §十四 ③（常量≠文档写的初始长度）＋引擎实测"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='pub const CANDLE_HP: i32 = 20;'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'pub const CANDLE_HP: i32 = 21;'))"
+run
+echo "### M43 摘掉敌方那一侧的画条调用（holder_line 改成不调 candle_bar）⇒ 应红在 §十四 ⑤ 计数 3→2 ＋ 行为面那条对称测"
+restore; py "
+p='$D/src/render.rs'; s=open(p,encoding='utf8').read()
+n='candle_bar(h.hp, h.cap)'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'holder_label(h.name)'))"
+run
+echo "### M44 只摘掉复现测上方的 #[test]（函数体一字不动）⇒ 应红在 §十四 ④（正证：定义还在≠测还在，149 项会掉成 148）"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split('\n')
+i=[k for k,l in enumerate(ls) if l.strip().startswith('fn section14_candle_numbers_reproduce_on_the_engine(')]
+assert len(i)==1, i
+assert ls[i[0]-1].strip()=='#[test]', repr(ls[i[0]-1])
+ls[i[0]-1]='// 变异试验：把 #[test] 摘掉'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+run
+echo "### M45 文档副本把两侧判死线 ≤0 改成 ≤5 ⇒ 应只红在 §十四 引擎实测的判死方向（推导器全绿：行数与名单没动）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert '蜡烛长度≤0' in ls[592] and '蜡烛长度≤0' in ls[597], (ls[592], ls[597])
+ls[592]=ls[592].replace('≤0','≤5'); ls[597]=ls[597].replace('≤0','≤5')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M46 形状路的围栏守卫改成只看空行（围栏内的行也进 rows）⇒ 应红在「围栏外应得表体三行」（正证：同一串字两套口径必分叉）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='            if t.is_empty() || fence {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'))"
+run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run

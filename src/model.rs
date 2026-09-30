@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十一张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -210,8 +210,24 @@
 //!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
 //!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
 //!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
-//!       §一/§二/§五/§六/§九/§十四 那些散文行——那里"整条规则没落地"仍查不出；
+//!       §一/§二/§三/§四/§五/§六/§九/§十/§十一/§十三/§十九/§廿 那十二章的散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
+//!       以及本帧的 §十四 持业者·蜡烛（**第一条同章并用两条路、且九行双记账的章**：12 行＝围栏外表体 3
+//!       （走锚点）＋围栏内 9（走"文档数字驱动引擎复现"，**同时**一行都不许缺锚点）。配比钉死 锚点3／挂债0／实测9，
+//!       上面另钉一层「12 行全有锚」——分区计数看不见那一层，M39 实测：只摘围栏行 592 的锚，配比照旧 (3,0,9)、
+//!       整族 149 全绿，红的是那条双记账断言。M39 顺带量出锚点扫描的一个口径：**交叉引用也算锚**
+//!       （592 还被 battle.rs:1015「（与 §十四:592 同一条规则的另一侧）」提到一次，逐处独立取号 ⇒ 变异要两处一起摘）。
+//!       形状判据在本帧改过一次，是实测撞出来的：§十六/§十五 那套「等元数 run」吃不进这张表——三列空格切出来是
+//!       4/4/3（`❌ 不减短` 占两段），于是 580/582 都不再被认成标签／列头，580 反倒伪装成必检行（首跑就红在这里）；
+//!       现判据＝「连续非空 run ≥ 2」＋字面词表，结构条件照样在，只是不再假设列间空格数一致。
+//!       ② 把 §十四:583「正常燃烧…**不减短」**这条否定式条款做成了**封闭的蜡烛写点名单**（构造 3＋Boss 档案覆写 2＋
+//!       伤害 5＝10 条，逐字钉死）——本仓第一次不给这类条款只挂锚，M41 加一条文档里没有的"每回合自动衰减"就红在这里。
+//!       ③ 文档写的 20 必须等于引擎常量 `CANDLE_HP`，且两侧同读它（M42 把常量改成 21：③＋实测＋既有测共四红）；
+//!       ④ 复现测必须还在；⑤ md:599「对称」＝`candle_bar(` 全仓恰 3 次（1 定义＋敌我各 1 调用，M43 摘掉敌方那侧即红）。
+//!       电池 M39–M46 每条指定它红在**哪一层**；M44 反过来把这帧新加的尺改了——只数 `fn 名字(` 拦不住"摘掉 `#[test]`"
+//!       （函数体一字不动、149 掉成 148 而尺子绿），现在还要求定义上方第一条非注释行恰是 `#[test]`。
+//!       盲区照登：② 名单认的是字面上的 `p_candle`/`e_candle`，谁把蜡烛搬进别的字段名整族就看不见；md:598 只写单烛判死，
+//!       Boss 双烛（`e_candle2`）与档案覆写初始长度都**超出 §十四 的措辞**，这两处只由 ② 的名单与 §廿一 各自钉着。
 //!       §十五 那一帧暴露的**否定式条款**盲区在本章又添两例：§十七:763「任何卡牌不能越过中线」锚在
 //!       `DeathCause` 的变体列表上（指向的是"这里没有第四因"），§十七:747「后排多张只推最靠近前排的」
 //!       锚在"每列后排单格"这条结构事实上（指向的是"没有第四档"）——两条都机检证伪不了，同 §十五:621
@@ -977,8 +993,10 @@ mod anchor_tests {
     /// `every_row_of_section21_…` 覆盖（一张章里三张子表）；§十五 由 `every_row_of_section15_…`、
     /// §十七 由 `every_row_of_section17_…`、§十六 由 `every_row_of_section16_…` 覆盖——这三章不是表，
     /// 必检行按**形态**推导，口径与各自的标签／列头／框线判据见各自测试注释；§八 由
-    /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）。
-    /// **其余各章**（§一/§二/§三/§六/§七/§十四）仍未反向纳入。
+    /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）；
+    /// §十四 由 `every_row_of_section14_…` 覆盖（也是按形态推，但它开了**双记账**：围栏里那 9 行既走
+    /// 文档数字驱动引擎的实测，也一行都不许缺锚点，见该测试注释）。
+    /// **其余各章**（§一/§二/§三/§四/§五/§六/§九/§十/§十一/§十三/§十九/§廿）仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -1311,8 +1329,83 @@ mod anchor_tests {
         out
     }
 
-    /// §七 卡牌模型反向覆盖：22 条必检行**全走锚点、零挂债**，另加五层等值。
-    ///
+    /// 一行（已剔行尾注释、已 trim）是否在**写**蜡烛的长度。三种形状：
+    /// ① `名字 -= 量`；② `名字 = 值`（token 必须落在 `=` 左侧，否则 `self.over = Some(match self.p_candle…`
+    /// 这种"只在右边读"会被误计成写）；③ 构造期的 `名字: 值,`。
+    /// 判据故意不含 `<=`／`==`：`if self.e_candle <= 0` 是读，把它算进写点名单等于让否定式条款失去意义。
+    fn s14_is_candle_write(t: &str) -> bool {
+        let name = ["p_candle", "e_candle"].iter().filter_map(|k| t.find(k)).min().unwrap_or(usize::MAX);
+        t.starts_with("p_candle:") || t.starts_with("e_candle:") || t.starts_with("e_candle2:")
+            || t.find("-=").is_some_and(|k| name < k)
+            || t.find(" = ").is_some_and(|k| name < k)
+    }
+
+    /// 蜡烛的**写点全名单**（生产码面，口径同 `code_occurrences`：走到第一个 `#[cfg(test)] mod`／
+    /// `mod anchor_tests` 即停，剔掉行尾注释与纯注释行）。§十四:583「正常燃烧…**不减短」**是条否定式
+    /// 条款，锚点指回证不了"没有别的东西在减蜡烛"——只有这份**封闭名单**能证：名单里没有"回合推进／每回合
+    /// 衰减"，那句"不减短"才不是空话。
+    fn s14_candle_writes() -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            let ls: Vec<&str> = src.lines().map(str::trim_start).collect();
+            let mut idx = 0;
+            while idx < ls.len() {
+                let raw = ls[idx];
+                let next = ls[idx + 1..].iter().copied().find(|l| !l.is_empty()).unwrap_or("");
+                if (raw.starts_with("#[cfg(test)]") && next.starts_with("mod ")) || raw.starts_with("mod anchor_tests") {
+                    break;
+                }
+                let t = raw.split("//").next().unwrap_or("").trim().to_string();
+                if !t.is_empty() && !t.starts_with("//") && (t.contains("p_candle") || t.contains("e_candle")) && s14_is_candle_write(&t) {
+                    out.push(t);
+                }
+                idx += 1;
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// 实测路的行，靠的是那条**引擎复现测**真的还在跑。本帧实测过：只钉"行集合由解析器给出"拦不住删测——
+    /// 解析器照样被推导器调用、行数照样对，只是再没有人把那些数字打进引擎。于是按函数名钉一次定义，
+    /// §十四／§十五／§十六 三章的实测路共用这把尺。
+    /// 但"定义还在"也不等于"测还在"：把函数上方的 `#[test]` 摘掉，函数体一字不动、`fn 名字(` 照样命中一次，
+    /// cargo 却再也不跑它（变异 M44 实测到的）。所以这里除了数定义，还要求定义上方第一条非空非注释行恰是 `#[test]`。
+    fn engine_repro_test_exists(name: &str) {
+        let pat = format!("fn {name}(");
+        let mut hits = 0usize;
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(fp).unwrap();
+            let ls: Vec<&str> = src.lines().collect();
+            for (i, l) in ls.iter().enumerate() {
+                if !l.trim().starts_with(pat.as_str()) {
+                    continue;
+                }
+                hits += 1;
+                let mut k = i.saturating_sub(1);
+                loop {
+                    let above = ls[k].trim();
+                    if above.is_empty() || above.starts_with("//") {
+                        if k == 0 {
+                            break;
+                        }
+                        k -= 1;
+                        continue;
+                    }
+                    assert_eq!(
+                        above,
+                        "#[test]",
+                        "`{name}` 定义上方的第一条非注释行是「{above}」而不是 `#[test]` ⇒ 这条复现测已经不再被 cargo 跑到，实测路那些行的数字没人验了"
+                    );
+                    break;
+                }
+            }
+        }
+        assert_eq!(hits, 1, "引擎复现测 `{name}` 应恰有 1 处定义，实测 {hits} 处 ⇒ 它被改名／删掉／复制了，实测路的行已经没人跑");
+    }
+
+    /// §七 卡牌模型反向覆盖：22 条必检行**全走锚点、零挂债**，另加五层等值。    ///
     /// 必检行由形态推导（不接受手写清单）：章标题到章末 `---` 之间，trim 后**含字母或汉字**的行全算——
     /// 这一条顺带剔掉 ``` 围栏符、单独成行的 `}` 与 `---`（它们没有字母数字），不必另设框线判据。
     /// 再剔两类：**列头**沿用 §十六 的列头双条件（结构上是等元数 run 的首行 ＋ 字面命中词表
@@ -1988,6 +2081,8 @@ mod anchor_tests {
         for n in [665usize, 666] {
             assert!(debited.contains(&n), "md:{n}（「{}」）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
         }
+        // §十四 帧补的尺：实测路那 14 行靠这条复现测真的在跑，删掉它行数照对、却没人再跑（见 engine_repro_test_exists）。
+        engine_repro_test_exists("section15_worked_examples_reproduce_on_the_engine");
     }
 
     /// §十七 挤压与推进——**第二张非表的章**，也是第一条"整章都是围栏流程步"的章（没有示例数字，
@@ -2282,6 +2377,229 @@ mod anchor_tests {
         for n in [697usize, 698, 702, 705, 706, 707, 708, 709, 715, 716, 717, 718, 721] {
             assert!(debited.contains(&n), "md:{n}（「{}」）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
         }
+        // 同上：§十六 那 3 行示例实测也要求复现测还在（§十四 帧补的尺，三章共用）。
+        engine_repro_test_exists("section16_worked_examples_reproduce_on_the_engine");
+    }
+
+    /// §十四 持业者·蜡烛反向覆盖：12 条必检行，**本仓第一次在同一章并用两条路、且让九行双记账**。
+    ///
+    /// 形状：这一章同时有一张三行小表（582–585）与一段围栏（589–600），所以 §十五/§十六 那套"标签／列头"
+    /// 形状路和 §十六 的"文档数字驱动引擎"实测路在同一章都用上。围栏内的行**一律由解析器给**
+    /// （`battle::parse_section14_candle_rules`），推导器不在围栏里再判一次标签——否则同一串字两套口径，
+    /// 会朝不同方向错（同 §十五 那条"两处各写一遍"的理由）。顺带一个后果：本章的「我方持业者：／敌方持业者：」
+    /// 在 §十五 会被 ① 档判成**标签**吞掉，这里它们是规则行（点名哪一侧）——所以 walk 一进围栏就放弃标签判据。
+    ///
+    /// **双记账**（本帧新东西）：围栏那 9 行既有锚点指回、又被引擎实测。§十五/§十六 明令示例行**不许**走锚点路，
+    /// 怕的是"用锚点顶掉实测"；这里顶不掉——实测路的行集合由解析器强制（少一行当场红），锚点只是**额外**一层。
+    /// 两层的牙不一样，这才是双写的理由：
+    /// 摘掉 md:592 的锚 ⇒ 只有"12 行全有锚"那条红（分区计数仍是 锚点3／挂债0／实测9，看不见）；
+    /// 把 md:592 的减短量改成 2 ⇒ 只有引擎实测那条红（行数没变，形状尺量不到数字）。
+    ///
+    /// 五层等值，每层各钉一件事：
+    /// ① 认领路：12 行全有锚点、挂债 0；分区计数 (锚点3／挂债0／实测9)。
+    /// ② md:583「正常燃烧…**不减短**」＝否定式条款 → 蜡烛写点必须是那份**封闭名单**（见 `s14_candle_writes`）。
+    /// ③ md:591／md:596 两处「初始长度20单位」→ `CANDLE_HP` 必须等于文档那个数，且两侧构造期同读这一个常量。
+    /// ④ 数字→引擎：`section14_candle_numbers_reproduce_on_the_engine` 必须真的还在（`engine_repro_test_exists`）。
+    /// ⑤ md:599「视觉与玩家持业者对称」→ 棋盘上两侧共用同一个 `candle_bar`：1 处定义＋2 处调用，多一处＝另起炉灶。
+    ///
+    /// 边界如实登记（不由本章声称覆盖）：Boss 双烛（`e_candle2`／`both_holders_out`，见本文件裁定19）与
+    /// Boss profile 覆写初始 20，都超出 §十四 的措辞——文档 md:598 只写单烛判死。这两处由 ② 的名单
+    /// （列出了 `e_candle2` 的写点）与 `battle.rs`／`boss.rs` 的 Boss 测各自守着，不在本章配比里主张"已覆盖"。
+    #[test]
+    fn every_row_of_section14_holder_candle_is_anchored_back_and_its_numbers_are_reproduced() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十四、持业者 · 蜡烛")
+            .expect("§十四 标题必须存在（文档结构变了就要同步改本检查）");
+        let arity = |n: usize| -> usize { at(n).split_whitespace().count() };
+        let next_non_blank = |n: usize| -> usize {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            k
+        };
+        // 从 n 起「连续非空、且不是 `---`／``` 」的 run 长度。
+        // **这里故意不用 §十六/§十五 的「等元数」run**：本章表体三列，可空格切出来的 token 数是 4/4/3
+        // （`❌ 不减短` 占了两段），等元数判据会把这张表的列头与表体切成两个 run，从 582 起只数到 1 行，
+        // 于是 580 与 582 都不再被认成标签／列头，580 反倒伪装成必检行（本帧实测到的：先红在 labels 那条）。
+        // 改判「连续非空 run ≥ 2」＋字面命中词表，结构条件照样在（词表吃不进的新列头仍旧掉进必检行），
+        // 只是不再假设列与列之间空格数一致。
+        let block_len = |n: usize| -> usize {
+            let mut k = n;
+            let mut cnt = 0usize;
+            while k <= lines.len() && !at(k).trim().is_empty() && at(k).trim() != "---" && at(k).trim() != "```" {
+                cnt += 1;
+                k += 1;
+            }
+            cnt
+        };
+
+        // 围栏外的形状路（标签／列头）＋围栏内的解析器路，两条拼成必检集。
+        const S14_HEADERS: [&str; 1] = ["状态 表现 是否减短"];
+        let mut rows: Vec<usize> = Vec::new();
+        let mut labels: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence = false;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                fence_ticks += 1;
+                continue;
+            }
+            if t.is_empty() || fence {
+                continue;
+            }
+            let nb = next_non_blank(n);
+            let nb_text = at(nb).trim();
+            if arity(n) == 1 && (nb_text == "```" || S14_HEADERS.contains(&nb_text)) {
+                labels.push(n);
+                continue;
+            }
+            if S14_HEADERS.contains(&t) {
+                assert!(block_len(n) >= 2, "md:{n}「{t}」在列头词表里却不在任何表格块的开头 ⇒ 文档改了表形，词表得跟着改（结构与字面两个方向都要对得上）");
+                headers.push(n);
+                continue;
+            }
+            rows.push(n);
+        }
+        assert_eq!(fence_ticks, 2, "§十四 应只有一道 ``` 围栏（蜡烛视觉），实测 {fence_ticks} 个围栏符 ⇒ 文档加了第二段围栏，而解析器只读第一段，那里的新行会从两把尺外面一起漏过去");
+        assert!(!fence, "§十四 的围栏没有闭合（数到奇数个 ```）");
+        assert_eq!(
+            labels,
+            vec![580, 587],
+            "§十四 的标签应恰好是 580 蜡烛机制／587 蜡烛视觉，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效"
+        );
+        assert_eq!(headers, vec![582], "§十四 的列头应恰好是 582「状态 表现 是否减短」，实测 {headers:?} ⇒ 列头判据失效（结构＋字面两个条件缺一不可）");
+        assert_eq!(rows, vec![583, 584, 585], "§十四 围栏外应得表体 583/584/585 三行，实测 {rows:?}");
+
+        let parsed = crate::battle::parse_section14_candle_rules(&lines);
+        let verified: Vec<usize> = parsed.iter().map(|c| c.line).collect();
+        assert_eq!(
+            verified,
+            vec![590, 591, 592, 593, 595, 596, 597, 598, 599],
+            "§十四 围栏行的名单由解析器给，应为 590–593＋595–599，实测 {verified:?} ⇒ 解析器与本推导器对同一段围栏读法不同"
+        );
+        rows.extend(verified.iter().copied());
+        rows.sort_unstable();
+        assert_eq!(
+            rows.len(),
+            12,
+            "§十四 必检行应恰好 12 行（表体3＋围栏9），实测 {} 行 ⇒ 文档加了规则或推导口径失效",
+            rows.len()
+        );
+        // 成员级双向钉：两种形态各钉一行必须在必检集，各类排除行各钉一行必须不在。
+        for n in [583usize, 585, 591, 593, 599] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §十四 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [578usize, 580, 582, 587, 589, 600, 602] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／标签／列头／围栏符判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §十四 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§十四 有 {} 行既无锚点指回、也不在债表里、又不是围栏里被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (3, 0, 9),
+            "§十四 三条认领路的分区计数应为 锚点3／挂债0／实测9（围栏行按实测优先计），实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从一条路悄悄挪到另一条"
+        );
+        for n in [583usize, 584, 585] {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）是表体行，登记的处置是「锚点指回」，现在没有锚点＝实现被删或锚被摘", at(n));
+        }
+        // 双记账的另一层：本章纪律是 **12 行全有锚**，实测路不豁免（分区计数看不见这一层，摘掉围栏行的锚它照样绿）。
+        for &n in &rows {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）没有锚点指回 ⇒ §十四 的纪律是 12 行**全**指回，走了实测路也不豁免锚点", at(n));
+        }
+        assert!(
+            rows.iter().all(|n| !debited.contains(n)),
+            "§十四 不该有挂债行：本章 12 行全部已实现并已指回，任何一行躺进债表都说明实现被撤"
+        );
+
+        // ② 否定式条款的形状：不减短＝写点名单里没有"回合推进"这一类。名单是封闭集，逐条点名。
+        let writes = s14_candle_writes();
+        assert_eq!(
+            writes,
+            vec![
+                "b.e_candle = p.holder_hp;",
+                "b.e_candle2 = p.holder_hp2;",
+                "e_candle2: None,",
+                "e_candle: CANDLE_HP,",
+                "p_candle: CANDLE_HP,",
+                "self.e_candle -= dmg;",
+                "self.e_candle -= if hit_first { dmg } else { mirror };",
+                "self.e_candle2 = Some(c2 - if hit_first { mirror } else { dmg });",
+                "self.p_candle -= d;",
+                "self.p_candle -= remain;",
+            ],
+            "§十四:583「正常燃烧…**不减短」**靠这份**封闭的**蜡烛写点名单兑现：构造 3 ＋ Boss 档案覆写 2 ＋ 伤害 5。多一条＝文档没写过的东西在减蜡烛（例如「每回合自动衰减」），少一条＝已登记的减短路被摘 ⇒ 名单实测 {} 条：{writes:?}",
+            writes.len()
+        );
+
+        // ③ 文档给的那个数，必须就是引擎用的那个常量，而且两侧同读它。
+        let mut inits: Vec<i32> = Vec::new();
+        let mut per_hits: Vec<(i32, i32)> = Vec::new();
+        let mut deaths: Vec<i32> = Vec::new();
+        let mut symmetries = 0usize;
+        for c in &parsed {
+            match c.claim {
+                crate::battle::S14Claim::Init(v) => inits.push(v),
+                crate::battle::S14Claim::PerHit { dmg, shrink } => per_hits.push((dmg, shrink)),
+                crate::battle::S14Claim::DeathAt(v) => deaths.push(v),
+                crate::battle::S14Claim::Symmetry => symmetries += 1,
+                crate::battle::S14Claim::Side(_) => {}
+            }
+        }
+        assert_eq!((inits.len(), per_hits.len(), deaths.len(), symmetries), (2, 2, 2, 1), "§十四 围栏应给两侧各一行初始长度／每受伤减短／判死上界，加一行对称，实测 初始{}／每受{}／判死{}／对称{}", inits.len(), per_hits.len(), deaths.len(), symmetries);
+        assert!(inits.iter().all(|v| *v == inits[0]), "§十四 两侧写的初始长度不一致 {inits:?} ⇒ md:599「对称」在数字层面已经不成立");
+        assert_eq!(crate::battle::CANDLE_HP, inits[0], "引擎常量 CANDLE_HP＝{} ≠ 文档写的初始长度 {}（md:591／md:596 两处）⇒ 改任何一侧都要撞这里，挂锚证不了\"数相等\"", crate::battle::CANDLE_HP, inits[0]);
+        assert!(
+            writes.contains(&"p_candle: CANDLE_HP,".to_string()) && writes.contains(&"e_candle: CANDLE_HP,".to_string()),
+            "md:591／md:596 两侧「初始长度」必须由**同一个**常量在构造期写入；写点名单里缺一侧＝那一侧改成了别的来源（字面量或档案），md:599 的对称破了"
+        );
+
+        // ④ 那些数字真的被引擎跑过——不是"有个测试文件提到过"，而是那条复现测还在。
+        engine_repro_test_exists("section14_candle_numbers_reproduce_on_the_engine");
+
+        // ⑤ md:599「对称」＝棋盘上只有一处画蜡烛的函数，敌我各调一次。
+        assert_eq!(
+            code_occurrences("candle_bar("),
+            3,
+            "§十四:599 要求棋盘的蜡烛条只有 1 处定义＋敌我各 1 处调用（`candle_bar(` 合计 3 次），实测 {} 次 ⇒ 有人另起炉灶画蜡烛，或摘掉了一侧的调用（`boss::dossier` 那种纯数字串不是画条，不在此数）",
+            code_occurrences("candle_bar(")
+        );
     }
 
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
@@ -2543,9 +2861,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七 十张表／章现在各自带推导器
-    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§五/§六/§九/§十四）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四 十一张表／章现在各自带推导器
+    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十一章的完整性由推导器负责**；
+    /// 其余各章（§一/§二/§三/§四/§五/§六/§九/§十/§十一/§十三/§十九/§廿）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {

@@ -1730,6 +1730,164 @@ pub(crate) fn parse_section16_examples(lines: &[String]) -> Vec<S16Case> {
     panic!("§十六 示例围栏没有闭围栏（{open} 之后找不到 ```）")
 }
 
+/// §十四「蜡烛视觉」围栏（590–599）一行读成的断言。本章没有示例算式，但规则行自己带着三个数
+/// （初始长度／每受 X 伤减短 Y／判死上界）——那就是可跑的输入，所以走 §十五/§十六 那条「文档数字驱动引擎」的路。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S14Claim {
+    /// `我方持业者：`／`敌方持业者：`——分侧标签，其后所有规则行归这一侧。
+    Side(&'static str),
+    /// `- 初始长度20单位`
+    Init(i32),
+    /// `- 每受到1伤害 → 蜡烛减短1单位`
+    PerHit { dmg: i32, shrink: i32 },
+    /// `- 蜡烛长度≤0 → 烛尽 → …死亡`，存的是那个上界
+    DeathAt(i32),
+    /// `- 视觉与玩家持业者对称`——本章唯一不带数字的规则行，实测里只核对两侧走同一个渲染函数。
+    Symmetry,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct S14Line {
+    pub line: usize,
+    /// 归属侧：`我方`／`敌方`
+    pub side: &'static str,
+    pub claim: S14Claim,
+}
+
+/// §十四 围栏行的形态错报出口。**写成普通 fn 而不是闭包**，理由同 §十五/§十六 那两处。
+#[cfg(test)]
+fn s14_bad(tag: &str, why: &str) -> ! {
+    panic!(
+        "{tag} 不像 §十四 蜡烛围栏行的形态（`我方／敌方持业者：`｜`- 初始长度N单位`｜`- 每受到X伤害 → 蜡烛减短Y单位`｜\
+         `- 蜡烛长度≤N → 烛尽 → …死亡`｜`- 视觉与玩家持业者对称`）：{why}。\
+         请先扩本解析器与它对应的实测断言，别让规则行从尺子外面漏过去（挂锚对这类行不算实测，见 model.rs 的 §十四 推导器）"
+    );
+}
+
+#[cfg(test)]
+fn s14_classify(t: &str, line: usize) -> S14Claim {
+    let tag = format!("md:{line}「{t}」");
+    if t.ends_with('：') {
+        let words: Vec<&str> = t.split_whitespace().collect();
+        if words.len() != 1 {
+            s14_bad(&tag, &format!("侧标签该是单 token，实测 {} 个", words.len()));
+        }
+        return if t.starts_with("我方") {
+            S14Claim::Side("我方")
+        } else if t.starts_with("敌方") {
+            S14Claim::Side("敌方")
+        } else {
+            s14_bad(&tag, "以「：」收尾却不是我方／敌方任何一侧的标签");
+        };
+    }
+    let Some(body) = t.strip_prefix("- ") else {
+        s14_bad(&tag, "规则行该以「- 」开头");
+    };
+    let nums = s15_digits(body);
+    if body.starts_with("初始长度") {
+        if nums.len() != 1 {
+            s14_bad(&tag, &format!("「{body}」解析出 {} 个数字，初始长度该有 1 个", nums.len()));
+        }
+        return S14Claim::Init(nums[0]);
+    }
+    if body.contains("每受到") {
+        if !body.contains("蜡烛减短") {
+            s14_bad(&tag, "有「每受到」却没有「蜡烛减短」，这一行读不出减多少");
+        }
+        if nums.len() != 2 {
+            s14_bad(&tag, &format!("「{body}」解析出 {} 个数字，伤害与减短量各 1 个、共 2 个", nums.len()));
+        }
+        return S14Claim::PerHit { dmg: nums[0], shrink: nums[1] };
+    }
+    if body.starts_with("蜡烛长度") {
+        if !body.contains("烛尽") {
+            s14_bad(&tag, "有「蜡烛长度」却没有「烛尽」，判死对象读不出来");
+        }
+        if nums.len() != 1 {
+            s14_bad(&tag, &format!("「{body}」解析出 {} 个数字，判死上界该有 1 个", nums.len()));
+        }
+        return S14Claim::DeathAt(nums[0]);
+    }
+    if body.starts_with("视觉") {
+        if !nums.is_empty() {
+            s14_bad(&tag, &format!("对称行不该带数字，实测解析出 {}", nums.len()));
+        }
+        return S14Claim::Symmetry;
+    }
+    s14_bad(&tag, "五种形态一种都不像")
+}
+
+/// 定位并解析 §十四「蜡烛视觉」围栏：章标题 → 其后第一道 ``` → 到下一道 ```。
+/// 它同时是 §十四 推导器实测路的**唯一口径**：那边的行集合必须由这里的行号构成（同 §十五/§十六）。
+#[cfg(test)]
+pub(crate) fn parse_section14_candle_rules(lines: &[String]) -> Vec<S14Line> {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "十四、持业者 · 蜡烛")
+        .expect("§十四 标题必须存在（文档结构变了就要同步改本解析器与 model.rs 的推导器）");
+    let open = ((head + 2)..=lines.len())
+        .find(|&n| at(n).trim() == "```")
+        .expect("§十四 必须有一道 ``` 围栏（蜡烛视觉那一段）");
+    let mut cur: Option<&'static str> = None;
+    let mut out: Vec<S14Line> = Vec::new();
+    for n in (open + 1)..=lines.len() {
+        let t = at(n).trim();
+        if t == "```" {
+            return out;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        let claim = s14_classify(t, n);
+        if let S14Claim::Side(s) = claim {
+            cur = Some(s);
+        }
+        let side = match cur {
+            Some(s) => s,
+            None => panic!("md:{n}「{t}」出现在任何「持业者：」侧标签之前 ⇒ §十四 围栏结构变了"),
+        };
+        out.push(S14Line { line: n, side, claim });
+    }
+    panic!("§十四 蜡烛视觉围栏没有闭围栏（{open} 之后找不到 ```）")
+}
+
+/// §十四 一侧（我方／敌方）折叠出来的数字。**缺任何一项都当场 panic**，不接受"少一行就算了"：
+/// 少一行意味着那条规则不再有实测，而它看着 Still 像被覆盖过。
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct S14Rule {
+    pub init: Option<i32>,
+    pub per_hit: Option<(i32, i32)>,
+    pub death_at: Option<i32>,
+    pub symmetry: bool,
+    pub lines: Vec<usize>,
+}
+
+/// 把围栏行折叠成两侧的规则。`need` 的措辞故意写成"缺这行会怎样"，让哪天文档真删了一行时，
+/// 红字直接说出该补哪一行，而不是留一个 `None` 悄悄跳过实测。
+#[cfg(test)]
+pub(crate) fn s14_fold(side: &'static str, rows: &[S14Line]) -> S14Rule {
+    let mut r = S14Rule { init: None, per_hit: None, death_at: None, symmetry: false, lines: Vec::new() };
+    for c in rows.iter().filter(|c| c.side == side) {
+        r.lines.push(c.line);
+        match c.claim {
+            S14Claim::Side(_) => {}
+            S14Claim::Init(v) => r.init = Some(v),
+            S14Claim::PerHit { dmg, shrink } => r.per_hit = Some((dmg, shrink)),
+            S14Claim::DeathAt(v) => r.death_at = Some(v),
+            S14Claim::Symmetry => r.symmetry = true,
+        }
+    }
+    let need = |what: &str| -> ! { panic!("§十四「{side}持业者」一侧缺「{what}」这一行 ⇒ 该侧无法复现，先把文档补回来") };
+    r.init.unwrap_or_else(|| need("初始长度"));
+    r.per_hit.unwrap_or_else(|| need("每受到X伤害 → 蜡烛减短Y单位"));
+    r.death_at.unwrap_or_else(|| need("蜡烛长度≤N → 烛尽"));
+    r
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -1962,6 +2120,99 @@ mod rule_tests {
             assert_eq!(bursts, c.triggers as usize, "{tag} 文档说触发 {} 次，引擎实际触发 {bursts} 次", c.triggers);
             let after = b.p_front[0].as_ref().unwrap_or_else(|| panic!("{tag} 触发后这张卡从场上消失了")).flame;
             assert_eq!(after, c.after, "{tag} 引擎剩余业火值 ≠ 文档写的 {}", c.after);
+        }
+    }
+
+    /// §十四「蜡烛视觉」围栏（590–599）的**黄金实测**：初始长度、每受 X 伤减短 Y、判死上界三个数全部从文档
+    /// 读进来（`parse_section14_candle_rules`），再用它们逐发驱动引擎，核对蜡烛序列与判死时点——
+    /// 期望值一行都不写在代码里。挂锚证不了"算出的数＝写的数"，所以这条路必须真跑。
+    /// 与 §十五/§十六 的示例行不同，这九行**同时**也有锚点指回代码（本仓第一次同章双记账）；
+    /// 为什么这不是把「必须跑一遍」降级成「有人指过来就行」，见 `model.rs` 的 §十四 推导器注释。
+    #[test]
+    fn section14_candle_numbers_reproduce_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let rows = parse_section14_candle_rules(&lines);
+        assert_eq!(rows.len(), 9, "§十四 蜡烛围栏按形态应解析出 9 行（2 个侧标签＋7 条规则行），实测 {} 行 ⇒ 文档增删了围栏行", rows.len());
+        assert_eq!(
+            rows.iter().map(|c| c.line).collect::<Vec<_>>(),
+            vec![590, 591, 592, 593, 595, 596, 597, 598, 599],
+            "§十四 围栏的行号名单变了 ⇒ 文档重排过蜡烛视觉，请连 model.rs 推导器里的钉一起改"
+        );
+        let p = s14_fold("我方", &rows);
+        let e = s14_fold("敌方", &rows);
+        assert_eq!(p.lines, vec![590, 591, 592, 593], "§十四 我方侧应正好四行（标签＋3 规则），实测 {:?}", p.lines);
+        assert_eq!(e.lines, vec![595, 596, 597, 598, 599], "§十四 敌方侧应正好五行（标签＋3 规则＋对称），实测 {:?}", e.lines);
+        let (p_init, p_death) = (p.init.unwrap(), p.death_at.unwrap());
+        let (p_dmg, p_shrink) = p.per_hit.unwrap();
+        let (e_init, e_death) = (e.init.unwrap(), e.death_at.unwrap());
+        let (e_dmg, e_shrink) = e.per_hit.unwrap();
+        assert!(e.symmetry, "md:599 的「视觉与玩家持业者对称」没被折成 Symmetry ⇒ 解析器与本测口径分叉");
+        // 两侧数字必须一致——那是 md:599「对称」在数字层面的意思，也是本测敢用同一套驱动跑两侧的前提。
+        assert_eq!(
+            (p_init, p_dmg, p_shrink, p_death),
+            (e_init, e_dmg, e_shrink, e_death),
+            "§十四 两侧数字不一致：我方 初始{p_init}／每受{p_dmg}减{p_shrink}／≤{p_death}判死，敌方 初始{e_init}／每受{e_dmg}减{e_shrink}／≤{e_death}判死 ⇒ 文档自己不再对称，先定文档口径"
+        );
+        assert!(p_shrink > 0, "md:592 的减短量是 {p_shrink}，非正数推不出判死所需发数");
+        assert_eq!(p_init, CANDLE_HP, "文档写的初始长度 {p_init} ≠ 引擎常量 CANDLE_HP {CANDLE_HP}（md:591／md:596 两侧同读这一个常量）");
+        let hits = (p_init - p_death + p_shrink - 1) / p_shrink;
+
+        // 我方一侧：§十五 的回滚闸排在裸减烛之前，先把预算清零——本章复现的是"每受 X 伤减 Y"这条裸规则本身。
+        // 判死要**两个方向**都咬：蜡烛还没到上界引擎不许结束（早死），一旦到了上界引擎必须立刻结束（晚死）。
+        // 只核对最后那一发是咬不住"文档把判死线抬高"的（本帧 M45 实测到才补上）。
+        let mut b = fresh_battle();
+        b.rollback_left = 0;
+        let mut candle = p_init;
+        let mut died = None;
+        for k in 1..=hits {
+            let before = b.p_candle;
+            assert_eq!(before, candle, "我方第 {k} 发前：引擎蜡烛 {before} ≠ 文档推得的 {candle}");
+            b.dealt_this_turn = 0;
+            b.pending_candle_d = p_dmg;
+            b.enemy_settle();
+            candle -= p_shrink;
+            assert_eq!(b.p_candle, candle, "我方第 {k} 发：文档说每受 {p_dmg} 伤害减短 {p_shrink}，引擎实减 {}", before - b.p_candle);
+            if candle <= p_death {
+                assert_eq!(b.over, Some(Outcome::PlayerLose), "第 {k} 发后蜡烛剩 {candle}，已到文档写的「≤{p_death} 即烛尽」，引擎却没判死（over={:?}）", b.over);
+                died = Some(k);
+                break;
+            }
+            assert_eq!(b.over, None, "第 {k} 发后蜡烛还有 {candle}，没到「≤{p_death}」这条线，引擎却已结束在 {:?}", b.over);
+        }
+        assert_eq!(died, Some(hits), "判死发数没落在文档数字推定的第 {hits} 发（初始 {p_init}／每受 {p_dmg} 减 {p_shrink}／≤{p_death} 判死），实测第 {died:?} 发");
+
+        // 敌方一侧：同一组数字，走 `damage_enemy_holder` 那条直击路（单烛，Boss 双烛另见 model.rs 的边界登记）。
+        let mut b = fresh_battle();
+        let mut candle = e_init;
+        let mut died = None;
+        for k in 1..=hits {
+            let before = b.e_candle;
+            assert_eq!(before, candle, "敌方第 {k} 发前：引擎蜡烛 {before} ≠ 文档推得的 {candle}");
+            b.damage_enemy_holder(e_dmg, None, HolderHit::Direct);
+            candle -= e_shrink;
+            assert_eq!(b.e_candle, candle, "敌方第 {k} 发：文档说每受 {e_dmg} 伤害减短 {e_shrink}，引擎实减 {}", before - b.e_candle);
+            if candle <= e_death {
+                assert_eq!(b.over, Some(Outcome::PlayerWin), "第 {k} 发后敌方蜡烛剩 {candle}，已到「≤{e_death} 即烛尽」，引擎却没判我方胜（over={:?}）", b.over);
+                died = Some(k);
+                break;
+            }
+            assert_eq!(b.over, None, "第 {k} 发后敌方蜡烛还有 {candle}，没到「≤{e_death}」，引擎却已结束在 {:?}", b.over);
+        }
+        assert_eq!(died, Some(hits), "敌方判死发数没落在文档推定的第 {hits} 发，实测第 {died:?} 发");
+
+        // md:599「对称」的行为面：同一长度在两侧渲染出**逐字节相同**的那一串蜡烛（不是"看着差不多"）。
+        let mut b = fresh_battle();
+        let shown = p_init / 2;
+        b.p_candle = shown;
+        b.e_candle = shown;
+        let text = crate::render::render_board(&b.view());
+        let bar = crate::render::candle_bar(shown, CANDLE_HP);
+        for who in ["我方持业者", "敌方持业者"] {
+            let line = text
+                .lines()
+                .find(|l| l.starts_with(who))
+                .unwrap_or_else(|| panic!("渲染里没有以「{who}」开头的一行 ⇒ 渲染层改动会先撞这里"));
+            assert!(line.contains(&bar), "「{who}」那一行里没有 `candle_bar({shown}, {CANDLE_HP})` 的字节 ⇒ 两侧渲染路径已分叉，md:599 的「对称」破了（实测「{line}」期望含「{bar}」）");
         }
     }
 
