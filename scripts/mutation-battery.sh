@@ -226,4 +226,40 @@ assert old in s, '没找到排除表'
 i=s.index(old)+len(old)
 open(p,'w',encoding='utf8').write(s[:i]+'(705, \"变异检验：已挂债的行又想进排除表\"), '+s[i:])"
 run
+echo "### M28 抹掉 §八:295（同列友方攻击+1）的锚点 ⇒ 应红在 §八 推导器（漏登记）"
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'\s*//\s*§八:295(?P<c>[^\n]*)','',s)
+assert s2!=s, '没抹到 §八:295'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M29 文档副本只改 md:295 的「效果」列（+1→+2）⇒ 应红在 §八 推导器的槽位等值（正证：两列是真比对，不是同一串读两遍）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[294].startswith('5 同列友方攻击+1 同列友方攻击+1'), '文档行 295 变了，副本口径不再对：'+ls[294]
+ls[294]='5 同列友方攻击+1 同列友方攻击+2'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M30 文档副本把 md:295 **两列一起**改成 +2 ⇒ 槽位照样自洽，应红在「变体名尾数 ↔ 文档增减量」这一层（正证：等值尺之外还有一把对着代码名字的尺）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[294].startswith('5 同列友方攻击+1 同列友方攻击+1'), '文档行 295 变了，副本口径不再对：'+ls[294]
+ls[294]='5 同列友方攻击+2 同列友方攻击+2'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M31 枚举行内注释改一字（AllyColAtk1 的注释 +1→+2）⇒ 应红在 §八 推导器的「技能列 ↔ 注释」逐字节比对"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='AllyColAtk1,         // 5 同列友方攻击+1'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'AllyColAtk1,         // 5 同列友方攻击+2'))"
+run
+echo "### M32 行为回归：把「同列友方攻击+1」实现成 -1 ⇒ 应红在正向测 stacked_skills_count_per_copy 而 §八 推导器绿（正证：本帧这把尺不碰引擎，行为仍要靠正向测兜）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='dmg += Self::skill_count('
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'dmg -= Self::skill_count('))"
+run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run

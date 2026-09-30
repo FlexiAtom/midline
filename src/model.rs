@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **八张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **九张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -187,8 +187,18 @@
 //!       字面命中「项目 说明」／「状态 表现」，两个方向都 fail-loud）与**纯制表符框线不算规则**（同一围栏内
 //!       带文字的图注 697/698 照算，否则整张外观图会被当成"这不是规则"吞掉）。示例那 3 行由
 //!       `battle::parse_section16_examples` 读文档自己的「阈值／业火值／触发次数／A-B=R」驱动引擎复现，
-//!       见 `every_row_of_section16_…`）。**仍未纳入**的是
-//!       §一/§二/§五/§六/§七/§八/§十四 那些散文行——那里"整条规则没落地"仍查不出；
+//!       见 `every_row_of_section16_…`）、以及本帧的 §八 技能池（**第一张整章走"锚点＋逐字段等值"两路并用的表**：
+//!       13 行＝1 行「技能池（随机附加，12种）：」声明＋12 条技能行，全走锚点、零挂债。新在**比的两侧都不是
+//!       手抄清单**：① 文档自己写的「12种」与 `Skill::list()` 的长度对撞；② 编号 ↔ `list()` 下标 ↔ 枚举声明序
+//!       ↔ 变体 Debug 名四方同序；③「技能」列 ↔ 枚举行内注释**逐字节**（注释在这里是被当作被比对的数据读的，
+//!       不是当锚点算）；④「效果」列 ↔ 「技能」列按**语义槽位**等值——这两列文档自己措辞就不同（md:291
+//!       「攻击后自身+1累积」／「攻击后自身业火+1」：`+1` 漂了位置），量出来的口径是**「累积」与「业火」是引擎
+//!       同一个 `flame` 的两种写法**，词表见 `s8_slots`，要求两侧全消费且范围／量纲两槽必填（吃不进的新措辞、
+//!       或整槽缺失都当场红）；⑤ 变体名尾数与文档的增减量再对一次。这章**没跑引擎**，盲区照登：把
+//!       「同列友方攻击+1」实现成 -1，这把尺量不到——12 个变体里只有 4 个有断言其效果的测（`AllyColAtk1`／
+//!       `AllyColThreshM1`／`AtkSameColFlame1`／`EnemyColDmgTakenP1`），其余 8 个连"量纲落在哪个目标上"都没测过；
+//!       补法（下一帧）＝把「效果」列解析出的 (时机, 目标, 量纲, 增减) 直接驱动引擎逐行复现，见 `every_skill_row_of_section8_…`）。**仍未纳入**的是
+//!       §一/§二/§五/§六/§七/§十四 那些散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       §十五 那一帧暴露的**否定式条款**盲区在本章又添两例：§十七:763「任何卡牌不能越过中线」锚在
 //!       `DeathCause` 的变体列表上（指向的是"这里没有第四因"），§十七:747「后排多张只推最靠近前排的」
@@ -344,7 +354,7 @@ pub enum Skill {
 }
 
 impl Skill {
-    pub fn list() -> [Skill; 12] {  // §廿三:999 技能池 12 种，数组长度即编译期计数
+    pub fn list() -> [Skill; 12] {  // §廿三:999 技能池 12 种，数组长度即编译期计数；§八:288 文档写的是同一个数
         [
             Skill::AtkSelfFlame1,
             Skill::AtkSameColFlame1,
@@ -617,7 +627,7 @@ pub(crate) fn doc_or_skip() -> Option<Vec<String>> {
 /// 语义是否被曲解无法机检——那仍靠人向设计逐条核对。
 #[cfg(test)]
 mod anchor_tests {
-    use super::{Faction, doc_or_skip, faction_cards};
+    use super::{Faction, Skill, doc_or_skip, faction_cards};
 
     const NUM: &[char] = &['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '廿'];
 
@@ -943,8 +953,9 @@ mod anchor_tests {
     /// 原因见该测试的注释）；§廿三 由 `every_row_of_section23_…` 覆盖；§廿一 由
     /// `every_row_of_section21_…` 覆盖（一张章里三张子表）；§十五 由 `every_row_of_section15_…`、
     /// §十七 由 `every_row_of_section17_…`、§十六 由 `every_row_of_section16_…` 覆盖——这三章不是表，
-    /// 必检行按**形态**推导，口径与各自的标签／列头／框线判据见各自测试注释。
-    /// **其余各章**（§一/§二/§三/§六/§七/§八/§十四）仍未反向纳入。
+    /// 必检行按**形态**推导，口径与各自的标签／列头／框线判据见各自测试注释；§八 由
+    /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）。
+    /// **其余各章**（§一/§二/§三/§六/§七/§十四）仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -1037,6 +1048,179 @@ mod anchor_tests {
             }
         }
         assert!(bad.is_empty(), "{} 处 §十八 卡表与文档不符：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    /// §八 技能池：13 行必检（1 行「12种」声明 + 12 条技能行）**全部**要有锚点指回，并与代码逐字段比死。
+    /// 与 §十八 同一个假绿形状：只数"这一行有没有被认领"，那么 12 枚锚全钉在同一个 `match` 分支上也算绿，
+    /// 而文档把某个技能名抄错一个字不会红。所以这里比四层：
+    /// ① 行集合从**结构**推导（章标题之后到 `---`，跳空行与列头），钉死 13 行＝1 声明＋12 数据；
+    /// ② 「12种」是**文档自己写的数字**，与 `Skill::list()` 的长度对撞——文档改数即红，期望不写在测里；
+    /// ③ 编号 ↔ `Skill::list()` 下标 ↔ 枚举声明顺序 ↔ 变体 Debug 名，四方同序；
+    /// ④ 文档「技能」列 ↔ 枚举行内注释（生产面文本，**逐字节**）；「效果」列 ↔ 「技能」列按**语义槽位**等值。
+    ///    ④ 分开两种比法是因为文档自己两处措辞不同：md:291 技能「攻击后自身+1累积」／效果「攻击后自身业火+1」——
+    ///    「累积」与「业火」是引擎同一个 `flame` 的两种写法（本帧量出的口径），且 `+1` 漂了位置，逐字节比不了。
+    /// 槽位词表是本检查唯一的人工入口，两侧都必须**全消费**：文档新增一种措辞（把「相邻列」写成「邻接列」）
+    /// 词表吃不下 ⇒ 当场红，不许静默跳过。变体名尾部的数字再与文档的增减量对一次（`AllyColAtk1` ↔ ±1），
+    /// 这样"文档改成 +2 而枚举名没跟着改"也会红。
+    /// 残留盲区（如实登记）：④ 只证**文档自洽＋文档与命名对齐**，没跑引擎——把「同列友方攻击+1」实现成 -1，
+    /// 本推导器与那 12 枚锚都不会红。补法（下一帧）：把「效果」列解析出的 (时机, 目标, 量纲, 增减) 直接驱动
+    /// 引擎逐行复现，代价是要新加一组"量一个数"的测量入口（攻击／受伤／阈值／业火四种量纲各一个）。
+    #[test]
+    fn every_skill_row_of_section8_is_anchored_back_and_matches_field_by_field() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let rows = table_body(&lines, "八、技能池", "编号 技能 效果");
+        assert_eq!(
+            rows,
+            vec![288, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302],
+            "§八 表体按结构推导出的行集合变了 ⇒ 文档加了／改了行，先看清是哪一行的措辞让形态判据换档，再同步这里"
+        );
+        let is_num = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        // (文档行, 编号, 技能列, 效果列)；声明行按"不是三列数字开头"落进 claim。
+        let mut data: Vec<(usize, usize, String, String)> = Vec::new();
+        let mut claim: Vec<usize> = Vec::new();
+        for &n in &rows {
+            let tk: Vec<&str> = at(n).split_whitespace().collect();
+            if tk.len() == 3 && is_num(tk[0]) {
+                data.push((n, tk[0].parse().unwrap(), tk[1].to_string(), tk[2].to_string()));
+            } else {
+                claim.push(n);
+            }
+        }
+        assert_eq!(claim, vec![288], "§八 应只剩一行不是技能数据（「技能池（随机附加，12种）：」），实测 {claim:?}");
+        // ② 文档自己写的种数 ↔ 代码数组长度（把这一行的全部 ASCII 数字取出来当数字，多于一段就红）
+        let digits: String = at(288).chars().filter(char::is_ascii_digit).collect();
+        assert_eq!(
+            digits.parse::<usize>().ok(),
+            Some(Skill::list().len()),
+            "§八:288「{}」里的数字与 `Skill::list()` 长度 {} 不符",
+            at(288),
+            Skill::list().len()
+        );
+
+        // ④ 枚举行内注释＝被比对的另一侧。读源码文本，不读 `stringify!` 之类编译期产物：注释不是语义，
+        //    但它**是**文档措辞的落点，比"再抄一份名字表"少一个会各自漂移的副本。
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let src = std::fs::read_to_string(manifest.join("src/model.rs")).unwrap();
+        let sls: Vec<&str> = src.lines().map(str::trim).collect();
+        let e = sls
+            .iter()
+            .position(|l| *l == "pub enum Skill {")
+            .expect("§八 推导器要读 `pub enum Skill {` 的声明行；枚举改名或挪出 model.rs ⇒ 同步这里");
+        let mut decls: Vec<(String, String)> = Vec::new();
+        for l in &sls[e + 1..] {
+            if *l == "}" {
+                break;
+            }
+            if l.is_empty() || l.starts_with("//") {
+                continue;
+            }
+            let (ident, comment) = l.split_once("//").unwrap_or((l, ""));
+            decls.push((ident.trim().trim_end_matches(',').trim().to_string(), comment.trim().to_string()));
+        }
+        assert_eq!(decls.len(), Skill::list().len(), "枚举声明 {} 个变体 ≠ `Skill::list()` {} 个 ⇒ 漏进池子或漏出文档", decls.len(), Skill::list().len());
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        let pool: Vec<String> = Skill::list().iter().map(|s| format!("{s:?}")).collect();
+        let mut bad: Vec<String> = Vec::new();
+        let mut reworded: Vec<usize> = Vec::new();
+        for (idx, (n, num, skill, effect)) in data.iter().enumerate() {
+            let tag = format!("  md:{n} ← {}", at(*n));
+            if !referenced.contains(&(*n as u32)) {
+                bad.push(format!("{tag} 没有任何锚点指回"));
+                continue;
+            }
+            if debited.contains(n) {
+                bad.push(format!("{tag} 既有锚点指回又挂着债 ⇒ 同一行两头下注"));
+                continue;
+            }
+            if *num != idx + 1 {
+                bad.push(format!("{tag} 文档编号 {num} 不是第 {} 行 ⇒ 编号漂了，锚点会指向另一个变体", idx + 1));
+                continue;
+            }
+            let (decl, comment) = &decls[*num - 1];
+            if decl != &pool[*num - 1] {
+                bad.push(format!("{tag} 枚举里第 {num} 个变体是 `{decl}`，`Skill::list()` 第 {num} 个是 `{}` ⇒ 两边顺序不一致", pool[*num - 1]));
+            }
+            if comment != &format!("{num} {skill}") {
+                bad.push(format!("{tag} 枚举行内注释 {comment:?} ≠ 文档技能列（应写成 \"{num} {skill}\"）"));
+            }
+            let a = s8_slots(skill);
+            let b = s8_slots(effect);
+            if a != b {
+                bad.push(format!("{tag} 「技能」列槽位 {a:?} ≠ 「效果」列槽位 {b:?} ⇒ 文档两处措辞不同义"));
+            }
+            let tail: String = pool[*num - 1].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
+            if tail.parse::<i32>() != Ok(a.delta.abs()) {
+                bad.push(format!("{tag} 文档增减量 {} ↔ 变体名 `{}` 尾数 {tail:?} 不符", a.delta, pool[*num - 1]));
+            }
+            if skill != effect {
+                reworded.push(*n);
+            }
+        }
+        // 六行"技能≠效果"是文档自己的两种写法；把这份读数钉住，改措辞／增删行都会先在这里响。
+        assert_eq!(reworded, vec![291, 292, 293, 294, 299, 300], "§八 里「技能」列与「效果」列不同字面的行变了：实测 {reworded:?}");
+        assert!(bad.is_empty(), "{} 处 §八 技能表与代码不符：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    /// §八「技能」／「效果」两列的语义槽位——本检查唯一的人工词表。
+    /// 「业火」与「累积」同归一个量纲（文档对引擎 `flame` 的两种写法，本帧量出来的口径）；「对」「目标」是介词噪声。
+    /// 解析要求**全消费**且**范围／量纲两槽必填**：吃不进的字要红，整槽缺失也要红——
+    /// 否则文档把「同列友方攻击+1」简写成「同列友方+1」，两列照样"相等"，尺子就空转了。
+    #[derive(Debug, PartialEq, Eq)]
+    struct S8Slots {
+        ev: &'static str,
+        scope: &'static str,
+        side: &'static str,
+        qty: &'static str,
+        delta: i32,
+    }
+
+    fn s8_eat(rest: &mut String, words: &[(&str, &'static str)]) -> Option<&'static str> {
+        words.iter().find_map(|(w, cls)| match rest.find(*w) {
+            Some(p) => {
+                rest.replace_range(p..p + w.len(), "");
+                Some(*cls)
+            }
+            None => None,
+        })
+    }
+
+    fn s8_slots(s: &str) -> S8Slots {
+        // 时机要在量纲之前吃：「攻击后」含「攻击」，反了就把时机读成了量纲。
+        const EV: &[(&str, &str)] = &[("攻击后", "攻"), ("放置时", "放"), ("死亡时", "亡")];
+        const SCOPE: &[(&str, &str)] = &[("相邻列", "邻"), ("自身", "己"), ("同列", "同")];
+        const SIDE: &[(&str, &str)] = &[("友方", "友"), ("敌方", "敌")];
+        const QTY: &[(&str, &str)] = &[("业火", "焰"), ("累积", "焰"), ("攻击", "攻量"), ("受伤", "伤量"), ("阈值", "阈")];
+        let mut rest = s.to_string();
+        let ev = s8_eat(&mut rest, EV).unwrap_or("常驻");
+        let scope = s8_eat(&mut rest, SCOPE).unwrap_or_else(|| panic!("§八 槽位解析：「{s}」里没有范围（自身／同列／相邻列）"));
+        let side = s8_eat(&mut rest, SIDE).unwrap_or("己");
+        let qty = s8_eat(&mut rest, QTY).unwrap_or_else(|| panic!("§八 槽位解析：「{s}」里没有量纲（业火／累积／攻击／受伤／阈值）"));
+        let cs: Vec<char> = rest.chars().collect();
+        let mut found = None;
+        for i in 0..cs.len() {
+            if (cs[i] == '+' || cs[i] == '-') && cs.get(i + 1).is_some_and(|c| c.is_ascii_digit()) {
+                let mut j = i + 1;
+                while j < cs.len() && cs[j].is_ascii_digit() {
+                    j += 1;
+                }
+                let v: i32 = cs[i + 1..j].iter().collect::<String>().parse().unwrap();
+                found = Some((i, j, if cs[i] == '+' { v } else { -v }));
+                break; // 只吃一个；多出来的靠下面的全消费兜住
+            }
+        }
+        let (from, to, delta) = found.unwrap_or_else(|| panic!("§八 槽位解析：「{s}」里没有 ±数字 的增减量"));
+        rest = cs[..from].iter().chain(cs[to..].iter()).collect();
+        for w in ["目标", "对"] {
+            while rest.contains(w) {
+                rest = rest.replace(w, "");
+            }
+        }
+        let left: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(left.is_empty(), "§八 槽位词表吃不下「{s}」剩下的「{left}」⇒ 文档新增了一种措辞，补全词表（不许静默跳过）");
+        S8Slots { ev, scope, side, qty, delta }
     }
 
     /// §十二 完整回合流程：``` 围栏内的**每一条内容行**都必须被锚点指回，或挂成债——排除表在本围栏不作数。
@@ -2005,9 +2189,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六 八张表／章现在各自带推导器
-    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这八章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§五/§六/§七/§八/§十四）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八 九张表／章现在各自带推导器
+    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这九章的完整性由推导器负责**；
+    /// 其余各章（§一/§二/§五/§六/§七/§十四）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {

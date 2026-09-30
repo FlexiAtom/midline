@@ -637,8 +637,8 @@ impl Battle {
         }
         for s in skills {
             match s {
-                Skill::PlaySameColFlame1 => self.add_flame_col(side, col, 1, None),
-                Skill::PlayAdjColFlame1 => {
+                Skill::PlaySameColFlame1 => self.add_flame_col(side, col, 1, None),  // §八:293 放置时同列+1业火
+                Skill::PlayAdjColFlame1 => {  // §八:300 放置时相邻列+1业火
                     for ac in adj_cols(col) {
                         self.add_flame_col(side, ac, 1, None);
                     }
@@ -1137,7 +1137,7 @@ impl Battle {
                 self.add_flame_col(side, col, 3, None);
             }
             for s in c.skills.clone() {
-                if s == Skill::DeathSameColFlame1 {
+                if s == Skill::DeathSameColFlame1 {  // §八:294 死亡时同列+1业火
                     self.add_flame_col(side, col, 1, None);
                 }
             }
@@ -1217,7 +1217,7 @@ impl Battle {
 
     pub(crate) fn attack_power(&self, side: SideK, atk_id: u64, acol: usize, base: i32) -> i32 {
         let mut dmg = base;
-        dmg += Self::skill_count(&self.col_cards(side, acol).into_iter().filter(|a| a.id != atk_id).collect::<Vec<_>>(), Skill::AllyColAtk1);
+        dmg += Self::skill_count(&self.col_cards(side, acol).into_iter().filter(|a| a.id != atk_id).collect::<Vec<_>>(), Skill::AllyColAtk1);  // §八:295 同列友方攻击+1
         let foes = self.col_cards(side.other(), acol);
         let mut debuff = 0;
         for f in &foes {
@@ -1225,7 +1225,7 @@ impl Battle {
                 debuff += 1;
             }
         }
-        debuff += Self::skill_count(&foes, Skill::EnemyColAtkM1);
+        debuff += Self::skill_count(&foes, Skill::EnemyColAtkM1);  // §八:296 同列敌方攻击-1
         (dmg - debuff).max(0)
     }
 
@@ -1238,10 +1238,10 @@ impl Battle {
                 reduce += 1;
             }
         }
-        reduce += Self::skill_count(&allies_of_def, Skill::AllyColDmgTakenM1);
+        reduce += Self::skill_count(&allies_of_def, Skill::AllyColDmgTakenM1);  // §八:297 同列友方受伤-1
         let buffs_of_atk = self.col_cards(side, dcol);
         d -= reduce;
-        d += Self::skill_count(&buffs_of_atk, Skill::EnemyColDmgTakenP1); // 含持有者自身（§八"同列敌方受伤+1"）
+        d += Self::skill_count(&buffs_of_atk, Skill::EnemyColDmgTakenP1);  // §八:298 同列敌方受伤+1（含持有者自身）
         // Boss 特殊规则（霜封）；业火按减免后伤害计（调用方用本函数返回值加业火）
         crate::boss::card_damage_adjust(self, side, atk_is_starter, d.max(0))
     }
@@ -1266,9 +1266,9 @@ impl Battle {
         let skills = atk.skills.clone();
         for s in skills {
             match s {
-                Skill::AtkSelfFlame1 => atk.flame += 1 + bo,
-                Skill::AtkSameColFlame1 => self.add_flame_col(side, col, 1, None),
-                Skill::AtkAdjColFlame1 => {
+                Skill::AtkSelfFlame1 => atk.flame += 1 + bo,  // §八:291 攻击后自身业火+1
+                Skill::AtkSameColFlame1 => self.add_flame_col(side, col, 1, None),  // §八:292 攻击后同列+1业火
+                Skill::AtkAdjColFlame1 => {  // §八:299 攻击后相邻列+1业火
                     for ac in adj_cols(col) {
                         self.add_flame_col(side, ac, 1, None);
                     }
@@ -1297,8 +1297,8 @@ impl Battle {
     pub fn effective_threshold(&self, side: SideK, col: usize, c: &CardInst) -> i32 {
         let mut thr = c.base_threshold();
         let allies: Vec<&CardInst> = self.col_cards(side, col).into_iter().filter(|a| a.id != c.id).collect();
-        thr -= Self::skill_count(&allies, Skill::AllyColThreshM1);
-        thr += Self::skill_count(&self.col_cards(side.other(), col), Skill::EnemyColThreshP1);
+        thr -= Self::skill_count(&allies, Skill::AllyColThreshM1);  // §八:301 同列友方阈值-1
+        thr += Self::skill_count(&self.col_cards(side.other(), col), Skill::EnemyColThreshP1);  // §八:302 同列敌方阈值+1
         thr.max(1)
     }
 
