@@ -36,10 +36,10 @@ fn row_cells(row: &[Option<CardView>; 4]) -> [String; 4] {
     std::array::from_fn(|i| row[i].as_ref().map(face).unwrap_or_else(blank))
 }
 
-pub fn candle_bar(hp: i32, cap: i32) -> String {  // §廿三:1013 持业者画成蜡烛，条长按 hp/cap
+pub fn candle_bar(hp: i32, cap: i32) -> String {  // §廿三:1013 持业者画成蜡烛，条长按 hp/cap；§十四:599 视觉与玩家持业者对称＝敌我两侧调同一个本函数（我方在 render_board、敌方在 holder_line）
     let hp = hp.max(0);
     let filled = (hp * 10 / cap.max(1)).min(10) as usize;
-    format!("🕯️[{:<10}]{}{}/{cap}", "#".repeat(filled), if hp == 0 { "烛尽 " } else { "" }, hp)
+    format!("🕯️[{:<10}]{}{}/{cap}", "#".repeat(filled), if hp == 0 { "烛尽 " } else { "" }, hp)  // §十四:585 烛尽＝烛火熄灭，这一串是它在渲染层的表现处
 }
 
 /// 持业者称呼：普通对局沿用原文案；Boss 战带名（`name` 由引擎给出）。

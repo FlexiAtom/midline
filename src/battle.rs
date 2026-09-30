@@ -20,7 +20,7 @@
 use crate::model::{CardDef, CardInst, Faction, Skill, TraitKind, faction_cards, short_card};
 use crate::rng::Rng;
 
-pub const CANDLE_HP: i32 = 20;  // §廿三:1012 持业者 HP 20（Boss 用 profile 覆写，见 boss.rs）
+pub const CANDLE_HP: i32 = 20;  // §廿三:1012 持业者 HP 20（Boss 用 profile 覆写，见 boss.rs）；§十四:591 我方持业者初始长度 20 单位；§十四:596 敌方持业者初始长度 20 单位——两侧读同一常量，这就是"对称"的数值面
 pub const HAND_LIMIT: usize = 8;
 pub const TURN_LIMIT: i64 = 30;
 /// 章强化的封顶档数 = §十一:404「每张卡牌最多升级3次」。
@@ -265,8 +265,8 @@ impl Battle {
             player_faction,
             p_karma: 0,  // §十二:422 战斗开始业力 0；§十二:504 进入下一关重新起算；§廿三:982 业力是唯一资源，不自动恢复（回合开始无任何补给）
             e_karma: 0,
-            p_candle: CANDLE_HP,
-            e_candle: CANDLE_HP,
+            p_candle: CANDLE_HP,  // §十四:590 我方持业者一侧的起点
+            e_candle: CANDLE_HP,  // §十四:595 敌方持业者一侧的起点
             p_front: Default::default(),  // §十二:423 战斗开始场上为空
             e_back: Default::default(),
             e_front: Default::default(),
@@ -926,10 +926,10 @@ impl Battle {
                     self.distribute_excess(excess);  // §十二:476 超额伤害另行分配；§十五:629 只派超额这一份，A 已造成的伤害不重复结算
                 }
             } else {
-                self.p_candle -= d;
+                self.p_candle -= d;  // §十四:584 伤害结算＝烛身被削去一截；§十四:592 我方每受到 1 伤害 → 蜡烛减短 1 单位
                 self.log.push(format!("我方蜡烛 -{d}（剩 {}）", self.p_candle));
             }
-            if self.p_candle <= 0 && self.over.is_none() {  // §十二:496 持业者蜡烛燃尽 → 游戏结束
+            if self.p_candle <= 0 && self.over.is_none() {  // §十二:496 持业者蜡烛燃尽 → 游戏结束；§十四:593 我方蜡烛长度≤0 → 烛尽 → 持业者死亡
                 self.log.push("我方烛尽…".into());
                 self.over = Some(if self.enemy_candle_ref() <= 0 { Outcome::Draw } else { Outcome::PlayerLose });
             }
@@ -1012,11 +1012,11 @@ impl Battle {
     /// 另一根同步承受 ⌊dmg/2⌋，两根皆尽才判胜（model.rs 裁定19）。
     fn damage_enemy_holder(&mut self, dmg: i32, col: Option<usize>, how: HolderHit) {
         let Some(c2) = self.e_candle2 else {
-            self.e_candle -= dmg;
+            self.e_candle -= dmg;  // §十四:597 敌方每受到 1 伤害 → 蜡烛减短 1 单位（与 §十四:592 同一条规则的另一侧）
             match how {
                 HolderHit::Direct => {
                     self.log.push(format!("  → 直击中线，敌方蜡烛 -{dmg}（剩 {}）", self.e_candle));
-                    if self.e_candle <= 0 {
+                    if self.e_candle <= 0 {  // §十四:598 敌方蜡烛长度≤0 → 烛尽 → 持业者死亡（此处判胜）
                         self.log.push("敌方烛尽！".into());  // §廿三:1025 胜利＝击杀敌方持业者
                         self.over = Some(Outcome::PlayerWin);
                     }
@@ -1058,6 +1058,8 @@ impl Battle {
         }
     }
 
+    /// §十四:583 正常燃烧＝烛火摇曳、持续燃烧，**不减短**：回合推进只发开端业力，全程不碰两根蜡烛。
+    /// 蜡烛的全部写点（谁有资格让它减短）由 §十四 推导器按名单钉住。
     fn starter_turn_end(&mut self, side: SideK) {
         let rows = match side {
             SideK::Player => vec![Row::Front],
