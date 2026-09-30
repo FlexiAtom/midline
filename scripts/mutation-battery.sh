@@ -195,4 +195,35 @@ while k<len(ls) and not ls[k].startswith('//!'): k+=1
 ls.insert(k+1, '//! 变异检验：这一行把 §十七:756 写在叙述里，不该被算成锚点')
 open(q,'w',encoding='utf8').write('\n'.join(ls))"
 run
+echo "### M24 抹掉 §十六:678（未达阈值不触发）的锚点 ⇒ 应红在 §十六 推导器（漏登记）"
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'\s*//\s*§十六:678(?P<c>[^\n]*)','',s)
+assert s2!=s, '没抹到 §十六:678'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M25 文档副本把示例行 689 的「触发1次」改成「触发2次」⇒ 应只红在 §十六 示例实测（正证：第三条路真读文档数字跑引擎，不是硬编码期望）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[688].startswith('阈值6，业火值12'), '文档行 689 变了，副本口径不再对：'+ls[688]
+ls[688]=ls[688].replace('触发1次','触发2次')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M26 行为回归：摘掉触发上限闸（同回合可连发）⇒ 应红在 §十六 示例实测而推导器绿（正证：实测抓得住行为，尺子不止注释面）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+needle='if snap.hp <= 0 || snap.triggered_turn == turn || !is_threshold_trait(snap.def.tr) {'
+assert s.count(needle)==1, s.count(needle)
+s=s.replace('snap.triggered_turn == turn || ','')
+open(p,'w',encoding='utf8').write(s)"
+run
+echo "### M27 两头下注：把已挂债的 §十六:705 塞进 NOT_A_RULE ⇒ 应双红（§十六 排除表断言 ＋ 债表交叉核对）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+old='const NOT_A_RULE: &[(usize, &str)] = &['
+assert old in s, '没找到排除表'
+i=s.index(old)+len(old)
+open(p,'w',encoding='utf8').write(s[:i]+'(705, \"变异检验：已挂债的行又想进排除表\"), '+s[i:])"
+run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run

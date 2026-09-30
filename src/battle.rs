@@ -421,7 +421,7 @@ impl Battle {
     }
 
     pub fn player_turn_start(&mut self) {  // §十二:426 我方回合「抽牌」步的入口
-        self.turn += 1;
+        self.turn += 1; // §十六:681 跨回合保留：回合推进只动 turn，这里没有 flame 重置（否定式锚，同 §十五:621 一类）
         if self.karma_penalty_next > 0 {
             let before = self.p_karma;
             self.p_karma = (self.p_karma - self.karma_penalty_next).max(0);
@@ -807,7 +807,7 @@ impl Battle {
                 let eb = self.boost_for(SideK::Enemy);
                 if let Some(def) = self.e_front[dcol].as_mut() {
                     def.hp -= dmg;  // §十二:444 目标数值降低；§十五:622 "A已结算（敌方数值已降低）"就是这一句——回滚只是把它当额度，不再打第二遍
-                    def.flame += dmg + eb;  // §十二:445 目标业火值 += 伤害
+                    def.flame += dmg + eb;  // §十二:445 目标业火值 += 伤害；§十六:677 业火条的作用就是累积伤害
                 }
                 self.dealt_this_turn += dmg;  // §十五:619 口径 A 的入账处：本回合攻击阶段**所有卡牌攻击时**造成的伤害总和
                 self.log.push(format!("  → 敌第{}列受{dmg}", dcol + 1));
@@ -1142,7 +1142,7 @@ impl Battle {
                 }
             }
         }
-        c.flame = 0;  // §十二:494 业火值清零
+        c.flame = 0;  // §十二:494 业火值清零；§十六:682 死亡后清零
         c.seq = 0;
         c.placed_turn = i64::MIN;
         c.triggered_turn = i64::MIN;
@@ -1336,22 +1336,23 @@ impl Battle {
             // §廿二:945 死亡后业火达阈值 → **不触发**特性（业火由 `on_death` 清零）。
             // 这裁定了文档自身的序冲突：§十三:547「业火≥阈值 → 触发特性」排在 §十三:548「数值≤0 → 死亡」之前，
             // 按字面顺序读会得出"致命一击仍先触发特性"；§廿二 边界表明写不触发，采边界表读法（裁定26）。
+            // §十六:680 触发上限＝每卡每回合最多1次（`triggered_turn` 记账）
             if snap.hp <= 0 || snap.triggered_turn == turn || !is_threshold_trait(snap.def.tr) {
                 continue;
             }
             let thr = self.effective_threshold(side, col, &snap);  // §十二:446 业火 ≥ 阈值才触发特性
             if snap.flame < thr {
-                continue;
+                continue; // §十六:678 未达阈值不触发（达阈值即在本检查点触发）
             }
             {
                 let c = self.slot_mut(side, row, col).as_mut().unwrap();
-                c.flame -= thr;  // §十二:446 触发后业火值 -= 阈值；§廿三:1021 业火条（跨回合保留见 battle.rs:1081）
+                c.flame -= thr;  // §十二:446 触发后业火值 -= 阈值；§十六:679 溢出保留在同一句里；§十六:720 爆发步骤第6动作；§廿三:1021 业火条（跨回合保留见下一行动作）
                 c.triggered_turn = turn;
             }
             let tr = snap.def.tr;
             let id = snap.id;
             let bo = self.boost_for(side);
-            self.log.push(format!("🔥 {} 业火爆发 → {}", snap.def.name, tr.label()));
+            self.log.push(format!("🔥 {} 业火爆发 → {}", snap.def.name, tr.label())); // §十六:719 爆发步骤第5动作＝特性效果释放（下面那个 match 就是释放处）
             match tr {
                 TraitKind::ThresholdSameColFlame2 => self.add_flame_col(side, col, 2, Some(id)),
                 TraitKind::ThresholdAllyColFlame2 => {
@@ -1627,6 +1628,106 @@ pub(crate) fn parse_section15_examples(lines: &[String]) -> Vec<S15Line> {
     panic!("§十五 示例围栏没有闭围栏（{open} 之后找不到 ```）")
 }
 
+/// §十六「触发示例」围栏（687–689）里一行读成的场景。三行只有一种形态
+/// （`阈值T，业火值F → 触发N次 → 业火值 A-B=R（注）`），所以这里是结构体不是 enum——
+/// 但**形态对不上照样 panic**，理由同 §十五：平跳＝文档加了第二种写法而尺子量不到那一行。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct S16Case {
+    pub line: usize,
+    /// 行首 `阈值T`
+    pub threshold: i32,
+    /// 行首 `业火值F`——引擎侧的起始业火值
+    pub before: i32,
+    /// `→ 触发`／`→ 触发N次`，不带数字按 1 次
+    pub triggers: i32,
+    /// 行尾减法 `A-B=R` 的三个数：A 必须等于 before、B 必须等于 threshold（在实测里核对）
+    pub lhs: i32,
+    pub rhs: i32,
+    pub after: i32,
+}
+
+/// §十六 示例行的形态错报出口。**写成普通 fn 而不是闭包**：闭包返回 `!` 在 Rust 里不算发散点，
+/// panic 之后代码继续往下走，"绝不平跳"就成了空话。
+#[cfg(test)]
+fn s16_bad(tag: &str, why: &str) -> ! {
+    panic!("{tag} 不像 §十六 示例行的形态（期望「阈值T，业火值F → 触发[N次] → 业火值 A-B=R」）：{why}。\
+            请先扩本解析器与它对应的实测断言，别让示例行从尺子外面漏过去（挂锚对示例行不算数）");
+}
+
+#[cfg(test)]
+fn s16_classify(t: &str, line: usize) -> S16Case {
+    let tag = format!("md:{line}「{t}」");
+    let (seg0, rest) = match t.split_once('，') {
+        Some(p) => p,
+        None => s16_bad(&tag, "没有「，」分隔阈值与业火值"),
+    };
+    let one = |s: &str, expect: &str| -> i32 {
+        if !s.starts_with(expect) {
+            s16_bad(&tag, &format!("「{s}」该以「{expect}」开头"));
+        }
+        let v = s15_digits(s);
+        if v.len() != 1 {
+            s16_bad(&tag, &format!("「{s}」解析出 {} 个数字，该形态期望 1 个", v.len()));
+        }
+        v[0]
+    };
+    let threshold = one(seg0, "阈值");
+    let before = one(rest.split_whitespace().next().unwrap_or(""), "业火值");
+    let parts: Vec<&str> = t.split('→').collect();
+    if parts.len() != 3 {
+        s16_bad(&tag, &format!("应有两段「→」，实测 {} 段", parts.len()));
+    }
+    let mid = parts[1].trim();
+    if !mid.starts_with("触发") {
+        s16_bad(&tag, "第二段不以「触发」开头");
+    }
+    let m = s15_digits(mid);
+    let triggers = match m.len() {
+        0 => 1,
+        1 => m[0],
+        n => s16_bad(&tag, &format!("「{mid}」解析出 {n} 个数字，触发次数最多一个")),
+    };
+    let tail_full = parts[2].trim();
+    if !tail_full.starts_with("业火值") {
+        s16_bad(&tag, "第三段不以「业火值」开头");
+    }
+    let tail = tail_full.split('（').next().unwrap_or(tail_full);
+    let v = s15_digits(tail);
+    if v.len() != 3 {
+        s16_bad(&tag, &format!("「{tail}」解析出 {} 个数字，减法式期望 3 个（A、B、R）", v.len()));
+    }
+    S16Case { line, threshold, before, triggers, lhs: v[0], rhs: v[1], after: v[2] }
+}
+
+/// 定位并解析 §十六「触发示例」围栏：章标题 → 其后第一个 trim==`触发示例` 的标签行 →
+/// 之后第一道 ``` 到下一道 ```。行号口径与 `model::doc_or_skip` 一致（1 起）。
+/// 它同时是 §十六 推导器第三条认领路的**唯一口径**：那边的行集合必须由这里的行号构成。
+#[cfg(test)]
+pub(crate) fn parse_section16_examples(lines: &[String]) -> Vec<S16Case> {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "十六、业火条")
+        .expect("§十六 标题必须存在（文档结构变了就要同步改本解析器与 model.rs 的推导器）");
+    let label = ((head + 2)..=lines.len())
+        .find(|&n| at(n).trim() == "触发示例")
+        .expect("§十六 里必须有一行块首标签「触发示例」");
+    let open = ((label + 1)..=lines.len())
+        .find(|&n| at(n).trim() == "```")
+        .expect("「触发示例」标签后必须有开围栏 ```");
+    for n in (open + 1)..=lines.len() {
+        let t = at(n).trim();
+        if t == "```" {
+            return (open + 1..n)
+                .filter(|&k| !at(k).trim().is_empty())
+                .map(|k| s16_classify(at(k).trim(), k))
+                .collect();
+        }
+    }
+    panic!("§十六 示例围栏没有闭围栏（{open} 之后找不到 ```）")
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -1821,6 +1922,44 @@ mod rule_tests {
                     }
                 }
             }
+        }
+    }
+
+    /// §十六「触发示例」三行（687/688/689）用**文档自己写的数字**驱动引擎跑一遍：每行给一个阈值与一个
+    /// 起始业火值，要求引擎的触发次数与剩余业火值都等于文档写的那两个数。
+    /// 为什么这三行走实测不走挂锚：见 `model.rs` 的 §十六 推导器注释——示例行是规则行的重说，
+    /// 锚点证不了"算出的数＝写的数"。
+    /// 689 那行额外咬住 §十六:680 的"每回合最多1次"：12−6=6 仍 ≥ 阈值，闸若被摘掉引擎会连爆两次，
+    /// 文档说 1 次 ⇒ 当场红。这是本章唯一一条"行为"级的牙（其余示例行咬的是减法本身）。
+    #[test]
+    fn section16_worked_examples_reproduce_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let cases = parse_section16_examples(&lines);
+        assert_eq!(cases.len(), 3, "§十六 示例围栏应有 3 行可实测，实测 {} 行", cases.len());
+        for c in cases {
+            let tag = format!("md:{}「{}」", c.line, lines[c.line - 1].trim());
+            assert_eq!(
+                (c.lhs, c.rhs),
+                (c.before, c.threshold),
+                "{tag} 写的减法操作数与本行给的输入（业火值={}，阈值={}）不符 ⇒ 文档内部就不自洽",
+                c.before,
+                c.threshold
+            );
+            assert_eq!(c.lhs - c.rhs, c.after, "{tag} 文档自己的算术不自洽：{}−{}＝{}，却写着 {}", c.lhs, c.rhs, c.lhs - c.rhs, c.after);
+            let mut b = fresh_battle();
+            let def = faction_cards(Faction::Ember)
+                .iter()
+                .copied()
+                .find(|d| d.threshold == c.threshold && is_threshold_trait(d.tr))
+                .unwrap_or_else(|| panic!("{tag} 需要一个阈值＝{} 且带阈值特性的烬火教团卡，代码里没有 ⇒ 换卡或扩本测的取卡面", c.threshold));
+            let mut card = CardInst::new(900, def);
+            card.flame = c.before;
+            b.p_front[0] = Some(card);
+            b.check_all_triggers();
+            let bursts = b.log.iter().filter(|l| l.contains("业火爆发") && l.contains(def.name)).count();
+            assert_eq!(bursts, c.triggers as usize, "{tag} 文档说触发 {} 次，引擎实际触发 {bursts} 次", c.triggers);
+            let after = b.p_front[0].as_ref().unwrap_or_else(|| panic!("{tag} 触发后这张卡从场上消失了")).flame;
+            assert_eq!(after, c.after, "{tag} 引擎剩余业火值 ≠ 文档写的 {}", c.after);
         }
     }
 
