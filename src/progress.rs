@@ -28,7 +28,7 @@ use crate::model::{CardInst, Skill, short_card};
 
 /// §廿二:946 融合后新牌费用＝主牌费用（副牌只贡献技能，不贡献费用）。
 /// §廿二:950 副牌直接消失——**不进弃牌堆**，故也不会有死亡返还、不会再被抽到。
-pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &mut i32) -> Result<String, String> {  // §廿三:1002 技能合并、特性取主牌、副牌消失
+pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &mut i32) -> Result<String, String> {  // §廿三:1002 技能合并、特性取主牌、副牌消失；§七:279 融合＝特性不参与、技能是融合的核心（本函数体内出现 `skills` 而不出现 `.tr` 就是这两句的形状）
     if main >= inherit.len() || sub >= inherit.len() || main == sub {
         return Err("下标无效".into());
     }
@@ -43,7 +43,7 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
     let s = inherit.remove(sub);
     // 先按原下标校正主牌位置：sub 被摘除后，其后的下标整体前移一位
     let m = &mut inherit[if main > sub { main - 1 } else { main }];
-    let n = s.skills.len();
+    let n = s.skills.len(); // §七:282 设计意图「融合只融合技能，不融合特性」——动笔处只读 `skills`，`m.def` 整块不动
     for sk in s.skills {
         m.skills.push(sk); // 同名技能叠加
     }
@@ -110,6 +110,9 @@ mod tests {
         // 主牌 焚稿人 3费、副牌 雷烬 4费（本仓既有的取牌口，与 meta 时代的同一对）
         let mut inherit: Vec<CardInst> = vec![ember(3), ember(8)];
         inherit[1].skills.push(Skill::AtkSelfFlame1);
+        let tr_main = inherit[0].def.tr;
+        let tr_sub = inherit[1].def.tr;
+        assert_ne!(tr_main, tr_sub, "主副牌特性必须不同，否则下面那条「特性取主牌」是空断言");
         let mut karma = 5;
         let msg = fuse_cards(&mut inherit, 0, 1, &mut karma).expect("融合应成功");
         assert!(msg.contains("吸收副牌「雷烬」的1个技能"), "{msg}");
@@ -117,6 +120,7 @@ mod tests {
         assert_eq!(karma, 5 - (4 - 1), "融合消耗=副牌费用-1（§廿二:946）");
         assert_eq!(inherit.len(), 1, "副牌直接消失、不进弃牌堆（§廿二:950）");
         assert_eq!(inherit[0].def.cost, 3, "费用取主牌");
+        assert_eq!(inherit[0].def.tr, tr_main, "特性取主牌——副牌特性不参与融合（§廿三:1002／§七:279）");
         assert_eq!(inherit[0].skills, vec![Skill::AtkSelfFlame1]);
         assert!(inherit[0].crafted, "融合产物转自造（§十372）");
     }

@@ -95,6 +95,7 @@ impl Board {
     }
 }
 
+// §七:270 业火条＝显示业火值/阈值的 UI 元素——快照层就是这里把 `flame` 与 `threshold` 两个数一起交出去。
 fn card_view(c: &CardInst, threshold: i32) -> CardView {
     CardView {
         name: c.def.name,

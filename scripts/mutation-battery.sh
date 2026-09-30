@@ -17,6 +17,8 @@
 # 反向覆盖两把尺子的反证电池（禁忌6 的"尺子有牙"）：每条变异都必须把某一条测撞红，并记下**红在哪条测**。
 # 铁律：绝不改 `~/中线.MD`——要动文档就 cp 一份副本，用 `MIDLINE_DOC=<副本>` 把机检指过去。
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
+# run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
+# 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 set -u
 REAL="${MIDLINE_REAL_DOC:-$HOME/中线.MD}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)/src"
@@ -24,7 +26,7 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)/src"
 D="$(mktemp -d)"; trap 'rm -rf "$D"' EXIT
 cp "$(dirname "$SRC")/Cargo.toml" "$(dirname "$SRC")/Cargo.lock" "$D/"
 restore() { cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$D/src"; cp "$SRC"/*.rs "$D/src/"; }; cp "$REAL" "$D/doc.md"; }
-run() { (cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1 | grep -E -- "--- FAILED|panicked at|test result:" | head -6); }
+run() { local o; o="$(cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1)"; printf '%s\n' "$o" | grep -E -- "--- FAILED|test result:"; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -12; }
 py() { python3 -c "$1"; }
 
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
@@ -261,5 +263,48 @@ p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 n='dmg += Self::skill_count('
 assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n,'dmg -= Self::skill_count('))"
+run
+echo "### M33 抹掉 §七:266（血量＝数值）的锚点 ⇒ 应红在 §七 推导器的认领路（漏登记）"
+restore; py "
+import re
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'；§七:266(?![0-9])[^\n]*','',s)
+assert s2!=s, '没抹到 §七:266'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M34 字段行尾注释改一字（费用→花费）⇒ 应红在 §七 ①（注释与文档措辞逐字节等值）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='    pub cost: i32, // 费用'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'    pub cost: i32, // 花费'))"
+run
+echo "### M35 文档副本把 md:255 的特性措辞换成技能那句（随机附加，可融合）⇒ ①②同红：② 抓的是「宿主错层」这个原因，不是又一个字面比对"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[254].strip().startswith('特性（固定，卡牌自带）'), '文档行 255 变了，副本口径不再对：'+ls[254]
+ls[254]='  特性（随机附加，可融合）,'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M36 文档副本把 md:277 技能数量「每张牌0~N个」改成「每张牌1个」⇒ 应红在 §七 ③（0~N 的措辞没了⇒容器形状的前提失效）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[276].startswith('数量 每张牌1个 每张牌0~N个'), '文档行 277 变了，副本口径不再对：'+ls[276]
+ls[276]='数量 每张牌1个 每张牌1个'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M37 文档副本改 md:280 示例行的技能引号串（+1累积→+9累积）⇒ 应红在 §七 ④（跨章等值：示例必须能在 §八 表体 12 行里原样找到）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert '攻击后自身+1累积' in ls[279], '文档行 280 变了，副本口径不再对：'+ls[279]
+ls[279]=ls[279].replace('攻击后自身+1累积','攻击后自身+9累积')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M38 行为回归：融合时把副牌特性盖到主牌上（m.def.tr = s.def.tr）⇒ 应红在 §七 ⑤（剔注释后函数体仍出现 .tr）"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+n='    m.crafted = true;'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'    m.def.tr = s.def.tr;'+n))"
 run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run

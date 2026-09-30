@@ -133,7 +133,7 @@ pub struct Battle {
 
     pub player_faction: Faction,
 
-    pub p_karma: i32,
+    pub p_karma: i32, // §七:263 业力＝资源，用于放置卡牌/融合（消耗点：place 与 fuse_cards）
     pub e_karma: i32,
     pub p_candle: i32,
     pub e_candle: i32,
@@ -595,7 +595,7 @@ impl Battle {
     /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
     /// §廿二:944 越线死亡统一走 `on_death(.., DeathCause::Cross)`：触发亡语、按死亡返还递减获得业力。
     fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
-        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置
+        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力
         match side {
             SideK::Player => self.p_karma -= cost,
             SideK::Enemy => self.e_karma -= cost,
@@ -795,7 +795,7 @@ impl Battle {
             };
             let mut atk = self.p_front[col].take().unwrap();
             let tr = atk.def.tr;
-            let base = atk.hp;
+            let base = atk.hp; // §七:265 数值＝攻击力/生命值；§七:267 伤害＝这个 base（同一份数值出招时当伤害读）
             let id = atk.id;
             let target = self.pick_target(SideK::Player, col, tr);  // §十二:441 同列中线对面有敌卡→攻击该卡
             self.log.push(format!("⚔ 我方 {} 攻击", short_card(&atk)));
@@ -873,7 +873,7 @@ impl Battle {
             };
             let mut atk = self.e_front[col].take().unwrap();
             let tr = atk.def.tr;
-            let base = atk.hp;
+            let base = atk.hp; // §七:265 数值＝攻击力/生命值；§七:267 伤害＝这个 base（同一份数值出招时当伤害读）
             let id = atk.id;
             let target = self.pick_target(SideK::Enemy, col, tr);  // §十二:463 同列对面有我方卡→攻击该卡
             self.log.push(format!("⚔ 敌方 {} 攻击", short_card(&atk)));
@@ -1229,7 +1229,7 @@ impl Battle {
         (dmg - debuff).max(0)
     }
 
-    pub(crate) fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32, atk_is_starter: bool) -> i32 {
+    pub(crate) fn card_hit_damage(&self, side: SideK, atk_id: u64, acol: usize, dcol: usize, base: i32, atk_is_starter: bool) -> i32 {  // §七:267 伤害＝数值经修正后的落点（base 由调用方从攻击者数值给出）
         let mut d = self.attack_power(side, atk_id, acol, base);
         let allies_of_def = self.col_cards(side.other(), dcol);
         let mut reduce = 0;
@@ -1253,7 +1253,7 @@ impl Battle {
     /// 攻击后追加结算。`col` = 目标列（直击中线时回退为攻击者列）——§八"攻击后对同列+1"锚定目标列。
     fn attacker_aftermath(&mut self, atk: &mut CardInst, col: usize, side: SideK) {  // §十二:447/466 攻击时点的特性+技能触发
         let bo = self.boost_for(side);
-        match atk.def.tr {
+        match atk.def.tr {  // §七:278 特性的作用＝定义卡牌定位（这个 match 就是"定位"的落点）；同处的 `atk.flame += …` 是技能的"额外效果"半边
             TraitKind::SelfFlameOnAttack1 => atk.flame += 1 + bo,
             TraitKind::SelfDmgOnAttack => {
                 atk.hp -= 1; // §廿三:1024 自损不触发业火
@@ -1340,7 +1340,7 @@ impl Battle {
             if snap.hp <= 0 || snap.triggered_turn == turn || !is_threshold_trait(snap.def.tr) {
                 continue;
             }
-            let thr = self.effective_threshold(side, col, &snap);  // §十二:446 业火 ≥ 阈值才触发特性
+            let thr = self.effective_threshold(side, col, &snap);  // §十二:446 业火 ≥ 阈值才触发特性；§七:268 阈值＝触发特性所需业火值（这里取的是该格生效阈值）
             if snap.flame < thr {
                 continue; // §十六:678 未达阈值不触发（达阈值即在本检查点触发）
             }
@@ -1352,7 +1352,7 @@ impl Battle {
             let tr = snap.def.tr;
             let id = snap.id;
             let bo = self.boost_for(side);
-            self.log.push(format!("🔥 {} 业火爆发 → {}", snap.def.name, tr.label())); // §十六:719 爆发步骤第5动作＝特性效果释放（下面那个 match 就是释放处）
+            self.log.push(format!("🔥 {} 业火爆发 → {}", snap.def.name, tr.label())); // §十六:719 爆发步骤第5动作＝特性效果释放（下面那个 match 就是释放处）；§七:271 业火爆发＝业火值达阈值时触发特性（这句日志就是那个时刻）
             match tr {
                 TraitKind::ThresholdSameColFlame2 => self.add_flame_col(side, col, 2, Some(id)),
                 TraitKind::ThresholdAllyColFlame2 => {

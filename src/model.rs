@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **九张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -197,8 +197,20 @@
 //!       或整槽缺失都当场红）；⑤ 变体名尾数与文档的增减量再对一次。这章**没跑引擎**，盲区照登：把
 //!       「同列友方攻击+1」实现成 -1，这把尺量不到——12 个变体里只有 4 个有断言其效果的测（`AllyColAtk1`／
 //!       `AllyColThreshM1`／`AtkSameColFlame1`／`EnemyColDmgTakenP1`），其余 8 个连"量纲落在哪个目标上"都没测过；
-//!       补法（下一帧）＝把「效果」列解析出的 (时机, 目标, 量纲, 增减) 直接驱动引擎逐行复现，见 `every_skill_row_of_section8_…`）。**仍未纳入**的是
-//!       §一/§二/§五/§六/§七/§十四 那些散文行——那里"整条规则没落地"仍查不出；
+//!       补法（下一帧）＝把「效果」列解析出的 (时机, 目标, 量纲, 增减) 直接驱动引擎逐行复现，见 `every_skill_row_of_section8_…`）；
+//!       以及本帧的 §七 卡牌模型（**第一条把尺子伸进"源码形状"的章**：22 行＝5 行字段块＋9 行术语表＋1 行小标题
+//!       ＋5 行对照表＋1 行设计意图，全走锚点、零挂债。①② 仍对字面——字段名逐字节（注释在这里第二次被当数据读），
+//!       且**宿主＝措辞**：文档写「自带／固定」的字段必须落在 `CardDef`，写「随机附加」的必须落在 `CardInst`。
+//!       ③④⑤ 读的不是文本而是**代码形状**：③ 文档「每张牌1个」↔ `tr` 是标量、「每张牌0~N个」↔ `skills: Vec<…>`
+//!       是容器；④ 示例行那两个引号串必须分别在 `TraitKind::label` 的返回值里、以及在 §八 表体「技能」列 12 行原文里
+//!       原样命中（跨章等值）；⑤ md:279＋md:282 说「融合只融合技能，不融合特性」⇒ `fuse_cards` 函数体**剔注释后**
+//!       必须出现 `skills` 且不得出现 `.tr`。形状尺带来一件前面九章没有的事：**行为回归第一次由推导器自己抓住**——
+//!       M38 在融合里写 `m.def.tr = s.def.tr`（把副牌特性盖到主牌上），推导器当场红；而 §十七 M22／§十六 M26／§八 M32
+//!       的同种变异推导器全绿、红的是别处的正向测。缺口也照登：M38 单跑时全仓**只有这一条红** ⇒「特性取主牌」当时
+//!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
+//!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
+//!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
+//!       §一/§二/§五/§六/§九/§十四 那些散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       §十五 那一帧暴露的**否定式条款**盲区在本章又添两例：§十七:763「任何卡牌不能越过中线」锚在
 //!       `DeathCause` 的变体列表上（指向的是"这里没有第四因"），§十七:747「后排多张只推最靠近前排的」
@@ -371,6 +383,8 @@ impl Skill {
         ]
     }
 
+    /// §七:280 示例行的技能列「攻击后自身+1累积」是文档 §八 表体里的原文，短标签由它派生；
+    /// 两个 `label`（这里与 `TraitKind::label`）就是 §七:273「特性 vs 技能」并置的那两份定义。
     pub fn label(self) -> &'static str {
         match self {
             Skill::AtkSelfFlame1 => "攻+己焰1",
@@ -389,6 +403,7 @@ impl Skill {
     }
 }
 
+// §七:273 「特性 vs 技能」——两张对照表把这两个概念并置，代码里也是这两个相邻的 `impl`。
 impl TraitKind {
     pub fn label(self) -> &'static str {
         match self {
@@ -425,15 +440,20 @@ impl TraitKind {
     }
 }
 
+// §七:251 「卡牌 = {」——玩家可见的五个字段就定义在这两个结构体上（另两个在 `CardInst`）。
 #[derive(Clone, Copy, Debug)]
 pub struct CardDef {
     pub name: &'static str,
     #[allow(dead_code)] // 数据完整性：卡表按阵营归档，读取方在渲染层（后置）
     pub faction: Faction,
-    pub cost: i32,
-    pub power: i32,
-    pub threshold: i32,
-    pub tr: TraitKind,
+    // §七:252 费用（字段面；消耗点见 battle.rs 的 place）
+    pub cost: i32, // 费用
+    // §七:253 数值（字段面；出招时当伤害读，见 battle.rs 的 `let base = atk.hp`）
+    pub power: i32, // 数值（伤害 = 生命）
+    // §七:254 阈值（字段面；比较点在 battle.rs 的触发闸）
+    pub threshold: i32, // 阈值（触发特性所需业火值）
+    // §七:255 特性（字段面）；§七:277 每张牌 1 个——`tr` 是**标量**类型就是这个断言的形状
+    pub tr: TraitKind, // 特性（固定，卡牌自带）
 }
 
 pub const STARTER: CardDef = CardDef {  // §廿三:990 开端（0费/数值1/阈值4）；余下子句：免费放置 battle.rs:587、祭2业力 1088、在场每回合+1 1059、不可融合 progress.rs:35、不入继承堆 1457
@@ -508,11 +528,14 @@ pub type CardId = u64;
 #[derive(Clone, Debug)]
 pub struct CardInst {
     pub id: CardId,
+    // §七:276 来源＝「卡牌自带，固定／随机附加，可融合」——这一行是两条读法的物理分界：
+    //        定义（自带、固定）挂在 `def: CardDef` 上，随机附加的东西只能长在实例上。
     pub def: CardDef,
-    pub skills: Vec<Skill>,
+    // §七:256 技能（字段面）；§七:277 每张牌 0~N 个——`Vec<Skill>` 就是这个断言的形状
+    pub skills: Vec<Skill>, // 技能（随机附加，可融合）
     /// 当前数值（= 血量）。每关开始重置满格。
     pub hp: i32,
-    pub flame: i32, // §十六:676 文档叫「业火条」，引擎里就是这张卡身上的累积值
+    pub flame: i32, // §十六:676 文档叫「业火条」，引擎里就是这张卡身上的累积值；§七:269 文档术语行叫「业火值」＝累积伤害
     /// 自然死亡次数（用于返还递减：100/50/25/10%）。献祭不走此计数。
     pub deaths: u32,
     pub upgrades: u8,
@@ -532,7 +555,7 @@ impl CardInst {
             id,
             def,
             skills: Vec::new(),
-            hp: def.power,  // §廿三:988 三位一体：数值落地即血量，出招时再当伤害读
+            hp: def.power,  // §廿三:988 三位一体：数值落地即血量，出招时再当伤害读；§七:266 血量＝卡牌的生命值＝数值（这个初始化就是那个等号）
             flame: 0,
             deaths: 0,
             upgrades: 0,
@@ -1221,6 +1244,337 @@ mod anchor_tests {
         let left: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(left.is_empty(), "§八 槽位词表吃不下「{s}」剩下的「{left}」⇒ 文档新增了一种措辞，补全词表（不许静默跳过）");
         S8Slots { ev, scope, side, qty, delta }
+    }
+
+    /// §七 字段块解析：取 `marker` 这个结构体声明里每个**字段行**的三元组 (名字, 类型, 行尾注释)。
+    /// 独立注释行（`//`／`///`）与属性行（`#[…]`）跳过——锚点就是这样独立成行挂在字段上方的，
+    /// 字段行尾只留文档原文，才能让 ① 那层做逐字节比对。
+    fn s7_fields(src: &str, marker: &str) -> Vec<(String, String, String)> {
+        let sls: Vec<&str> = src.lines().map(str::trim).collect();
+        let h = sls
+            .iter()
+            .position(|l| *l == marker)
+            .unwrap_or_else(|| panic!("§七 推导器要读 `{marker}` 的声明行；结构体改名或挪出 model.rs ⇒ 同步这里（不许静默跳过）"));
+        let mut out = Vec::new();
+        for l in &sls[h + 1..] {
+            if *l == "}" {
+                break;
+            }
+            if l.is_empty() || l.starts_with("//") || l.starts_with("///") || l.starts_with("#[") {
+                continue;
+            }
+            let (decl, comment) = l.split_once("//").unwrap_or((l, ""));
+            let nt = decl.trim().trim_start_matches("pub ").trim_end_matches(',');
+            let (name, ty) = nt
+                .split_once(": ")
+                .unwrap_or_else(|| panic!("§七 字段解析：「{}」不是 `pub 名字: 类型` 的形状", decl.trim()));
+            out.push((name.to_string(), ty.trim().to_string(), comment.trim().to_string()));
+        }
+        assert!(!out.is_empty(), "§七 字段解析：`{marker}` 里一个字段都没读到");
+        out
+    }
+
+    /// 取顶层函数（以 `sig` 起头的行）到第一个顶格 `}` 之间的函数体，**每行的行尾注释剔掉**。
+    /// §七:279「特性不参与融合」这层要问的是"代码里动没动 `tr`"，注释里写"特性取主牌"不算动过。
+    fn s7_fn_body(src: &str, sig: &str) -> String {
+        let sls: Vec<&str> = src.lines().collect();
+        let h = sls
+            .iter()
+            .position(|l| l.trim_start().starts_with(sig))
+            .unwrap_or_else(|| panic!("§七 推导器要读 `{sig}` 的函数体；它改名、拆函数或挪出 ⇒ 同步这里（不许静默跳过）"));
+        let mut body: Vec<String> = Vec::new();
+        for l in &sls[h + 1..] {
+            if *l == "}" {
+                // 顶层函数的收尾花括号在 0 列；块内的 `}` 带缩进，`l.trim() == "}"` 会误判成函数结束。
+                assert!(!body.is_empty(), "§七 推导器：`{sig}` 是空函数体 ⇒ 判据无从下手");
+                return body.join("\n");
+            }
+            let t = l.trim();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            body.push(l.split("//").next().unwrap_or("").to_string());
+        }
+        panic!("§七 推导器没找到 `{sig}` 的结尾花括号——函数体判据失效")
+    }
+
+    /// `impl X` 里 `label()` 的返回值名单（按源码顺序）：只收 `X::变体 => "串"` 这一形状。
+    fn s7_labels(src: &str, enum_prefix: &str) -> Vec<String> {
+        let pat = format!("{enum_prefix}::");
+        let out: Vec<String> = src
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with(&pat) && l.contains("=> \""))
+            .map(|l| l.split('"').nth(1).unwrap_or_default().to_string())
+            .collect();
+        assert!(!out.is_empty(), "§七 名字解析：`{enum_prefix}` 里一个 label 都没读到");
+        out
+    }
+
+    /// §七 卡牌模型反向覆盖：22 条必检行**全走锚点、零挂债**，另加五层等值。
+    ///
+    /// 必检行由形态推导（不接受手写清单）：章标题到章末 `---` 之间，trim 后**含字母或汉字**的行全算——
+    /// 这一条顺带剔掉 ``` 围栏符、单独成行的 `}` 与 `---`（它们没有字母数字），不必另设框线判据。
+    /// 再剔两类：**列头**沿用 §十六 的列头双条件（结构上是等元数 run 的首行 ＋ 字面命中词表
+    /// `S7_HEADERS`），**小标签**沿用 §十七/§十六 那条（单 token ＋ 下一非空行是列头，本章即 md:260
+    /// 「术语明确定义」）。词表吃不进的新列头会掉进必检行 ⇒ 没人锚它就当场红，与 §八 词表同一条全消费纪律。
+    /// md:273「特性 vs 技能」是三个 token，**不算**标签 ⇒ 它自己也要有锚点。
+    ///
+    /// 五层等值（§八 那把尺只做"文档↔命名"对齐、不碰实现形状；③④⑤ 直接读**代码形状**）：
+    /// 实测结果 M38＝在融合里把副牌特性盖到主牌上 ⇒ 本章推导器**当场红**，这是十章里第一次行为回归由形状尺抓到
+    /// （§十七 M22／§十六 M26／§八 M32 同种变异时，推导器全绿、红的是别处正向测）。M38 单跑时全仓只这一条红
+    /// ⇒ 当时没有任何正向测断言过「特性取主牌」，同帧已补进 `progress.rs` 的融合测，现为双红。
+    /// ① 字段名逐字节：fenced 块的 5 行（去尾逗号）↔ `CardDef`／`CardInst` 的字段行尾注释，
+    ///    注释含锚点记号（`§`／`md:`）的不算名字注释；两侧**全消费**——没挂名字注释的字段名必须
+    ///    等于钉死的 12 个内部记账字段，多一个少一个都红。
+    /// ② 宿主＝文档措辞的性质：括号里写「自带／固定」的字段必须在 `CardDef`（定义层），
+    ///    写「随机附加」的必须在 `CardInst`（实例层）。**单独不可达**，如实登记：① 要求逐字节，所以② 只有
+    ///    在文档**换掉措辞**时才开口，那一刻与 ① 同红（M35 实测）。留它是因为它报的是原因（字段错层），不是症状（字面不符）。
+    /// ③ 数量行 ↔ 类型形状：「每张牌1个」⇒ `tr` 是标量；「每张牌0~N个」⇒ `skills` 是 `Vec<…>`。
+    /// ④ 示例行 ↔ 跨章等值：特性示例必须是 `TraitKind::label` 的某个返回值，技能示例必须是 §八 表体
+    ///    「技能」列的某个原文——文档自己两处（§七 示例／§八 表体）不同步就红。
+    /// ⑤ 融合行＋设计意图 ↔ `fuse_cards` 函数体：体内（剔注释）必须有 `skills`、不许有 `.tr`。
+    ///
+    /// 残留盲区（如实登记）：术语表「定义」列那 9 串话、以及 278「定义卡牌定位」这半句语义仍只走锚点，
+    /// 曲解了量不出；③⑤ 读的是**源码文本形状**，改名式重构（`Vec<Skill>` 换成别的容器、`fuse_cards`
+    /// 拆成两个函数）会红在解析器上——那是**要求同步**而不是判错，口径与本仓其他推导器一致。
+    #[test]
+    fn every_row_of_section7_card_model_is_anchored_back_and_matches_the_code_shape() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "七、卡牌模型")
+            .expect("§七 推导器按标题找章；章标题改名或挪走 ⇒ 同步这里");
+        let end = head
+            + 2
+            + lines[head + 1..]
+                .iter()
+                .position(|l| l.trim() == "---")
+                .expect("§七 章末的 `---` 分隔线不见了 ⇒ 推导器的章界判据失效");
+        let next_text = |n: usize| -> String {
+            let mut i = n + 1;
+            while i <= end && at(i).trim().is_empty() {
+                i += 1;
+            }
+            at(i).trim().to_string()
+        };
+        const S7_HEADERS: [&str; 2] = ["术语 定义", "项目 特性 技能"];
+        let arity = |s: &str| s.split_whitespace().count();
+
+        let mut rows: Vec<usize> = Vec::new();
+        for n in (head + 2)..=end {
+            let t = at(n).trim();
+            if t.is_empty() || !t.chars().any(char::is_alphanumeric) {
+                continue;
+            }
+            if S7_HEADERS.contains(&t) {
+                let q = next_text(n);
+                assert!(
+                    arity(t) == arity(&q) && arity(t) >= 2,
+                    "md:{n}「{t}」在列头词表里却**不是**等元数 run 的首行 ⇒ 文档改了表形，词表得跟着改（结构与字面两个方向都要对得上）"
+                );
+                continue;
+            }
+            let q = next_text(n);
+            if arity(t) == 1 && S7_HEADERS.contains(&q.as_str()) {
+                continue; // 小标签：单 token ＋ 下一非空行是列头
+            }
+            rows.push(n);
+        }
+        assert_eq!(
+            rows,
+            vec![
+                251, 252, 253, 254, 255, 256, 263, 264, 265, 266, 267, 268, 269, 270, 271, 273, 276, 277, 278, 279,
+                280, 282
+            ],
+            "§七 必检行集合变了 ⇒ 文档加了／改了行，先看清是哪一行的形态让判据换档，再同步这里"
+        );
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let model = std::fs::read_to_string(manifest.join("src/model.rs")).unwrap();
+        let prog = std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap();
+        let mut bad: Vec<String> = Vec::new();
+        let tag = |n: usize| format!("  md:{n} ← {}", at(n));
+
+        // ②' 认领路：本章只许走锚点，一条都不许挂债（挂债＝"这行没实现"，而 §七 的字段／术语全在代码里）。
+        for &n in &rows {
+            if !referenced.contains(&(n as u32)) {
+                bad.push(format!("{} 没有任何锚点指回", tag(n)));
+            }
+            if debited.contains(&n) {
+                bad.push(format!("{} 既有锚点指回又挂着债 ⇒ 同一行两头下注", tag(n)));
+            }
+        }
+
+        // —— 结构解析：fenced 字段块、术语表、特性vs技能表 ——
+        let f1 = (head + 2..end)
+            .find(|&n| at(n).trim() == "```")
+            .expect("§七 找不到 fenced 块的开场 ```");
+        let f2 = (f1 + 1..end)
+            .find(|&n| at(n).trim() == "```")
+            .expect("§七 找不到 fenced 块的收尾 ```");
+        let block: Vec<String> = ((f1 + 1)..f2).map(|n| at(n).trim().to_string()).collect();
+        assert_eq!(block.len(), 7, "§七 字段块应是开场＋5 个字段＋收尾共 7 行");
+        assert_eq!(block[0], "卡牌 = {", "§七 字段块开场行不是「卡牌 = 花括号开」，实测 {:?}", block[0]);
+        assert_eq!(block[6], "}", "§七 字段块收尾行不是单独一个花括号，实测 {:?}", block[6]);
+        let doc_fields: Vec<String> = block[1..6].iter().map(|l| l.trim_end_matches(',').to_string()).collect();
+
+        let th = (head + 2..end)
+            .find(|&n| at(n).trim() == "术语 定义")
+            .expect("§七 找不到术语表列头");
+        let mut terms: Vec<(String, String)> = Vec::new();
+        let mut n = th + 1;
+        while n <= end && !at(n).trim().is_empty() {
+            let tk: Vec<&str> = at(n).split_whitespace().collect();
+            assert!(tk.len() >= 2, "{} 术语表这一行只有术语没有定义（{} 列）", tag(n), tk.len());
+            // 定义列**允许内部有空格**（md:266「卡牌的生命值 = 数值」是 4 个 token），所以按"行首是术语、其余全归定义"切；
+            // 对照表那张不用这条宽容——它三列每列都是短串， arity 一变就该红（见下面）。
+            terms.push((tk[0].to_string(), tk[1..].join(" ")));
+            n += 1;
+        }
+        assert_eq!(terms.len(), 9, "§七 术语表推导到 {} 行，与文档行 263–271 的 9 行不符", terms.len());
+        let mut seen: Vec<&str> = terms.iter().map(|(k, _)| k.as_str()).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), before, "§七 术语表有重复术语 ⇒ 两行同名，锚点会指错对象");
+        for (k, v) in &terms {
+            assert!(!v.is_empty(), "§七 术语「{k}」的定义列是空的");
+        }
+
+        let ch = (head + 2..end)
+            .find(|&n| at(n).trim() == "项目 特性 技能")
+            .expect("§七 找不到「特性 vs 技能」表的列头");
+        let mut cmp: Vec<(String, String, String)> = Vec::new();
+        let mut n = ch + 1;
+        while n <= end && !at(n).trim().is_empty() {
+            let tk: Vec<&str> = at(n).split_whitespace().collect();
+            assert_eq!(tk.len(), 3, "{} 对照表出现 {} 列的行 ⇒ 表形变了，解析器要跟着改", tag(n), tk.len());
+            cmp.push((tk[0].to_string(), tk[1].to_string(), tk[2].to_string()));
+            n += 1;
+        }
+        let cmp_names: Vec<&str> = cmp.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert_eq!(cmp_names, vec!["来源", "数量", "作用", "融合", "示例"], "§七 对照表行首名单变了：{cmp_names:?}");
+
+        // —— ①② 字段名逐字节 ＋ 宿主＝措辞 ——
+        let def_fields = s7_fields(&model, "pub struct CardDef {");
+        let inst_fields = s7_fields(&model, "pub struct CardInst {");
+        let is_name_comment = |c: &str| !c.is_empty() && !c.contains('§') && !c.contains("md:");
+        let mut named: Vec<(String, String)> = Vec::new(); // (字段名, 宿主)
+        let mut plain: Vec<String> = Vec::new(); // 没挂名字注释的字段
+        for (host, fs) in [("CardDef", &def_fields), ("CardInst", &inst_fields)] {
+            for (name, _, comment) in fs {
+                if is_name_comment(comment) {
+                    named.push((comment.clone(), host.to_string()));
+                } else {
+                    plain.push(name.clone());
+                }
+            }
+        }
+        let named_comments: Vec<&str> = named.iter().map(|(c, _)| c.as_str()).collect();
+        let doc_field_refs: Vec<&str> = doc_fields.iter().map(String::as_str).collect();
+        if named_comments != doc_field_refs {
+            bad.push(format!(
+                "① 字段名不是逐字节对上：文档块 {doc_field_refs:?} ≠ 代码行尾注释 {named_comments:?}"
+            ));
+        }
+        assert_eq!(
+            plain,
+            vec!["name", "faction", "id", "def", "hp", "flame", "deaths", "upgrades", "seq", "placed_turn", "triggered_turn", "crafted"],
+            "① 另一半全消费：没挂文档名字注释的字段名单变了 ⇒ 新字段要么补上文档措辞、要么在这里登记它是引擎内部记账，别让它静默隐身"
+        );
+        for (idx, (_, host)) in named.iter().enumerate() {
+            let doc_line = &doc_fields[idx];
+            let fixed = doc_line.contains("自带") || doc_line.contains("固定");
+            let random = doc_line.contains("随机附加");
+            if fixed && host != "CardDef" {
+                bad.push(format!("②「{doc_line}」写着自带／固定，字段却落在 `{host}`（定义层＝`CardDef`）"));
+            }
+            if random && host != "CardInst" {
+                bad.push(format!("②「{doc_line}」写着随机附加，字段却落在 `{host}`（实例层＝`CardInst`）"));
+            }
+        }
+
+        // —— ③ 数量行 ↔ 类型形状 ——
+        let ty_of = |name: &str| -> String {
+            for fs in [&def_fields, &inst_fields] {
+                for (n, t, _) in fs {
+                    if n == name {
+                        return t.clone();
+                    }
+                }
+            }
+            panic!("③ 字段 `{name}` 在 CardDef／CardInst 里找不到了");
+        };
+        for (item, tr_cell, sk_cell) in &cmp {
+            if item != "数量" {
+                continue;
+            }
+            let digits: String = tr_cell.chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits != "1" {
+                bad.push(format!("③ 特性列「{tr_cell}」里量不出「恰好 1 个」的措辞 ⇒ 文档换了说法，判据要跟着改"));
+            } else if ty_of("tr").contains("Vec") {
+                bad.push(format!("③ 文档说特性「{tr_cell}」，而 `tr` 的类型是 `{}`（容器）", ty_of("tr")));
+            }
+            if !sk_cell.contains('~') {
+                bad.push(format!("③ 技能列「{sk_cell}」里没有区间记号『~』⇒ 0~N 的措辞变了，判据要跟着改"));
+            } else if !ty_of("skills").starts_with("Vec<") {
+                bad.push(format!("③ 文档说技能「{sk_cell}」，而 `skills` 的类型是 `{}`（不是容器）", ty_of("skills")));
+            }
+        }
+
+        // —— ④ 示例行 ↔ 跨章等值（特性 ↔ TraitKind::label，技能 ↔ §八 表体「技能」列）——
+        let trait_labels = s7_labels(&model, "TraitKind");
+        let s8_rows = table_body(&lines, "八、技能池", "编号 技能 效果");
+        let s8_skills: Vec<String> = s8_rows
+            .iter()
+            .map(|&n| at(n).split_whitespace().collect::<Vec<&str>>())
+            .filter(|tk| tk.len() == 3 && !tk[0].is_empty() && tk[0].bytes().all(|b| b.is_ascii_digit()))
+            .map(|tk| tk[1].to_string())
+            .collect();
+        assert_eq!(s8_skills.len(), 12, "④ §八 技能列读出 {} 行，不是 12 ⇒ §七 的跨章等值失去基准", s8_skills.len());
+        for (item, tr_cell, sk_cell) in &cmp {
+            if item != "示例" {
+                continue;
+            }
+            let strip = |s: &str| s.trim_matches('“').trim_matches('”').trim_matches('"').to_string();
+            let tr_ex = strip(tr_cell);
+            let sk_ex = strip(sk_cell);
+            if !trait_labels.contains(&tr_ex) {
+                bad.push(format!("④ 特性示例「{tr_ex}」不在 `TraitKind::label` 的 {} 个返回值里 ⇒ §七:280 与代码里的特性名单不同步", trait_labels.len()));
+            }
+            if !s8_skills.contains(&sk_ex) {
+                bad.push(format!("④ 技能示例「{sk_ex}」不在 §八 表体「技能」列的 12 个原文里 ⇒ §七:280 与 §八 表体不同步"));
+            }
+        }
+
+        // —— ⑤ 融合行＋设计意图 ↔ `fuse_cards` 函数体形状 ——
+        let body = s7_fn_body(&prog, "pub fn fuse_cards(");
+        let intent = at(282);
+        for (item, tr_cell, sk_cell) in &cmp {
+            if item != "融合" {
+                continue;
+            }
+            if !tr_cell.contains("不参与融合") {
+                bad.push(format!("⑤ 特性列「{tr_cell}」不含「不参与融合」⇒ 判据的措辞前提没了"));
+            } else if body.contains(".tr") {
+                bad.push("⑤ 文档说特性不参与融合，而 `fuse_cards` 函数体里出现了 `.tr`（剔注释后仍出现＝真动了特性）".to_string());
+            }
+            if !sk_cell.contains("融合的核心") {
+                bad.push(format!("⑤ 技能列「{sk_cell}」不含「融合的核心」⇒ 判据的措辞前提没了"));
+            } else if !body.contains("skills") {
+                bad.push("⑤ 文档说技能是融合的核心，而 `fuse_cards` 函数体里没读 `skills`".to_string());
+            }
+        }
+        assert!(
+            intent.contains("融合只融合技能") && intent.contains("不融合特性"),
+            "⑤ md:282 设计意图的措辞变了（实测「{intent}」）⇒ 它就不再与 279 行同义，等值层的前提要重写"
+        );
+
+        assert!(bad.is_empty(), "{} 处 §七 卡牌模型与代码形状不符：\n{}", bad.len(), bad.join("\n"));
     }
 
     /// §十二 完整回合流程：``` 围栏内的**每一条内容行**都必须被锚点指回，或挂成债——排除表在本围栏不作数。
@@ -2189,9 +2543,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八 九张表／章现在各自带推导器
-    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这九章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§五/§六/§七/§十四）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七 十张表／章现在各自带推导器
+    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十章的完整性由推导器负责**；
+    /// 其余各章（§一/§二/§五/§六/§九/§十四）仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {
