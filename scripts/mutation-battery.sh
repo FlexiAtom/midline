@@ -19,7 +19,7 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（11 秒量完 58 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 62 条记录的补丁有没有真打上；
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -33,7 +33,15 @@ restore() { PATCH_FAIL=""; cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$
 # M46 的 `assert s.count(n)==1` 因 §九 推导器照抄了同一行守卫而变成 2，python 抛 AssertionError 后 cargo 照旧
 # 151 全绿，日志里那行 traceback 只会被当成噪音（本帧之前从没查过它）。`bash -n` 也只验 shell 语法，验不到内嵌
 # Python——所以判据不能靠人读，得让 run() 自己拒。
-run() { local o; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，下面的读数一律不算落点\n' "$PATCH_FAIL"; fi; o="$(cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1)"; printf '%s\n' "$o" | grep -E -- "--- FAILED|test result:"; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -12; printf '%s\n' "$o" | grep -E -- "^Traceback|AssertionError" | head -3; }
+# 静默失效共有三种，run() 对前两种各有一句喊话（本帧 M33／M54 各撞一种）：
+#   ① 补丁没打上（assert 炸）⇒ PATCH_FAIL 喊。
+#   ② 补丁打上了、却没产出任何 `test result:` 行＝编译失败 ⇒ run() 喊"这条没有落点"。
+#      M54 是抠掉注释**中间一段**，把后面续写的 `；§五:200 …` 留成裸代码，整条记录在日志里成了空白。
+#   ③ 补丁打上了、编译也过，但**这一族本来就看不见它**——M33 抹掉 §七:266 的锚点却整族全绿，
+#      因为 §五 帧新写了一句「见 §七:265／§七:266」，而交叉引用也算锚（M39 定的口径），多出来的那处把抹除吸收了。
+#      这种 preflight 量不到（补丁确实打上了），只有整族复跑会露。所以：凡改动过注释的帧，末了必须整族复跑一次；
+#      记录里也一律断言"命中次数 == 预期"，多一处提及就当场喊，而不是静默转绿。
+run() { local o r; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，下面的读数一律不算落点\n' "$PATCH_FAIL"; fi; o="$(cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- "--- FAILED|test result:")"; if [ -z "$r" ]; then printf '!! cargo 没有产出 test result ⇒ 编译失败（或输出形状变了）——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -12; printf '%s\n' "$o" | grep -E -- "^Traceback|AssertionError" | head -3; }
 py() { local e rc; e="$(python3 -c "$1" 2>&1)"; rc=$?; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; return 0; }
 
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
@@ -275,7 +283,9 @@ echo "### M33 抹掉 §七:266（血量＝数值）的锚点 ⇒ 应红在 §七
 restore; py "
 import re
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
-s2=re.sub(r'；§七:266(?![0-9])[^\n]*','',s)
+n=len(re.findall(r'§七:266(?![0-9])', s))
+assert n==2, '§七:266 现有 %d 处（本记录预期 2 处）' % n + ' ⇒ 有人新增或删掉了一处提及：交叉引用也算锚，多出来的那一处会吸收掉这条抹除，整族静默转绿（M33 就曾被 §五 帧新写的「见 §七:265／§七:266」吸收过一次）'
+s2=re.sub(r'§七:266(?![0-9])','',s)
 assert s2!=s, '没抹到 §七:266'
 open(p,'w',encoding='utf8').write(s2)"
 run
@@ -442,11 +452,15 @@ echo "### M54 摘掉 battle.rs 两处 §十二:452 真锚，改在 cfg(test) 的
 # 修复前这条会**假绿**：`referenced_doc_lines` 当年看见 `#[cfg(test)]` 就跳后半份文件，把测试注释一并算进锚点面。
 # 现在只跳那一个 item，所以 452 的锚在测试面就是没锚——本条是这把尺自己那颗牙的实证。
 restore; py "
+import re
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
-a='  // §十二:452 开端回合末业力每关上限 2 次'
-b='  // §十二:452 开端在场→我方获得 1 业力'
-assert s.count(a)==1 and s.count(b)==1, (s.count(a), s.count(b))
-open(p,'w',encoding='utf8').write(s.replace(a,'').replace(b,''))
+# 删**整条行尾注释**，不删中间一段：这两行的注释后来被 §五 帧续了「；§五:200 …」，
+# 只抠掉 §十二 那一段会把 §五 那一段留成裸代码 ⇒ 编译失败（M54 因此在整族里成了一条没落点的空记录）。
+n=len(re.findall(r'§十二:452', s))
+assert n==2, 'battle.rs 里 §十二:452 现有 %d 处（本记录预期 2 处）' % n + ' ⇒ 锚点搬家了，本条要按新位置重写'
+s2=re.sub(r'[ \t]*//[^\n]*§十二:452[^\n]*','',s)
+assert s2!=s, '没抹到 §十二:452'
+open(p,'w',encoding='utf8').write(s2)
 p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
 n='    Definition,'
 assert s.count(n)==1, s.count(n)
@@ -476,3 +490,34 @@ assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'))"
 run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run
+echo "### M58 生产码里抹掉一枚真锚点的冒号（ai.rs 的 §五:210 写成 §五210）⇒ 应只红在 隐形锚点测"
+# 本帧 bug 类的反证，也是那条测存在的理由：同一个补丁打在 HEAD（6bb2725，收成语法之前）**151 全绿**——
+# 臂A 实测。少冒号的写法反向覆盖看不见、正向尺当时还替它作证（冒号写成可选），全仓唯一的信号是"绿"。
+restore; py "
+p='$D/src/ai.rs'; s=open(p,encoding='utf8').read()
+assert s.count('§五:210')==1, s.count('§五:210')
+open(p,'w',encoding='utf8').write(s.replace('§五:210','§五210'))"
+run
+echo "### M59 悄悄放宽语法：§ 支的冒号由必需改成可选（正例不受损，只有反例被认进来）⇒ 应红在 语法验收单的反例列"
+# 这条撞的是"共用"最隐蔽的失效方式：anchor_at 现在两把尺共用，把冒号放回去，反向覆盖就开始拿
+# 「章号紧跟行号」的形状替文档行作证＝虚覆盖。验收单里那两条 format! 拼出来的反例正是为这一刻准备。
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='                _ => return None,'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'                _ => j,'))"
+run
+echo "### M60 语法放过「.」前缀 ⇒ README.md:12 会被当成 中线 第 12 行 ⇒ 应红在 语法验收单（文件坐标那条反例）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a=\"let prev_ok = i == 0 || (!cs[i - 1].is_ascii_alphanumeric() && cs[i - 1] != '.');\"
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'let prev_ok = i == 0 || !cs[i - 1].is_ascii_alphanumeric();'))"
+run
+echo "### M61 § 支砍掉全角冒号（只认半角）⇒ 应红在 语法验收单的正例列（全角那条今天全仓 0 个真锚点，只有表格钉着它）"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a=\"                Some(&':' | &'：') => j + 1,\"
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,chr(32)*16+\"Some(&':') => j + 1,\"))"
+run

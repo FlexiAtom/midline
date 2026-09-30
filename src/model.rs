@@ -874,6 +874,53 @@ mod anchor_tests {
         move |line: u32| heads.iter().filter(|(_, at)| *at <= line).map(|(v, _)| *v).last()
     }
 
+    /// **锚点语法的唯一定义**：`md:NNN`／`速查:NNN`／`§章:NNN`（章号必须中文数字；`§` 支冒号半角全角都认，
+    /// `md`／`速查` 支只认半角——这是两把尺原先就一致的旧口径，今天全仓 0 个全角样本，差别只能靠验收单钉住）。
+    /// 返回 `(声称的章号, 文档行号, 消费到的位置)`——`md` 不带章号故为 `None`，`速查` 固定 §廿三。
+    /// 为什么摘成一份（同 `doc_sections`／`production_face` 摘出去的理由）：原先正向尺自己走一遍循环，
+    /// 冒号写成**可选**（`if 是冒号 { j += 1 }`），而反向覆盖的 `anchor_numbers` 冒号**必需**——于是
+    /// **章号后直接跟行号**（少一个冒号）这种写法被正向尺当成合法锚点验一遍判绿、反向覆盖却一个字没看见：
+    /// **一把尺替另一把尺看不见的东西作证**，比两把都不认更难发现，因为全仓唯一的信号是"绿"。
+    /// 实测（本帧）：§五 首次登记锚点一轮就积出 8 处那种形状，全仓归一之后才立得起下面那条判据。
+    /// 少冒号的写法现在由 `no_doc_anchor_is_written_without_its_colon` 单独报红；两处都只认这一份语法。
+    fn anchor_at(cs: &[char], i: usize) -> Option<(Option<u32>, u32, usize)> {
+        // `.` 也排除：`README.md:12` 里那个 `md:12` 是**文件名＋行号**，不是 中线 第 12 行的指回。
+        // 今天全仓 0 处这种写法（反例照下一条测钉住），但只要有天有人在注释里写一句某个 `.md` 的第几行，
+        // 反向覆盖就会替 中线 的那一行"作证"——虚覆盖比漏锚点更难发现，因为它看起来是绿的。
+        let prev_ok = i == 0 || (!cs[i - 1].is_ascii_alphanumeric() && cs[i - 1] != '.');
+        const LABELS: [(&[char; 2], Option<u32>); 2] = [(&['m', 'd'], None), (&['速', '查'], Some(23))];
+        if prev_ok {
+            for (label, claim) in LABELS {
+                if cs[i..].starts_with(label) {
+                    let at = i + label.len();
+                    if cs.get(at) == Some(&':')
+                        && let Some((line, end)) = digits_at(cs, at + 1)
+                    {
+                        return Some((claim, line, end));
+                    }
+                    return None;
+                }
+            }
+        }
+        if cs[i] == '§' {
+            let mut j = i + 1;
+            while j < cs.len() && NUM.contains(&cs[j]) {
+                j += 1;
+            }
+            if j == i + 1 {
+                return None;
+            }
+            let claim = cn2int(&cs[i + 1..j].iter().collect::<String>())?;
+            let at = match cs.get(j) {
+                Some(&':' | &'：') => j + 1,
+                _ => return None,
+            };
+            let (line, end) = digits_at(cs, at)?;
+            return Some((Some(claim), line, end));
+        }
+        None
+    }
+
     #[test]
     fn every_doc_anchor_lands_on_a_nonempty_line_of_its_claimed_section() {
         let Some(lines_s) = doc_or_skip() else { return };
@@ -888,34 +935,10 @@ mod anchor_tests {
                 let cs: Vec<char> = line.chars().collect();
                 let mut i = 0;
                 while i < cs.len() {
-                    let prev_ok = i == 0 || !cs[i - 1].is_ascii_alphanumeric();
-                    // md:NNN —— 纯行号锚点，只验越界与空行
-                    let md = prev_ok && cs[i] == 'm' && cs.get(i + 1) == Some(&'d') && cs.get(i + 2) == Some(&':');
-                    // 速查:NNN —— 指 §廿三，顺带验章归属
-                    let quick = cs[i] == '速' && cs.get(i + 1) == Some(&'查') && cs.get(i + 2) == Some(&':');
-                    if md || quick {
-                        if let Some((n, end)) = digits_at(&cs, i + 3) {
-                            let claim = if quick { Some(23) } else { None };
-                            check(&mut bad, &name, idx + 1, n, claim, &lines, &section_at);
-                            i = end;
-                            continue;
-                        }
-                    }
-                    // §章[:：]NNN —— 带章名，三条件全验
-                    if cs[i] == '§' {
-                        let mut j = i + 1;
-                        while j < cs.len() && NUM.contains(&cs[j]) {
-                            j += 1;
-                        }
-                        let claim = cn2int(&cs[i + 1..j].iter().collect::<String>());
-                        if cs.get(j) == Some(&':') || cs.get(j) == Some(&'：') {
-                            j += 1;
-                        }
-                        if let (Some(claim), Some((n, end))) = (claim, digits_at(&cs, j)) {
-                            check(&mut bad, &name, idx + 1, n, Some(claim), &lines, &section_at);
-                            i = end;
-                            continue;
-                        }
+                    if let Some((claim, n, end)) = anchor_at(&cs, i) {
+                        check(&mut bad, &name, idx + 1, n, claim, &lines, &section_at);
+                        i = end;
+                        continue;
                     }
                     i += 1;
                 }
@@ -924,31 +947,16 @@ mod anchor_tests {
         assert!(bad.is_empty(), "{} 处文档锚点错位：\n{}", bad.len(), bad.join("\n"));
     }
 
-    /// 一行里出现的所有文档锚点行号（`md:` / `速查:` / `§章:`，全角冒号也算）。
+    /// 一行里出现的所有文档锚点行号——直接走 `anchor_at`，不再自己认一遍语法（同一处定义、两个读法）。
     fn anchor_numbers(line: &str) -> Vec<u32> {
         let cs: Vec<char> = line.chars().collect();
         let mut out = Vec::new();
         let mut i = 0;
         while i < cs.len() {
-            let prev_ok = i == 0 || !cs[i - 1].is_ascii_alphanumeric();
-            let plain = prev_ok
-                && ((cs[i] == 'm' && cs.get(i + 1) == Some(&'d') && cs.get(i + 2) == Some(&':'))
-                    || (cs[i] == '速' && cs.get(i + 1) == Some(&'查') && cs.get(i + 2) == Some(&':')));
-            if plain && let Some((n, end)) = digits_at(&cs, i + 3) {
+            if let Some((_, n, end)) = anchor_at(&cs, i) {
                 out.push(n);
                 i = end;
                 continue;
-            }
-            if cs[i] == '§' {
-                let mut j = i + 1;
-                while j < cs.len() && NUM.contains(&cs[j]) {
-                    j += 1;
-                }
-                if j > i + 1 && matches!(cs.get(j), Some(&':') | Some(&'：')) && let Some((n, end)) = digits_at(&cs, j + 1) {
-                    out.push(n);
-                    i = end;
-                    continue;
-                }
             }
             i += 1;
         }
@@ -3304,5 +3312,130 @@ mod anchor_tests {
         {
             bad.push(format!("{tag} 声称第 {claim} 章，实际归属第 {:?} 章", section_at(n)));
         }
+    }
+
+    /// **隐形锚点机检**：形似锚点、`anchor_at` 却不认的写法一律报红。写了等于没写，还比没写更坏——
+    /// 注释里摆着一个"锚"，读的人（和我自己）都会以为那一行文档已经被指回了，而反向覆盖根本没收到。
+    /// 立这条的经过（本帧实测）：§五 首次登记锚点那一轮写出 8 处"章号后直接跟行号"（少冒号），
+    /// 当时正向尺把那种写法当合法锚点验一遍判绿、`anchor_numbers` 一个字没看见 ⇒ 全仓 151 条测试一路绿。
+    /// 语法收成一处之后那种"绿"没了，但**不报错 ≠ 被看见**：所以这里主动找那种形状。
+    ///
+    /// 只报两种，判据是**零误报**而非全覆盖（今天实测各 0 处）：
+    /// ① `§<中文章号>` 紧跟阿拉伯数字——章号与行号之间缺冒号。
+    /// ② `§<阿拉伯数字>:NNN`——章号写成阿拉伯数字，`cn2int` 不认，两把尺都看不见。
+    ///
+    /// 明知不管的三类，写清楚免得后人以为是漏了：
+    /// ㊀ `§` 后面直接跟阿拉伯数字而**没有**冒号＋行号（`boss.rs` 的 `§10-C1`、`meta.rs` 的 `§2`）——
+    ///    那是指**别份文档**的条款号，本仓语法只描述 中线.MD，不该替别份文档判形状。
+    /// ㊁ `md` 后面紧跟数字（`md5`）——散列名与"md 缺冒号"字面同形，报它就是把这把尺变成天天误报的噪声。
+    /// ㊂ 章号与行号之间隔一个空格（"§十五 620"）——两把尺都不认、也不会替它作证，而 `§十五 立的那条`
+    ///    这类散文引用在注释里极多，误报代价大于漏报代价。这一类靠作者自律：**要么写冒号，要么别写成锚点的样子**。
+    ///
+    /// 本注释不举①②的连排实例——那条判据会打到自己的文件（这正是"隐形"反过来咬一口的形态，值得记着）。
+    /// 反向覆盖那条尺因此也**不需要**文档在：它扫的是本仓源码，判的是形状，不是行号对不对。
+    #[test]
+    fn no_doc_anchor_is_written_without_its_colon() {
+        let digit = |c: Option<&char>| c.is_some_and(|c| c.is_ascii_digit());
+        let mut bad: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let name = fp.file_name().unwrap().to_string_lossy().into_owned();
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for (idx, line) in src.lines().enumerate() {
+                let cs: Vec<char> = line.chars().collect();
+                let digits_run = |from: usize| {
+                    let mut k = from;
+                    while k < cs.len() && cs[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    k
+                };
+                let mut i = 0;
+                while i < cs.len() {
+                    if cs[i] == '§' {
+                        let mut j = i + 1;
+                        while j < cs.len() && NUM.contains(&cs[j]) {
+                            j += 1;
+                        }
+                        if j > i + 1 && digit(cs.get(j)) {
+                            let k = digits_run(j);
+                            bad.push(format!(
+                                "  {name}:{} ①章号后直接跟行号，缺冒号 ⇒ 机检看不见这枚锚点：`{}`",
+                                idx + 1,
+                                cs[i..k].iter().collect::<String>()
+                            ));
+                            i = k;
+                            continue;
+                        }
+                        if j == i + 1 && digit(cs.get(i + 1)) {
+                            let k = digits_run(i + 1);
+                            if matches!(cs.get(k), Some(&':' | &'：')) && digit(cs.get(k + 1)) {
+                                bad.push(format!(
+                                    "  {name}:{} ②章号写成阿拉伯数字，`cn2int` 不认 ⇒ 机检看不见这枚锚点：`{}`",
+                                    idx + 1,
+                                    cs[i..k].iter().collect::<String>()
+                                ));
+                            }
+                            i = k;
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{} 处隐形锚点（写法形似锚点、语法不认）：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    /// **锚点语法的验收单**：`anchor_at` 认什么、不认什么，逐形状钉死。
+    /// 为什么单独一条（同 §九 那章"配比钉住"的做法）：`anchor_at` 现在是两把尺共用的唯一定义，
+    /// 改它一个字，正向尺与反向覆盖**一起**变。共用最省事的失效方式不是写错，是**悄悄放宽**——
+    /// 把冒号改成可选、把 `.` 前缀放过，当场没有任何一条测会红（少冒号的形状由上一条测管，
+    /// `.md:NNN` 今天全仓 0 个样本），而反向覆盖从此开始拿文件名替规则行作证：那是**虚覆盖**。
+    /// 所以这里两列都要验：正例必须全认出（漏认＝假缺口），反例必须一个都不认（误认＝虚覆盖）。
+    /// 电池 M59／M60 一边一条地撞这张表，撞不红就是表没钉住。
+    #[test]
+    fn anchor_grammar_accepts_only_these_shapes() {
+        let yes: &[(&str, &[u32])] = &[
+            ("// §五:180 数值 1", &[180]),
+            ("// §廿三:990 速查表本体", &[990]),
+            ("// md:452 纯行号锚点", &[452]),
+            ("// 速查:995 固定指 §廿三", &[995]),
+            ("// §十五：620 全角冒号两把尺都认", &[620]),
+            ("// §十五:620 与 md:452 同行", &[620, 452]),
+            ("//见md:416 中文紧贴也算边界", &[416]),
+            ("`§九:335` 反引号包住", &[335]),
+        ];
+        // 三条 § 形状用 `format!` 拼出来：源码文本里不出现"章号紧跟行号"那种连排，
+        // 否则上面那条隐形锚点测会打到自己的夹具。这不是绕规则——夹具拼完仍然是那个形状，
+        // 语法要是认了它，下面 `bad` 一样装进去。
+        let no: &[(&str, String)] = &[
+            ("少冒号（形状由上一条测管）", format!("// §{}185 少冒号", "五")),
+            ("少冒号，另一种章号", format!("// §{}354 少冒号", "九")),
+            ("章号写成阿拉伯数字", format!("// §{}22:990 阿拉伯章号", "")),
+            ("别份文档的条款号，本语法不管", "// §10-C1 别份文档".into()),
+            ("章号与行号隔一个空格（明知不管）", "// §十五 620 隔空格".into()),
+            ("散列名 md5 与「md 缺冒号」同形，不许报", "// 散列名 md5 比较".into()),
+            ("文件名＋行号，不是 中线 的行", "// README.md:12 是文件坐标".into()),
+            ("同上", "// chapter-strengthening.md:2 也是文件坐标".into()),
+            ("紧贴字母前缀，prev_ok 挡住", "// 命令行 cmd:452".into()),
+            ("带点的也一样挡", "// 变量 self.md:452".into()),
+            ("只写 § 不写章号", "// 只写 § 没下文".into()),
+            ("有冒号没行号", "// §五: 后面是空格".into()),
+        ];
+        let mut bad: Vec<String> = Vec::new();
+        assert!(yes.len() >= 8 && no.len() >= 12, "验收单自己空了或被裁短（正例 {}／反例 {}）⇒ 本测等于没在验", yes.len(), no.len());
+        for (s, want) in yes {
+            let got = anchor_numbers(s);
+            if got.as_slice() != *want {
+                bad.push(format!("  正例没认全：`{s}` ⇒ 认到 {got:?}，应为 {want:?}"));
+            }
+        }
+        for (why, s) in no {
+            let got = anchor_numbers(s);
+            if !got.is_empty() {
+                bad.push(format!("  反例被当成锚点（{why}）：`{s}` ⇒ 认到 {got:?}，应为空"));
+            }
+        }
+        assert!(bad.is_empty(), "锚点语法与验收单不符：\n{}", bad.join("\n"));
     }
 }

@@ -54,6 +54,14 @@ def chapter_of(lineno):
 
 prod, testf = {}, {}
 item_tested = 0  # 只数「测试专用 item 被跳掉」那部分锚点出现次数：口径改动的可观测副作用，与 mod 截断不同源
+near_miss = []
+# 锚点语法的三份式样——与 `src/model.rs` 里的 `anchor_at`（两把尺共用的唯一定义）**逐条对齐**：
+#   § 支冒号半角全角都认；md／速查 支只认半角冒号，且前面不许紧贴字母数字或 `.`
+#   （`README.md:12` 是文件坐标，不是 中线 的第 12 行——放过它就是拿文件名替规则行作证＝虚覆盖）。
+# 这里是**独立实现**，不是抄那份代码：两边同错的可能性由此下降，读数不一致时就知道其中一把漂了。
+SEC_RE = r'§([一二三四五六七八九十廿]+)[:：](\d+)'
+MD_RE = r'(?<![0-9A-Za-z.])md:(\d+)'
+QUICK_RE = r'(?<![0-9A-Za-z.])速查:(\d+)'
 
 
 def indent_of(s):
@@ -105,13 +113,19 @@ for p in sorted(glob.glob('src/*.rs')):
             continue
         d = prod if face[i] == 'prod' else testf
         if face[i] == 'item':
-            item_tested += len(re.findall(r'§[一二三四五六七八九十廿]+:\d+|\bmd:\d+|速查:\d+', t))
-        for mm in re.finditer(r'§([一二三四五六七八九十廿]+):(\d+)', t):
+            item_tested += len(re.findall(SEC_RE + r'|' + MD_RE + r'|' + QUICK_RE, t))
+        for mm in re.finditer(SEC_RE, t):
             d.setdefault(cn2int(mm.group(1)), set()).add(int(mm.group(2)))
-        for mm in re.finditer(r'\bmd:(\d+)', t):
+        for mm in re.finditer(MD_RE, t):
             d.setdefault(chapter_of(int(mm.group(1))), set()).add(int(mm.group(1)))
-        for mm in re.finditer(r'速查:(\d+)', t):
+        for mm in re.finditer(QUICK_RE, t):
             d.setdefault(23, set()).add(int(mm.group(1)))
+    # 隐形锚点：形似锚点、语法不认的连排（少冒号／阿拉伯章号）。Rust 侧 `no_doc_anchor_is_written_without_its_colon`
+    # 是拦人的那一把，这里数同一件事是**对账**——两把尺各写一遍同一条规则，数字不一致就是其中一把漂了。
+    # 扫描口径与那条测一致：逐**原文行**，不看生产面、不跳 `//!`（注释里的锚点也是给人的承诺）。
+    for i, t in enumerate(raw):
+        for mm in re.finditer(r'§[一二三四五六七八九十廿]+(?=[0-9])|§[0-9]+[:：](?=[0-9])', t):
+            near_miss.append(f'{p}:{i + 1} `{t[mm.start():mm.end() + 4].strip()}`')
 
 src = open('src/model.rs', encoding='utf8').read()
 blk = src[src.index('const NOT_IMPLEMENTED'):]
@@ -135,6 +149,9 @@ print(f'生产面锚点唯一文档行合计 = {sum(len(v) for v in prod.values(
 ov = sum(len(v & testf.get(n, set())) for n, v in prod.items())
 print(f'测试面锚点唯一文档行合计 = {sum(len(v) for v in testf.values())}（其中 {ov} 行生产面也锚过 ⇒ 两行不可相加当总覆盖）')
 print(f'测试专用 item 里被剔出生产面的锚点出现次数 = {item_tested}（那些是解析器／夹具的形状注释，不是实现锚点）')
+print(f'隐形锚点（形似锚点、语法不认）= {len(near_miss)}'
+      + ('' if not near_miss else '：拦人的那把是 `cargo test` 的 no_doc_anchor_is_written_without_its_colon，这里只负责对账')
+      + ''.join('\n  ' + x for x in near_miss[:12]))
 print(f'挂债合计 = {sum(len(v) for v in debt.values())}')
 print(f'有推导器的章 = {sorted(deriv)}')
 print(f'生产锚点=0 且 挂债=0 的章：{[n for n, s, e, t in rng if not prod.get(n) and not debt.get(n)]}')
