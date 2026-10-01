@@ -19,7 +19,7 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 72 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 80 条记录的补丁有没有真打上；
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -608,3 +608,71 @@ n='            if t.is_empty() || fence {'+chr(10)+'                continue;'+c
 assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'+chr(10)+'            if arity(n) == 1 && (nb_text == '))"
 run
+
+# ===== §六 开局手牌与双牌堆（第十三步·其四）：双记账那层／张数三处对账／文档数字↔码面字面／封闭写点名单／分类 panic 的牙 =====
+echo "### M72 抹掉 battle.rs 里 §六:243 那枚锚（手牌满额 FIFO 的落点注释）⇒ 应只红在 §六 推导器「12 行全有锚」那层"
+# 配比 锚点0／挂债0／实测12 把 12 行全记成实测，摘锚它看不见。本章是第一条实测全走的章，双记账那层有没有牙只能这样量一次
+# ——§五 M62／§十四 M39 各量过自己章的那一份，一章验过不等于别的章也验过。
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+assert s.count('§六:243')==1, s.count('§六:243')
+s2=re.sub(r'    /// §六:243[^\n]*\n','',s)
+assert s2!=s, '正则没命中那行注释'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M73 文档副本只改 md:220 那张表（3张→4张，md:223／md:224 不动）⇒ 应红在 ③ 那句「三处张数不齐」＋复现测"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[219].startswith('继承堆抽牌 3张'), ls[219]
+ls[219]=ls[219].replace('继承堆抽牌 3张','继承堆抽牌 4张')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M74 文档副本把张数家族四处（md:220／223／224／225）一起改到 4 ⇒ ③ 的文档内部对账全平，应红在码面 grep（开局发牌那个循环的字面「for _ in 0..4」实测 0 处）＋复现测：正证码面那一层不是文档自洽的重复"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[219].startswith('继承堆抽牌 3张') and '抽3张' in ls[222] and '抽3张' in ls[223] and '不足3张' in ls[224], (ls[219], ls[222], ls[223], ls[224])
+ls[219]=ls[219].replace('继承堆抽牌 3张','继承堆抽牌 4张')
+ls[222]=ls[222].replace('抽3张','抽4张'); ls[223]=ls[223].replace('抽3张','抽4张'); ls[224]=ls[224].replace('不足3张','不足4张')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M75 文档副本把 md:226 换成一句不含任何已登记内容的话（原地换字、行号不漂移）⇒ 落点应是 s6_classify 那句 panic「登记过的八种内容一种都不匹配」：文档往围栏里加第五种写法时，实测路必须当场喊「这行我没读法」，不能安静走过去"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert '不计入' in ls[225], ls[225]
+ls[225]='开局手牌由系统直接给出'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M76 生产码面新写一条文档里根本没有的主动额度扣减（dead_code 方法，行为不变）⇒ 应只红在 ④ 封闭写点名单 6→7（M41 的姊妹条）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='impl Battle {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+chr(10)+'    #[allow(dead_code)]'+chr(10)+'    fn s6_probe_charge(&mut self) { self.pf.manual_draws -= 1; }'))"
+run
+echo "### M77 把开端堆那道闸从 <=0 挪到 <0（每回合能多抽一次，真行为回归）⇒ 应红在 ③ 码面 grep（「starter_draws <= 0」实测 0 处）＋复现测⑤ 那条 Err 断言"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='if self.pf.starter_draws <= 0 {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'if self.pf.starter_draws < 0 {'))"
+run
+echo "### M78 摘掉 s6_table_row 表2 继承堆行的数字个数守卫（文档不动）⇒ 读数：这条**预期全绿**，是 §六 自己的 M68——守卫单独降级、四把尺都看不见，它的牙只在文档那一格多写第四个数时才出（M79 就是那一条）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            if nums.len() != 3 {'+chr(10)+'                expect(3, \"表2 继承堆行（可抽几次＋自动几次＋可选几次）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(3, \"表2 继承堆行（可抽几次＋自动几次＋可选几次）\");'))"
+run
+echo "### M79 M78 那层守卫降级 ＋ 文档 md:232 同一格追加第四个数（「牌库上限10」，arity 仍 3）⇒ 读数：只剩 §六 推导器 ② 那份独立计数在喊 ⇒ 两处各数一遍不是重复，一处降级另一处仍红"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            if nums.len() != 3 {'+chr(10)+'                expect(3, \"表2 继承堆行（可抽几次＋自动几次＋可选几次）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(3, \"表2 继承堆行（可抽几次＋自动几次＋可选几次）\");'))
+q='$D/doc.md'; ls=open(q,encoding='utf8').read().split('\n')
+b='（1自动+2可选）'
+assert ls[231].endswith(b), ls[231]
+ls[231]=ls[231][:-1]+'，牌库上限10）'
+open(q,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
