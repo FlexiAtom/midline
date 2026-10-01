@@ -1437,6 +1437,26 @@ mod anchor_tests {
         out
     }
 
+    /// §六:226「开局手牌不计入每回合抽牌次数」这条**否定式**的机器形式：生产码面上所有**写** `manual_draws` 的行，
+    /// 逐字收集、排序。为什么不能只数「出现几次」：读点（`<= 0` 那道闸、AI 的 `> 0`、HUD 的 `format!`）与写点混在
+    /// 一个计数里，摘掉开局那步的额度扣减和给 HUD 加一句打印会给出同一个数。
+    /// 判写点的三条字面形状（`-= `／带空格的 ` = `／`manual_draws: ` 那种结构体字面量与字段声明）故意保守：
+    /// `<= 0` 里的 `= ` 前面是 `<`，所以那条闸算读点，不算写点。
+    fn s6_manual_draw_writes() -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for raw in production_face(&src) {
+                let t = raw.split("//").next().unwrap_or("").trim().to_string();
+                if t.contains("manual_draws") && (t.contains("-= ") || t.contains(" = ") || t.contains("manual_draws: ")) {
+                    out.push(t);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// 实测路的行，靠的是那条**引擎复现测**真的还在跑。本帧实测过：只钉"行集合由解析器给出"拦不住删测——
     /// 解析器照样被推导器调用、行数照样对，只是再没有人把那些数字打进引擎。于是按函数名钉一次定义，
     /// §十四／§十五／§十六 三章的实测路共用这把尺。
@@ -3214,6 +3234,226 @@ mod anchor_tests {
         // ⑥ 文档唯一的卡名 ↔ 引擎那张卡；那些数字真的被引擎跑过。
         assert_eq!(at(176).trim(), super::STARTER.name, "md:176「{}」与 `STARTER.name`=「{}」不等 ⇒ 这张表描述的不是引擎里那张开端（逐字段等值全部作废）", at(176).trim(), super::STARTER.name);
         engine_repro_test_exists("section5_opening_fence_reproduces_on_the_engine");
+    }
+
+    /// §六 开局手牌与双牌堆反向覆盖：12 条必检行——**这一章是纳入尺子的十三章里第一条 12 行全走实测的**
+    /// （配比 锚点0／挂债0／实测12；§五 是 8／0／11、§十四 是 3／0／9，那两章的围栏外表体行只挂锚）。
+    ///
+    /// 形状：两张表（218 表头＋219/220 表体；231 表头＋232/233 表体）＋两道围栏（223–226／238–243）。
+    /// 四块的行集由 `battle::parse_section6_dealing` 按状态**显式**分派，本推导器再把围栏外那两块**独立走一遍**
+    /// （标签＝arity 1 且下一非空行是表头或 ```；表头＝封闭词表；其余＝表体），两边各数一次、不等就红——
+    /// 同一串字让两处各判一次才会朝不同方向错，而「这行算不算本章一条规则」恰恰只在这种偏移上静默绿。
+    ///
+    /// **双记账**同 §五／§十四：本章 12 行**全**要求锚点指回，走了实测路也不豁免。两层的牙不一样：
+    /// 摘掉 md:226 的锚 ⇒ 只有"12 行全有锚"那条红（配比 0／0／12 看不见它）；
+    /// 把文档 md:220 的「3张」改成「4张」⇒ 只有引擎实测那条红（行数没变，形状尺量不到数字）。
+    ///
+    /// 五层各钉一件事：
+    /// ① 认领路：配比 锚点0／挂债0／实测12；12 行全有锚；`NOT_A_RULE` 不吃本章任何一行。
+    /// ② 两张表的形制：arity 恰为 3、键名走**封闭名单**且顺序与行序一致、每行该带几个数（1／3／3／1）。
+    /// ③ 文档那几个数送进码面 grep：`for _ in 0..{n}` 恰 2 处（我发＋敌发的开局循环）、补齐线恰 1 处、
+    ///    每回合额度重置那两行恰 1 处、`HAND_LIMIT` 那个常量恰 1 处、自动抽牌落点恰 1 处。
+    /// ④ §六:226 那条否定式（「开局手牌**不计入**每回合抽牌次数」）落成一份**封闭的写点名单**——
+    ///    "这里没有扣减"只能靠点名全部扣减处来证（§十四 蜡烛写点名单的同族）。
+    /// ⑤ 复现测还在（`engine_repro_test_exists`）。
+    ///
+    /// 边界如实登记：md:219 那半句「固定发放」在复现测里只复现成**前缀**（`Battle::new` 末尾会走 §十二:426
+    /// 的回合开始自动抽，把那张算进 §六 的张数就是替别的章作证）；md:232 那句「上一关剩余＋新造牌」的
+    /// "装什么"两半里，只有「不包含开端」有本章的实测（收尸那处），另一半归 §廿二:947／§十二:503 那两把尺。
+    #[test]
+    fn every_row_of_section6_dealing_is_anchored_back_and_reproduced_on_the_engine() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let arity = |n: usize| -> usize { at(n).split_whitespace().count() };
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "六、开局手牌与双牌堆")
+            .expect("§六 标题必须存在（文档结构变了就要同步改本检查）");
+        let next_non_blank = |n: usize| -> usize {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            k
+        };
+        const S6_HEADERS: [&str; 2] = ["手牌 数量 说明", "牌堆 内容 抽取规则"];
+
+        // 围栏外的形状路，独立再走一遍（围栏内的行集来自解析器，本推导器不在围栏里重判标签）。
+        let mut rows_outside: Vec<usize> = Vec::new();
+        let mut labels: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence = false;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                fence_ticks += 1;
+                continue;
+            }
+            if t.is_empty() || fence {
+                continue;
+            }
+            let nb = at(next_non_blank(n)).trim();
+            if arity(n) == 1 && (nb == "```" || S6_HEADERS.contains(&nb)) {
+                labels.push(n);
+                continue;
+            }
+            if S6_HEADERS.contains(&t) {
+                headers.push(n);
+                continue;
+            }
+            rows_outside.push(n);
+        }
+        assert_eq!(fence_ticks, 4, "§六 应恰有两道 ``` 围栏（开局手牌／抽牌规则）＝4 个围栏符，实测 {fence_ticks} ⇒ 文档加了第三道，而本章两把尺都只登记两道，那里的新行会一起漏过去");
+        assert!(!fence, "§六 的围栏没有闭合（数到奇数个 ```）⇒ 章界 `---` 落在围栏里，本走法会把下一章的表读成 §六 的");
+        assert_eq!(labels, vec![216, 229, 235], "§六 围栏外的标签应恰好是 216 开局手牌／229 双牌堆／235 抽牌规则，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效");
+        assert_eq!(headers, vec![218, 231], "§六 的表头应恰好是那两张（顺序也要对），实测 {headers:?} ⇒ 表头判据失效（结构＋字面两个条件缺一不可）");
+        assert_eq!(rows_outside, vec![219, 220, 232, 233], "§六 围栏外的表体应得 4 行（两张表各两行），实测 {rows_outside:?} ⇒ 有表加了行");
+
+        // 解析器那一路的行集，与上面逐块对账。
+        let parsed = crate::battle::parse_section6_dealing(&lines);
+        let claimed = |v: &[crate::battle::S6Line]| -> Vec<usize> {
+            v.iter().filter(|r| r.claim != crate::battle::S6Claim::Label).map(|r| r.line).collect()
+        };
+        let mut verified: Vec<usize> = Vec::new();
+        verified.extend(claimed(&parsed.table1));
+        verified.extend(claimed(&parsed.table2));
+        verified.extend(claimed(&parsed.fence1));
+        verified.extend(claimed(&parsed.fence2));
+        verified.sort_unstable();
+        assert_eq!(parsed.labels, labels, "解析器与本推导器对「围栏外标签」读法不同（解析器 {:?}／本尺 {labels:?}）⇒ 两处必有一处漂", parsed.labels);
+        assert_eq!(parsed.headers, headers, "解析器与本推导器对「表头行」读法不同（解析器 {:?}／本尺 {headers:?}）⇒ 同上", parsed.headers);
+        assert_eq!(claimed(&parsed.table1), vec![219, 220], "解析器给表1 的行集与本尺的 {rows_outside:?} 前半不符 ⇒ 两块表被读成一快，`s6_fold` 那边少一行只会 panic、这里却可能静默");
+        assert_eq!(claimed(&parsed.table2), vec![232, 233], "解析器给表2 的行集与本尺的 {rows_outside:?} 后半不符 ⇒ 同上");
+        assert_eq!(claimed(&parsed.fence1), vec![223, 224, 225, 226], "解析器给围栏1（开局手牌）的行集应为 两关来源＋补齐＋不计入，实测 {:?}", claimed(&parsed.fence1));
+        assert_eq!(claimed(&parsed.fence2), vec![239, 240, 242, 243], "解析器给围栏2（抽牌规则）的行集应为 自动＋主动＋合计＋满额弃牌，实测 {:?}", claimed(&parsed.fence2));
+        assert_eq!(verified.len(), 12, "§六 必检行应恰好 12 行（表体 4＋围栏规则行 8），实测 {} 行 ⇒ 文档加了规则或推导口径失效", verified.len());
+        let rows = verified.clone();
+        for n in [219usize, 220, 223, 226, 232, 233, 239, 243] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §六 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [214usize, 216, 218, 222, 229, 231, 235, 237, 238, 241, 246] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／标签／表头／围栏符判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §六 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+
+        // ① 三条认领路＋配比＋双记账。
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§六 有 {} 行既无锚点指回、也不在债表里、又不是被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (0, 0, 12),
+            "§六 三条认领路应为 锚点0／挂债0／实测12——本章 12 行**全**走实测（表体那四行也是 `s6_fold` 折叠出来再打进引擎的），实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从实测路悄悄挪走"
+        );
+        for &n in &rows {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）没有锚点指回 ⇒ §六 的纪律与 §五／§十四 相同：12 行**全**指回，走了实测路也不豁免锚点", at(n));
+        }
+        assert!(
+            rows.iter().all(|n| !debited.contains(n)),
+            "§六 不该有挂债行：本章 12 行全部已实现并已指回，任何一行躺进债表都说明实现被撤"
+        );
+
+        let f = crate::battle::s6_fold(&parsed);
+        let (starter_each, starter_note) = f.starter_row.unwrap();
+        let (draw_each, t1_base, t1_inherit) = f.inherit_draw_row.unwrap();
+        let (s1_stage, s1_n) = f.stage1.unwrap();
+        let (s2_stage, s2_n) = f.stage2.unwrap();
+        let topup = f.topup.unwrap();
+        let (pile_total, pile_auto, pile_manual, no_starter, holds_both) = f.inherit_pile.unwrap();
+        let (starter_turns, all_starters) = f.starter_pile.unwrap();
+        let auto_n = f.auto_draw.unwrap();
+        let (manual_n, mixable) = f.manual_draw.unwrap();
+        let per_turn_max = f.per_turn_max.unwrap();
+        let hand_cap = f.hand_cap.unwrap();
+
+        // ② 两张表的形制：键名走封闭名单、顺序与行序一致、每行该带的数字个数钉死。
+        const S6_KEYS: [(&str, u8, usize); 4] = [("开端", 1, 1), ("继承堆抽牌", 1, 3), ("继承堆", 2, 3), ("开端堆", 2, 1)];
+        for (i, &n) in rows_outside.iter().enumerate() {
+            let t = at(n).trim();
+            let cols: Vec<&str> = t.split_whitespace().collect();
+            assert_eq!(cols.len(), 3, "md:{n}「{t}」不是「键 数量 说明」三段式（切成 {} 段）⇒ 这张表加列或并列了，逐格等值没法成立", cols.len());
+            let table = if i < 2 { 1u8 } else { 2 };
+            let idx = S6_KEYS
+                .iter()
+                .position(|(k, tb, _)| *k == cols[0] && *tb == table)
+                .unwrap_or_else(|| panic!("md:{n}「{t}」的键「{}」不在表{table} 那两行的封闭名单里（{S6_KEYS:?}）⇒ 表换脸了，而实测还在按旧名读数", cols[0]));
+            assert_eq!(idx, i, "md:{n} 的键在名单里的位置 {idx} 与它在表里的行序 {i} 不符 ⇒ 两行换了个位置，`s6_fold` 按形状取数就会挂到别的条款上");
+            let nums = crate::battle::s15_digits(t);
+            assert_eq!(nums.len(), S6_KEYS[idx].2, "md:{n}「{t}」应恰给 {} 个数字（{S6_KEYS:?} 那一格登记的口径），实测 {nums:?} ⇒ 这一格换了形制，折叠出来的数会挂错条款", S6_KEYS[idx].2);
+        }
+        // 说明列里那几处措辞是本章实测的**前提**，本尺独立再查一遍（`s6_table_row` 那边也查一次，两处读法不齐就红）。
+        let note = |n: usize| -> String { at(n).split_whitespace().nth(2).unwrap_or("").to_string() };
+        assert!(starter_note && note(219).contains("不入继承堆"), "md:219 的说明列丢了「不入继承堆」（折叠读成 {starter_note}）⇒ ④ 那份写点名单与 §六:232 那半句「不包含开端」就少了一处文档依据");
+        assert!(t1_base && t1_inherit, "md:220 那格读不出「第1关从基础牌堆」与「第2关起从继承堆」两半（{t1_base}/{t1_inherit}）⇒ 表1 与围栏1 的说法分家，实测按关号分派来源就没了依据");
+        assert!(no_starter && holds_both, "md:232 的内容列读不出「不包含开端」与「上一关剩余＋新造牌」（{no_starter}/{holds_both}）⇒ 表2 那格换了措辞，③ 点名的收尸处与 §廿二:947 都对不上号了");
+        assert!(all_starters, "md:233 的内容列读不出「全是开端」⇒ 复现测里那句「开端堆抽出的必须是开端」失去文档依据");
+        assert!(mixable, "md:240 读不出「可混合」⇒ 复现测那句「同一回合两种来源各抽一次」失去文档依据");
+
+        // ③ 文档数字送进码面 grep：等的是「那一行字面里写的那个数」，不是"看起来像"。
+        assert_eq!((s1_stage, s2_stage, s1_n, s2_n, draw_each), (1, 2, draw_each, draw_each, draw_each), "md:220／md:223／md:224 三处的张数或关号不齐（表1 {draw_each}／围栏 {s1_stage}→{s1_n}、{s2_stage}→{s2_n}）⇒ 同一件「开局抽几张」在文档里写了三套");
+        assert_eq!(topup, draw_each, "md:225 的补齐线 {topup} 与 md:220 的张数 {draw_each} 不是同一个数 ⇒ 「不足」读不出触发线");
+        assert_eq!((pile_auto, pile_manual), (auto_n, manual_n), "md:232 那份（{pile_auto}自动+{pile_manual}可选）与 md:239／md:240 那两条（{auto_n}+{manual_n}）不齐 ⇒ 每回合那份预算在文档两处各写一套");
+        assert_eq!(pile_auto + pile_manual, pile_total, "md:232 自己不合账：{pile_auto}+{pile_manual} ≠ {pile_total}");
+        assert_eq!(auto_n + manual_n, per_turn_max, "md:242 的「每回合最多 {per_turn_max} 张」落不到 {auto_n}+{manual_n} 上");
+        assert_eq!(pile_total, per_turn_max, "md:232 说每回合可抽 {pile_total} 次，md:242 说的上限却是 {per_turn_max} 张");
+        assert_eq!(code_occurrences(&format!("for _ in 0..{draw_each} {{")), 2, "md:220／md:223／md:224 那个开局张数 {draw_each} 在码面只该出现在**开局发牌那两个循环**（我方＋敌方各一处），实测 {} 处 ⇒ 0 处＝那张表写的数在码面根本没有对应字面（实测会红，但这里的数也就成了空头支票）；≥3 处＝别处又硬编了一个同样的数，文档没登记过第三个吃这个数的地方", code_occurrences(&format!("for _ in 0..{draw_each} {{")));
+        assert_eq!(code_occurrences(&format!("if draw_pile.len() < {topup}")), 1, "md:225 那条补齐线在码面恰有 1 处，实测 {} 处 ⇒ 0 处＝不足时不再补齐（复现测① 的第三段会跟着红）；≥2 处＝有人另起一份补齐口径，文档只写了一次", code_occurrences(&format!("if draw_pile.len() < {topup}")));
+        assert_eq!(code_occurrences(&format!("self.pf.manual_draws = {pile_manual};")), 1, "md:232 那份「{pile_manual}可选」＝每回合开始重置的主动额度，码面恰有 1 处，实测 {} 处 ⇒ 0 处＝额度不再每回合重置（§六:226 那句「不计入」连带失效，复现测② 会红）", code_occurrences(&format!("self.pf.manual_draws = {pile_manual};")));
+        assert_eq!(code_occurrences(&format!("self.pf.starter_draws = {starter_turns};")), 1, "md:233 那句「每回合可抽{starter_turns}次」＝每回合重置的开端堆计数，码面恰有 1 处，实测 {} 处", code_occurrences(&format!("self.pf.starter_draws = {starter_turns};")));
+        assert_eq!(code_occurrences(&format!("pub const HAND_LIMIT: usize = {hand_cap};")), 1, "md:243 写的上限 {hand_cap} 张必须就是 `HAND_LIMIT` 那个常量，实测 {} 处命中 ⇒ 0 处＝那个数在码面换了写法或换了值，而文档那句「满8张」还照旧读着", code_occurrences(&format!("pub const HAND_LIMIT: usize = {hand_cap};")));
+        assert_eq!(code_occurrences("·自动抽牌："), 1, "md:239 那句「每回合开始自动抽」在码面只有一个落点（`player_turn_start` 那条日志），实测 {} 处 ⇒ 2 处＝有人另起一次自动抽，那 §六:242 那个上限就不是文档写的那个数了", code_occurrences("·自动抽牌："));
+        assert_eq!(code_occurrences("starter_draws <= 0"), 1, "md:233 那道「每回合只 {starter_turns} 次」的闸恰有 1 处，实测 {} 处 ⇒ 0 处＝开端堆可连抽（复现测⑤ 那条 Err 断言会红）", code_occurrences("starter_draws <= 0"));
+        assert_eq!(code_occurrences("manual_draws <= 0"), 1, "md:242 那个「最多 {per_turn_max} 张」的主动侧闸恰有 1 处，实测 {} 处 ⇒ 0 处＝每回合抽牌不设上限（复现测⑥ 会红）", code_occurrences("manual_draws <= 0"));
+        assert_eq!(starter_each, 1, "md:219 写的开端张数是 {starter_each}，而码面 `Battle::new` 那句手牌字面量只有一项（复现测① 拿这个数撞引擎）⇒ 文档若改成 2 张，得先给那处字面量加一项，否则这里红");
+        assert_eq!(auto_n, 1, "md:239 说每回合自动抽 {auto_n} 张，可码面那一支是**写死的一次** `remove(0)`＋一次 `push_hand` ⇒ 文档改成 2 张时本章没有「第二处字面」可撞，只能靠复现测④ 那条手牌增量红");
+
+        // ④ §六:226 那条否定式的封闭名单：生产码面上**所有写 `manual_draws` 的行**。
+        let mut want_writes: Vec<String> = vec![
+            "pub manual_draws: i32,".to_string(),
+            format!("pf: SideFlags {{ manual_draws: {pile_manual}, starter_draws: {starter_turns}, ..Default::default() }},"),
+            format!("ef: SideFlags {{ manual_draws: {pile_manual}, starter_draws: {starter_turns}, ..Default::default() }},"),
+            format!("self.pf.manual_draws = {pile_manual};"),
+            "self.pf.manual_draws -= 1;".to_string(),
+            "self.pf.manual_draws -= 1;".to_string(),
+        ];
+        want_writes.sort();
+        assert_eq!(
+            s6_manual_draw_writes(),
+            want_writes,
+            "md:226「开局手牌不计入每回合抽牌次数」在码面的形式＝这份**封闭的写点名单**：两处结构体字面量初始化、一处每回合重置、两处 `-= 1`（都在 `action_draw` 的两个来源分支里）。实测多一条＝有人新起了一个扣主动额度的地方，而 §六 只写了「主动抽 {manual_n} 次」这一种扣法（开局那 {draw_each} 张走 `hand.push`，一次都不该碰它）；少一条＝那条路被摘了（连「每回合重置」一起被摘时，§六:226 就没人兑现了）"
+        );
+
+        // ⑤ 那些数字真的被引擎跑过、而且那条测还挂在 `#[test]` 上。
+        engine_repro_test_exists("section6_dealing_fence_reproduces_on_the_engine");
     }
 
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
