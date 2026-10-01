@@ -1466,6 +1466,90 @@ mod anchor_tests {
         out
     }
 
+    /// 业力写点的形状判据：那个 token 之后紧跟 `+= `／`-= `／单等号 `= `／声明或零起点初始化
+    /// （`: i32`、`: 0`）。四种读点刻意不收，每一种都有真实行作样本：
+    /// `== 0`（比较，第二个字符还是 `=`）、`=> `（match 臂，等号前是 `>`）、` < cost`（余额闸）、
+    /// `.max(0)`／`{}`（结转与打印）。放宽到任何一种，名单就从「谁改了业力」退化成「谁提到了业力」。
+    /// 同一形状也拿去筛抽牌额度（见 `s3_free_starter_quota_writes`），那里只有 `-= ` 与 `= ` 两种可能出现。
+    fn s3_is_write(t: &str, key: &str) -> bool {
+        t.match_indices(key).any(|(i, _)| {
+            let s = t[i + key.len()..].trim_start();
+            s.starts_with("+= ")
+                || s.starts_with("-= ")
+                || s.starts_with("= ")
+                || s.starts_with(": i32")
+                || (s.starts_with(": ") && s.as_bytes().get(2).is_some_and(|c| c.is_ascii_digit()))
+        })
+    }
+
+    /// §三 的封闭写点名单：生产码面上所有能改变 `p_karma`／`e_karma` 数值的行，逐字收集、排序。
+    /// 它一次兑现三句：**「不自动恢复」65**（名单里没有任何"每回合给一笔"的行）、
+    /// **「获取方式 死亡 或 献祭」66**（增大侧只有 `+= 1`（开端在场，另有 §五:200／§十二:452 的授权）与
+    /// `+= gain`（`on_death` 那一个 match）两支）、**「用途 放置 / 融合」68**（减小侧只有 `-= cost` 一支放置）。
+    /// 为什么必须收成名单而不是"数出现几次"：读点与写点混在一个计数里，摘掉回滚那道 `= ` 和给 HUD 加一句
+    /// 打印会给出同一个数（同 `s6_manual_draw_writes` 的理由）。
+    fn s3_karma_writes() -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for raw in production_face(&src) {
+                let t = raw.split("//").next().unwrap_or("").trim().to_string();
+                if ["p_karma", "e_karma"].iter().any(|k| s3_is_write(&t, k)) {
+                    out.push(t);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// 定界一个**带缩进**的函数体（签名行之后、到与签名同缩进的 `}` 为止），剔掉纯注释行。
+    /// 不能复用 `s7_fn_body`：它认的是 0 列收尾花括号，`impl Battle` 里的方法收尾在 4 列，会一路读到文件尾。
+    fn s3_fn_body(src: &str, sig: &str) -> Vec<String> {
+        let indent_of = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
+        let sls: Vec<&str> = src.lines().collect();
+        let h = sls
+            .iter()
+            .position(|l| l.trim_start().starts_with(sig))
+            .unwrap_or_else(|| panic!("§三 推导器要读 `{sig}` 的函数体；它改名、拆函数或挪出 ⇒ 同步这里（不许静默跳过）"));
+        let d = indent_of(sls[h]);
+        let mut body: Vec<String> = Vec::new();
+        for l in &sls[h + 1..] {
+            if indent_of(l) == d && l.trim() == "}" {
+                assert!(!body.is_empty(), "§三 推导器：`{sig}` 是空函数体 ⇒ 判据无从下手");
+                return body;
+            }
+            let t = l.trim();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            body.push(l.split("//").next().unwrap_or("").trim().to_string());
+        }
+        panic!("§三 推导器没找到 `{sig}` 的收尾花括号（同缩进那个）——函数体判据失效")
+    }
+
+    /// §三:130「不消耗每回合抽牌次数」的机器形式＝`grant_free_starter` 体内**一份都不碰**两份抽牌额度
+    /// （主动额度 `manual_draws` 与开端堆额度 `starter_draws`）。这条是纯否定式，能兑现它的只有"点名全部碰额度的行"，
+    /// 所以取函数体、按写点形状筛，期望值恒为空；§六 那份全局写点名单管不住这里——多一处扣额度两处都会红，
+    /// 但红在 §六 那条会把这笔账算到 §六 头上，本章这句「不消耗」就没有自己的尺了。
+    fn s3_free_starter_quota_writes() -> Vec<String> {
+        let sig = "fn grant_free_starter(&mut self) {";
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            if !src.lines().any(|l| l.trim_start().starts_with(sig)) {
+                continue;
+            }
+            for l in s3_fn_body(&src, sig) {
+                if s3_is_write(&l, "manual_draws") || s3_is_write(&l, "starter_draws") {
+                    out.push(l);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// 实测路的行，靠的是那条**引擎复现测**真的还在跑。本帧实测过：只钉"行集合由解析器给出"拦不住删测——
     /// 解析器照样被推导器调用、行数照样对，只是再没有人把那些数字打进引擎。于是按函数名钉一次定义，
     /// §十四／§十五／§十六 三章的实测路共用这把尺。
@@ -3463,6 +3547,305 @@ mod anchor_tests {
 
         // ⑤ 那些数字真的被引擎跑过、而且那条测还挂在 `#[test]` 上。
         engine_repro_test_exists("section6_dealing_fence_reproduces_on_the_engine");
+    }
+
+    /// 【反向覆盖·其五】§三 业力系统（md:59–135）的每一行必检行，由**文档数字驱动引擎的实测路**覆盖，
+    /// 并且**双记账**——走了实测仍一行都不许缺锚点（纪律同 §五／§六／§十四）。
+    ///
+    /// 本章与 §六 形状不同的三处，判据各立各的：
+    /// ① 表1 是**两列表且 arity 不固定**（md:64 一格塞了三个子句、md:69 空格切出七段），所以 §六 那句
+    ///    「切成三段」在这里换成「键名走封闭名单＋值列至少一段」，每格该有几个数字另钉一遍。
+    /// ② 本章有**六道围栏**（§六 两道），围栏符 12 个；围栏内既混进一条真标签（md:106「主动献祭后：」），
+    ///    也混进一条**带数字的抬头**（md:128「若玩家手牌为0且场上无卡牌：」）。前者不算必检、后者必须算，
+    ///    所以本章的标签判据比 §六 多一道「不带数字」，而这条判据在这里独立再查一遍。
+    /// ③ 示例区（md:89–92）在围栏外，没有表头也没有标签能收它——它靠「· 」圆点外壳自成一块。
+    ///
+    /// 配比钉死 锚点0／挂债0／实测31：本章**没有**一行走"锚点指回"独占，也没有一行躺债表——
+    /// 业力是全仓唯一已被引擎跑通的资源层，任何一行落进债表都等于实现被撤。
+    ///
+    /// 如实登记的边界（四条，都写进了断言措辞，收口三问要复述）：
+    /// ・md:122 那个「获得2业力」在码面是 `on_death` 开端支里的**裸字面量 2**，没有第二处字面可撞（同 §六
+    ///   那句「每回合自动抽1张」的处境）⇒ 本章只有复现测⑥ 撞得到它，③ 这里只给它留一道门。
+    /// ・md:74／md:76 两条自然死在码面**合流成一支**（`DeathCause::Battle | DeathCause::Cross`），于是
+    ///   「按档位乘一下」那个式子在码面恰有 2 处：合流那支＋终影「吞名」那支（后者读同一张档位表，出处在
+    ///   速查:985 那句献祭条文的另一半，不由 §三 授权）。
+    /// ・md:66 说获取方式「只有两种」，而码面增大侧有**两支**：另一支是 `+= 1`（开端在场每回合给 1），
+    ///   它的文档出处是速查:990，与 §三:65 那句「不自动恢复」构成同一份文档内部的口径分家。本章不替哪一侧圆场：
+    ///   这一支钉在封闭名单里、分家登记在这里。
+    /// ・md:64 那半句「Boss 关有开场脚本预算」的**数值**文档没给（boss.rs 那五份 `start_karma` 是按脚本反推的）。
+    ///   ③ 这里只钉「全仓有一处且只有一处让敌方业力不从零起」这个形状，那个数本身归 §廿二／Boss 章的尺。
+    #[test]
+    fn every_row_of_section3_karma_is_anchored_back_and_reproduced_on_the_engine() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "三、业力系统")
+            .expect("§三 标题必须存在（文档结构变了就要同步改本检查）");
+        const S3_HEADS: [&str; 2] = ["项目 规则", "死亡次数 返还比例"];
+
+        // 围栏外的形状路，独立再走一遍（围栏内的行集来自解析器，本推导器不在围栏里重判标签）。
+        let mut table: Option<u8> = None;
+        let mut labels: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut body: Vec<usize> = Vec::new();
+        let mut dots: Vec<usize> = Vec::new();
+        let mut intent: Vec<usize> = Vec::new();
+        let mut fence_shapes: Vec<usize> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence = false;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if t.is_empty() {
+                continue;
+            }
+            if t == "```" {
+                fence = !fence;
+                fence_ticks += 1;
+                if fence {
+                    fence_shapes.push(0);
+                    table = None;
+                }
+                continue;
+            }
+            if !fence && t == "---" {
+                break;
+            }
+            if fence {
+                *fence_shapes.last_mut().unwrap() += 1;
+                continue;
+            }
+            if S3_HEADS.contains(&t) {
+                headers.push(n);
+                table = Some(headers.len() as u8);
+                continue;
+            }
+            if t.split_whitespace().count() == 1 && !t.ends_with('。') {
+                labels.push(n);
+                table = None;
+                continue;
+            }
+            if table.is_some() {
+                body.push(n);
+            } else if t.starts_with("· ") {
+                dots.push(n);
+            } else if t.starts_with("设计意图") {
+                intent.push(n);
+            } else {
+                panic!("md:{n}「{t}」落在这条独立走法认不出的形状上（围栏外、没有正在读的表，又不是标签／「· 」示例／设计意图）⇒ 文档新加了一块，而本章两把尺都只登记那八块");
+            }
+        }
+        assert_eq!(fence_ticks, 12, "§三 应恰有六道 ``` 围栏＝12 个围栏符（获取／互斥／献祭代价／消耗／核心循环／保底），实测 {fence_ticks} ⇒ 文档加了第七道，而解析器与本章两把尺都只登记六道，那里的新行会一起漏过去");
+        assert!(!fence, "§三 的围栏没有闭合（数到奇数个 ```）⇒ 章界 `---` 落在围栏里，本走法会把下一章的表读成 §三 的");
+        assert_eq!(labels, vec![61, 71, 79, 87, 96, 103, 111, 119, 125], "§三 围栏外的标签应恰好是那九条，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效");
+        assert_eq!(headers, vec![63, 81], "§三 的表头应恰好是那两张（顺序也要对），实测 {headers:?} ⇒ 表头判据失效（结构＋字面两个条件缺一不可）");
+        assert_eq!(body, vec![64, 65, 66, 67, 68, 69, 82, 83, 84, 85], "§三 围栏外的表体应得 10 行（表1 六行＋表2 四行），实测 {body:?} ⇒ 有表加了行");
+        assert_eq!(dots, vec![89, 90, 91, 92], "§三 示例区应恰是那四行「· 」，实测 {dots:?} ⇒ 圆点外壳判据失效，或示例加了第五行而实测没跟着加");
+        assert_eq!(intent, vec![94], "§三 的设计意图应恰是一行，实测 {intent:?} ⇒ 那一块自成两块了");
+        assert_eq!(fence_shapes, vec![3, 2, 3, 3, 1, 5], "六道围栏的行数应依次是 3／2／3／3／1／5，实测 {fence_shapes:?} ⇒ 有围栏加了行，而复现测是按块取数的");
+        assert!(at(79).contains("独立"), "md:79 那句丢了「独立」⇒ 标签名单还认它，可复现测③ 那句「计数跟着实例走」从此没有文档依据（围栏内没有一行能替它作证）");
+
+        // 解析器那一路的行集，与上面逐块对账。
+        let parsed = crate::battle::parse_section3_karma(&lines);
+        let claimed = |v: &[crate::battle::S3Line]| -> Vec<usize> {
+            v.iter().filter(|r| r.claim != crate::battle::S3Claim::Label).map(|r| r.line).collect()
+        };
+        assert_eq!(parsed.labels, labels, "解析器与本推导器对「围栏外标签」读法不同（解析器 {:?}／本尺 {labels:?}）⇒ 两处必有一处漂", parsed.labels);
+        assert_eq!(parsed.headers, headers, "解析器与本推导器对「表头行」读法不同（解析器 {:?}／本尺 {headers:?}）⇒ 同上", parsed.headers);
+        assert_eq!(claimed(&parsed.table1), vec![64, 65, 66, 67, 68, 69], "解析器给表1 的行集与本尺的前六行不符 ⇒ 两张表被读成一快，`s3_fold` 那边少一行只会 panic，这里却可能静默");
+        assert_eq!(claimed(&parsed.table2), vec![82, 83, 84, 85], "解析器给表2 的行集与本尺的后四行不符 ⇒ 同上");
+        assert_eq!(claimed(&parsed.examples), vec![89, 90, 91, 92], "解析器给示例区的行集应与本尺那份「· 」四行一致 ⇒ 两处读法不齐，③ 那条实例独立的实测就没挂在四行上");
+        assert_eq!(claimed(&parsed.intent), vec![94], "解析器给设计意图的行集应恰是 md:94 一行");
+        let fence_claims: Vec<Vec<usize>> = parsed.fences.iter().map(|b| claimed(b)).collect();
+        assert_eq!(
+            fence_claims,
+            vec![vec![74, 75, 76], vec![99, 100], vec![107, 108], vec![114, 115, 116], vec![122], vec![128, 129, 130, 131, 132]],
+            "六道围栏的必检行集应为 三获取／两互斥／两献祭代价／三消耗／一核心循环／五保底，实测 {fence_claims:?} ⇒ 与上面那份行数是同一件事，两处不齐即有一处在漂"
+        );
+        assert_eq!(parsed.fences[2][0].claim, crate::battle::S3Claim::Label, "md:106「主动献祭后：」没被判成 Label ⇒ 那条抬头会当成规则行去折叠，围栏3 的两条编号规则一起挂错条款");
+        assert_ne!(parsed.fences[5][0].claim, crate::battle::S3Claim::Label, "md:128 那条带 0 的抬头被判成 Label ⇒ 本章最要紧的一条触发式（手牌0且场上无卡）从实测里消失了，而它只是恰好以「：」收尾");
+
+        let mut verified: Vec<usize> = Vec::new();
+        verified.extend(claimed(&parsed.table1));
+        verified.extend(claimed(&parsed.table2));
+        verified.extend(claimed(&parsed.examples));
+        verified.extend(claimed(&parsed.intent));
+        for blk in &parsed.fences {
+            verified.extend(claimed(blk));
+        }
+        verified.sort_unstable();
+        assert_eq!(verified.len(), 31, "§三 必检行应恰好 31 行（表体 10＋示例 4＋意图 1＋围栏 16），实测 {} 行 ⇒ 文档加了规则或推导口径失效", verified.len());
+        let rows = verified.clone();
+        for n in [64usize, 66, 69, 82, 85, 89, 92, 94, 99, 100, 108, 115, 116, 122, 128, 132] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §三 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [59usize, 61, 63, 71, 73, 79, 81, 87, 106, 113, 121, 133, 135] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／标签／表头／围栏符判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(!rows.contains(n), "md:{n} 落在 §三 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}");
+        }
+
+        // ① 三条认领路＋配比＋双记账。
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§三 有 {} 行既无锚点指回、也不在债表里、又不是被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (0, 0, 31),
+            "§三 三条认领路应为 锚点0／挂债0／实测31——本章 31 行**全**走实测（表体那十行也是 `s3_fold` 折叠出来再打进引擎的），实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从实测路悄悄挪走"
+        );
+        for &n in &rows {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）没有锚点指回 ⇒ §三 的纪律与 §五／§六 相同：31 行**全**指回，走了实测路也不豁免锚点", at(n));
+        }
+        assert!(
+            rows.iter().all(|n| !debited.contains(n)),
+            "§三 不该有挂债行：本章 31 行全部已实现并已指回，任何一行躺进债表都说明实现被撤"
+        );
+
+        let f = crate::battle::s3_fold(&parsed);
+        let (p_init, e_init, player_first, by_enc) = f.initial.unwrap();
+        let never_auto = f.recover_never_auto.unwrap();
+        let (src_death, src_sac, src_only_two) = f.gain_source.unwrap();
+        let (amt_cost, amt_not_stat) = f.gain_amount.unwrap();
+        let (use_place, use_fuse, use_only_two) = f.uses.unwrap();
+        let (tri_stat, tri_karma) = f.trinity.unwrap();
+        let tiers = f.tiers.clone();
+        let examples = f.examples.clone();
+        let (anti_lunch, never_scrapped) = f.intent.unwrap();
+        let (nat_cost, nat_decay) = f.gain_natural.unwrap();
+        let (sac_cost, sac_full_flag) = f.gain_sacrifice.unwrap();
+        let (cross_cost, cross_decay) = f.gain_cross.unwrap();
+        let (decay_full, decay_names) = f.sac_no_decay.unwrap();
+        let (by_kill, by_cross, advances) = f.natural_decays.unwrap();
+        let (this_turn, cannot) = f.no_redeploy.unwrap();
+        let sac_full_row = f.sac_full.unwrap();
+        let spend_place = f.spend_place.unwrap();
+        let (fuse_minus, fuse_floor) = f.spend_fuse.unwrap();
+        let starter_free = f.spend_starter.unwrap();
+        let (loop_gain, ends_in_fuse) = f.core_loop.unwrap();
+        let (hand_zero, field_zero) = f.net_trigger.unwrap();
+        let net_draw = f.net_draw.unwrap();
+        let net_not_counted = f.net_not_counted.unwrap();
+        let net_once = f.net_once.unwrap();
+        let (temp_n, temporary) = f.net_temp.unwrap();
+        let boss_budget = at(64).contains("开场脚本预算");
+
+        // ② 两张表的形制：键名走封闭名单、顺序与行序一致、每格该有几个数字钉死（表1 arity 不固定，只能这么钉）。
+        const S3_T1_KEYS: [(&str, usize); 6] = [("初始业力", 2), ("恢复方式", 0), ("获取方式", 0), ("获取量", 0), ("用途", 0), ("三位一体", 0)];
+        const S3_T2_KEYS: [(&str, usize); 4] = [("第一次", 1), ("第二次", 1), ("第三次", 1), ("第四次起", 1)];
+        for (i, &n) in body.iter().enumerate() {
+            let t = at(n).trim();
+            let cols: Vec<&str> = t.split_whitespace().collect();
+            let (which, keys) = if i < 6 { (1u8, &S3_T1_KEYS[..]) } else { (2, &S3_T2_KEYS[..]) };
+            if which == 2 {
+                assert_eq!(cols.len(), 2, "md:{n}「{t}」不是表2 的「第N次 比例」两段式（切成 {} 段）⇒ 那张表加列或并列了，逐格等值没法成立", cols.len());
+            } else {
+                assert!(cols.len() >= 2, "md:{n}「{t}」连「键 值」两段都切不出来 ⇒ 表1 那格的值被挪走了，复现测① 拿什么撞引擎");
+            }
+            let idx = keys
+                .iter()
+                .position(|(k, _)| *k == cols[0])
+                .unwrap_or_else(|| panic!("md:{n}「{t}」的键「{}」不在表{which} 的封闭名单里（{keys:?}）⇒ 表换脸了，而实测还在按旧名读数", cols[0]));
+            assert_eq!(idx, i % 6, "md:{n} 的键在名单里的位置 {idx} 与它在表里的行序 {} 不符 ⇒ 两行换了个位置，`s3_fold` 按形状取数就会挂到别的条款上", i % 6);
+            let nums = crate::battle::s15_digits(t);
+            assert_eq!(nums.len(), keys[idx].1, "md:{n}「{t}」应恰给 {} 个数字（封闭名单登记的口径），实测 {nums:?} ⇒ 这一格换了形制，折叠出来的数会挂错条款", keys[idx].1);
+        }
+        assert_eq!(tiers.iter().map(|(nth, _, _)| *nth).collect::<Vec<_>>(), vec![1, 2, 3, 4], "表2 四档的序数应为 1／2／3／4（按文档行序），实测 {:?}", tiers.iter().map(|t| t.0).collect::<Vec<_>>());
+        assert_eq!(tiers.iter().filter(|(_, _, fl)| *fl).count(), 1, "「保底」那半句只许落在最后一档（实测 {} 档带它）⇒ 复现测② 那句「档位单调递减、第四档兜底」的前提塌了", tiers.iter().filter(|t| t.2).count());
+        for n in [82usize, 83, 84] {
+            assert!(!at(n).contains("保底"), "md:{n}（「{}」）里出现了「保底」⇒ 兜底档不止一处，表2 那四行的读法与 `refund_pct` 那个 `_` 分支分家", at(n));
+        }
+
+        // 说明／内容列里的措辞是本章实测的**前提**，本尺独立再查一遍（`s3_classify` 那边也查一次，两处读法不齐就红）。
+        assert!(player_first && by_enc && boss_budget, "md:64 那格读不出「我方在前」「敌方按遭遇定义」「开场脚本预算」三件（{player_first}/{by_enc}/{boss_budget}）⇒ 复现测① 按关号分派起点、④ 那份写点名单替 Boss 预算留的那一处，都没了文档依据");
+        assert!(never_auto, "md:65 读不出「不自动恢复」⇒ ④ 那份封闭写点名单失去它要证的否定式");
+        assert!(src_death && src_sac && src_only_two, "md:66 那格读不出「己方卡牌死亡＋主动献祭、且只有这两个」（{src_death}/{src_sac}/{src_only_two}）⇒ ④ 增大侧「只有两支」这句没有文档依据了");
+        assert!(amt_cost && amt_not_stat, "md:67 读不出「卡牌费用（非数值）」两半（{amt_cost}/{amt_not_stat}）⇒ 复现测① 那句「基数取费用、不取血量」失去依据");
+        assert!(use_place && use_fuse && use_only_two, "md:68 那格读不出「放置卡牌 / 融合、且只有这两类」（{use_place}/{use_fuse}/{use_only_two}）⇒ ④ 减小侧的账没人对");
+        assert!(tri_stat && tri_karma, "md:69 两半读不全（{tri_stat}/{tri_karma}）⇒ 三位一体那两条等值断言（数值＝血量＝伤害、业力＝费用）失去文档依据");
+        assert!(anti_lunch && never_scrapped, "md:94 那两半读不全（防白嫖 {anti_lunch}／不彻底废弃 {never_scrapped}）⇒ 档位表的存在理由整行落空，复现测② 那句「第四档不为 0」没人要求了");
+        assert!(nat_cost && nat_decay && cross_cost && cross_decay, "md:74／md:76 两条读不齐（{nat_cost}/{nat_decay}、{cross_cost}/{cross_decay}）⇒ 围栏1 那三行同形句式靠死因分派就散了");
+        assert!(sac_cost && sac_full_flag && decay_full && decay_names && sac_full_row, "md:75／md:99／md:108 那三处「全额」读不齐（{sac_cost}/{sac_full_flag}、{decay_full}/{decay_names}、{sac_full_row}）⇒ 复现测④ 那句「献祭拿全额且不推进档位」没了依据");
+        assert!(by_kill && by_cross && advances, "md:100 读不出「被击杀／越线」两支都推进档位（{by_kill}/{by_cross}/{advances}）⇒ 复现测④ 那两次自然死各推一档无从对照");
+        assert!(this_turn && cannot, "md:107 那两半读不全（{this_turn}／{cannot}）⇒ 复现测⑤ 那条「本回合被拒、跨回合解禁」失去文档依据");
+        assert!(spend_place && starter_free && ends_in_fuse, "md:114／md:116／md:122 三处读不齐（放置 {spend_place}／开端免费 {starter_free}／收在融合 {ends_in_fuse}）⇒ ⑥ 那段核心循环走不下去");
+        assert!(hand_zero && field_zero, "md:128 那条件行的两个子句读不全（手牌 {hand_zero}／场上 {field_zero}）⇒ 复现测⑦ 那两条反例各只剩一条");
+        assert!(net_not_counted && temporary, "md:130／md:132 那两句读不出「不消耗抽牌次数」与「临时」（{net_not_counted}/{temporary}）⇒ ④ 那份额度名单与复现测⑦ 的临时那张都失去依据");
+        assert_eq!(examples.iter().filter(|(_, _, _, ind, _, _)| *ind).count(), 1, "示例区应恰有一行带「独立」（md:90 那行火苗B），实测 {} 行 ⇒ 复现测③ 拿哪一行说「计数跟着实例」都不对", examples.iter().filter(|e| e.3).count());
+        assert_eq!(examples.iter().filter(|(_, _, _, _, fu, _)| *fu).count(), 1, "示例区应恰有一行带「融合」（md:92 那张新牌C），实测 {} 行 ⇒ 复现测⑥ 那句融合产物首死按 100% 没了依据", examples.iter().filter(|e| e.4).count());
+        assert_eq!(examples.iter().filter(|e| e.5).count(), 3, "示例那四行里点牌名「火苗」的应恰有 3 行（md:89／90／91，融合那张 C 只点代号不点牌名），实测 {} 处 ⇒ 复现测③ 那句「两张同名牌各死一次」的对照读不出来", examples.iter().filter(|e| e.5).count());
+
+        // ③ 文档数字送进码面 grep：等的是「那一行字面里写的那个数」，不是"看起来像"。
+        assert_eq!(code_occurrences(&format!("p_karma: {p_init},")), 1, "md:64 那个我方起点 {p_init} 在码面恰有 1 处（`Battle` 的构造），实测 {} 处 ⇒ 0 处＝那个数换了写法或换了值，而文档那句「我方 0」还照旧读着；≥2 处＝有人另起一份起点", code_occurrences(&format!("p_karma: {p_init},")));
+        assert_eq!(code_occurrences(&format!("e_karma: {e_init},")), 1, "md:64 那半句「普通关 0」在码面恰有 1 处（同一个构造里的敌方那行），实测 {} 处 ⇒ Boss 关的预算走的是另一处，见下条", code_occurrences(&format!("e_karma: {e_init},")));
+        assert_eq!(code_occurrences("b.e_karma = p.start_karma;"), 1, "md:64 那半句「Boss 关有开场脚本预算」＝全仓恰有一处让敌方业力不从零起，实测 {} 处 ⇒ 0 处＝那句预算没人兑现；≥2 处＝有人绕开 BossProfile 自造预算（那个数文档没给，归 §廿二 的尺）", code_occurrences("b.e_karma = p.start_karma;"));
+        for (i, &(nth, pct, fl)) in tiers.iter().enumerate() {
+            let line = 82 + i;
+            let arm = if fl { format!("_ => {pct},") } else { format!("{} => {pct},", nth - 1) };
+            assert_eq!(code_occurrences(&arm), 1, "md:{line} 那档「第{nth}次 {pct}%」在码面 `refund_pct` 里恰有 1 处（{arm}），实测 {} 处 ⇒ 0 处＝档位表与实现分家；≥2 处＝别处又硬编了同一个百分数", code_occurrences(&arm));
+        }
+        assert_eq!(code_occurrences("DeathCause::Battle | DeathCause::Cross =>"), 1, "md:100 那两种自然死在码面合流成**一支**，恰有 1 处，实测 {} 处 ⇒ 0 处＝其中一种死因不再推进档位（复现测④ 第二段会红）；≥2 处＝有人把越线单独拆了一支，档位就会走两遍", code_occurrences("DeathCause::Battle | DeathCause::Cross =>"));
+        assert_eq!(code_occurrences("c.def.cost * pct / 100"), 2, "「按死亡返还递减」那个乘档位的式子在码面恰有 2 处：md:74／md:76 合流那一支，加终影「吞名」那一支（它读同一张档位表，出处在速查:985 那半句），实测 {} 处 ⇒ 出现第三处＝又多了一个按递减给业力的地方，而 §三:66 只登记了死亡这一种按递减的来源", code_occurrences("c.def.cost * pct / 100"));
+        assert_eq!(code_occurrences("DeathCause::Sacrifice =>"), 1, "md:75／md:99／md:108 那三句「主动献祭拿全额」在码面合流到唯一的一支，恰有 1 处，实测 {} 处 ⇒ 0 处＝献祭不再给全额（复现测④ 第一段会红）；≥2 处＝有人另起一条献祭收益的路", code_occurrences("DeathCause::Sacrifice =>"));
+        assert_eq!(code_occurrences("if card.is_starter() { 0 } else { card.def.cost }"), 1, "md:116 那句「开端 → 放置不消耗业力」在通用放置核心的落点恰有 1 处，实测 {} 处 ⇒ 0 处＝开端要钱了（复现测⑥ 那段会红）；≥2 处＝有人另写一份开端免费，而 §三:68 那份「用途」名单只登记了放置一类消耗", code_occurrences("if card.is_starter() { 0 } else { card.def.cost }"));
+        assert_eq!(code_occurrences(&format!("let price = (inherit[sub].def.cost - {fuse_minus}).max({fuse_floor});")), 2, "md:115 那个「副牌费用-{fuse_minus}（最低{fuse_floor}）」在码面恰有 2 处同式：`fuse_cards` 真扣那一处＋AI 融合规划那一处（不许自算一套价），实测 {} 处", code_occurrences(&format!("let price = (inherit[sub].def.cost - {fuse_minus}).max({fuse_floor});")));
+        assert_eq!(code_occurrences("本回合献祭过同名牌"), 1, "md:107 那道闸在码面只有一个报错落点，实测 {} 处 ⇒ 0 处＝闸被摘（复现测⑤ 那条 Err 断言会红）；≥2 处＝有人另起一份同名闸，而文档只写了「本回合」这一种口径", code_occurrences("本回合献祭过同名牌"));
+        assert_eq!(code_occurrences("if self.hand.is_empty() && self.p_front.iter().all"), 1, "md:128 那两个子句在码面合流成一个条件，恰有 1 处，实测 {} 处 ⇒ 0 处＝保底不再看场上（复现测⑦ 的反例二会红）", code_occurrences("if self.hand.is_empty() && self.p_front.iter().all"));
+        assert_eq!(code_occurrences(&format!("保底机制：免费抽{net_draw}张开端")), 1, "md:129 那张数 {net_draw} 在码面恰有 1 处（保底补牌那条日志），实测 {} 处 ⇒ 0 处＝那张数在码面换了写法或换了值，文档那句「抽1张」还照旧读着", code_occurrences(&format!("保底机制：免费抽{net_draw}张开端")));
+        assert_eq!(code_occurrences(&format!("保底机制：开端堆为空，自动生成{temp_n}张临时开端")), 1, "md:132 那支「开端堆为空 → 自动生成{temp_n}张（临时）」在码面恰有 1 处，实测 {} 处", code_occurrences(&format!("保底机制：开端堆为空，自动生成{temp_n}张临时开端")));
+        assert_eq!(code_occurrences("self.grant_free_starter();"), 1, "md:131 那个「每回合最多触发 {net_once} 次」＝`player_turn_start` 里这一个调用点（而它每回合只被调一次），实测 {} 处 ⇒ 0 处＝保底没了；≥2 处＝同一回合可能补两张，那句「最多 {net_once} 次」当场落空", code_occurrences("self.grant_free_starter();"));
+        assert_eq!((net_once, net_draw, temp_n), (1, 1, 1), "md:129／md:131／md:132 那三个数应依次是 {net_draw}／{net_once}／{temp_n}，而码面那三支都写成**死的一次**（一次调用、一次 `-= 1`、一张临时牌）⇒ 文档要改成 2，得先给那三处加字面，本条是那道门的登记处");
+        assert_eq!(loop_gain, 2, "md:122 那个「获得2业力」在码面是 `on_death` 开端支里的裸字面量 {loop_gain}，没有第二处字面可撞（同 md:239 那句「每回合自动抽1张」的处境）⇒ 文档改成别的数时，本章只有复现测⑥ 撞得到，本条是它的门");
+
+        // ④ 业力写点的封闭名单（65／66／68 三句共用的一份机器形式）＋保底那份额度名单。
+        let mut want_writes: Vec<String> = vec![
+            "pub p_karma: i32,".to_string(),
+            "pub e_karma: i32,".to_string(),
+            format!("p_karma: {p_init},"),
+            format!("e_karma: {e_init},"),
+            "b.e_karma = p.start_karma;".to_string(),
+            "self.p_karma = (self.p_karma - self.karma_penalty_next).max(0);".to_string(),
+            "SideK::Player => self.p_karma -= cost,".to_string(),
+            "SideK::Enemy => self.e_karma -= cost,".to_string(),
+            "self.p_karma += 1;".to_string(),
+            "self.e_karma += 1;".to_string(),
+            "SideK::Player => self.p_karma += gain,".to_string(),
+            "SideK::Enemy => self.e_karma += gain,".to_string(),
+        ];
+        want_writes.sort();
+        assert_eq!(
+            s3_karma_writes(),
+            want_writes,
+            "md:64／65／66／68 合起来在码面的形式＝这份**封闭的业力写点名单**：两笔声明、两笔从零起、一笔 Boss 预算、一笔回滚代价、两支放置扣减、两支 `+= 1`（开端在场，出处在速查:990，比 md:66 那句「两种获取方式」多出一支——同一份文档内部的口径分家，如实登记）、两支 `+= gain`（`on_death` 那一个 match）。实测多一条＝有人新起了给业力或扣业力的地方，而本章只登记了死亡／献祭两种来源与放置／融合两类用途；少一条＝那条路被摘了（连「不自动恢复」一起被摘时，md:65 就没人兑现了）"
+        );
+        assert_eq!(
+            s3_free_starter_quota_writes(),
+            Vec::<String>::new(),
+            "md:130「不消耗每回合抽牌次数」在码面的形式＝`grant_free_starter` 体内一份都不碰两份抽牌额度。实测非空＝那张免费的牌开始吃额度，md:130 与 §六:226 那句「开局手牌不计入」一起落空"
+        );
+
+        // ⑤ 那些数字真的被引擎跑过、而且那条测还挂在 `#[test]` 上。
+        engine_repro_test_exists("section3_karma_fence_reproduces_on_the_engine");
     }
 
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
