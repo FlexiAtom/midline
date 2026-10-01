@@ -2458,6 +2458,604 @@ pub(crate) fn s6_fold(rows: &S6Rows) -> S6Fence {
     f
 }
 
+/// §三「业力系统」的行集：两张表（表1 基本规则六行／表2 死亡返还四行）＋示例区（四行＋设计意图一行）＋六道围栏。
+/// 本章的块数是 §六 的两倍，所以围栏收成**按下标定长**的数组而不是六个字段：文档加第七道围栏时先由解析器
+/// panic（只登记六道），而不是安静地多出一个谁都不读的块。
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct S3Rows {
+    /// 围栏外的标题行（「基本规则」…「保底机制」共九条）
+    pub labels: Vec<usize>,
+    /// 两张表的表头行
+    pub headers: Vec<usize>,
+    pub table1: Vec<S3Line>,
+    pub table2: Vec<S3Line>,
+    /// 「· 你放置的火苗A…」那四行
+    pub examples: Vec<S3Line>,
+    /// 「设计意图：…」那一行——本章唯一一条不带数字却仍要实测的真规则行
+    pub intent: Vec<S3Line>,
+    /// 六道围栏：1 业力获取／2 献祭与死亡返还互斥／3 献祭代价／4 业力消耗／5 核心循环／6 保底机制
+    pub fences: [Vec<S3Line>; 6],
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct S3Line {
+    pub line: usize,
+    pub claim: S3Claim,
+}
+
+/// §三 一行读成的断言。三种外壳各有专属读法：围栏里的规则行**按内容**分派（本章围栏内没有一条能只靠外壳
+/// 认出来——七条同形句式「X → 获得业力 = 该卡牌费用（…）」靠的是 X），表体行**按键名**分派（两张表的键名
+/// 都是封闭名单），示例区的行**按「· 」圆点**、设计意图那行**按「设计意图」前缀**。认不出来就 panic。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S3Claim {
+    /// 围栏外九条标题，加上围栏3 那句抬头「主动献祭后：」
+    Label,
+    // ---- 表1「项目 规则」六行，键名走封闭名单 ----
+    /// 「初始业力 我方 0；敌方按遭遇定义（普通关 0，Boss 关有开场脚本预算）」
+    InitialKarma { player: i32, enemy_normal: i32, player_first: bool, by_encounter: bool, boss_budget: bool },
+    /// 「恢复方式 不自动恢复」
+    RecoverRow { never_auto: bool },
+    /// 「获取方式 己方卡牌死亡 或 主动献祭」
+    GainSourceRow { on_death: bool, on_sacrifice: bool, only_two: bool },
+    /// 「获取量 卡牌费用（非数值）」
+    GainAmountRow { by_cost: bool, not_stat: bool },
+    /// 「用途 放置卡牌 / 融合」
+    UseRow { place: bool, fuse: bool, only_two: bool },
+    /// 「三位一体 数值 = 血量 = 伤害；业力 = 费用」
+    TrinityRow { stat_is_hp_is_dmg: bool, karma_is_cost: bool },
+    // ---- 表2「死亡次数 返还比例」四行 ----
+    /// 「第N次 百分比」，`floor` 读那个「起」与「（保底）」
+    RefundTier { nth: u8, pct: i32, floor: bool },
+    // ---- 围栏1 业力获取：三行同形，按死因／动作分派 ----
+    GainNatural { by_cost: bool, decays: bool },
+    GainSacrifice { by_cost: bool, full: bool },
+    GainCross { by_cost: bool, decays: bool },
+    // ---- 围栏2 献祭与死亡返还互斥 ----
+    SacNoDecayTrigger { full: bool, names_decay: bool },
+    NaturalDeathDecays { by_kill: bool, by_cross: bool, advances: bool },
+    // ---- 围栏3 献祭代价（两条编号行）----
+    SacCostNoRedeploy { this_turn: bool, cannot: bool },
+    SacCostFull,
+    // ---- 围栏4 业力消耗 ----
+    SpendPlace { by_cost: bool },
+    SpendFuse { minus: i32, floor: i32 },
+    SpendStarterFree,
+    // ---- 围栏5 核心循环 ----
+    CoreLoop { gain: i32, ends_in_fuse: bool },
+    // ---- 围栏6 保底机制：条件行＋四条「→」行 ----
+    NetTrigger { hand_zero: bool, field_zero: bool },
+    NetDraw { n: i32 },
+    NetNotCounted,
+    NetOnce { n: i32 },
+    NetTemp { n: i32, temporary: bool },
+    // ---- 示例区四行＋设计意图一行 ----
+    /// `handle` 是那行点出的牌名代号（A／B／C），`names_card` 是「火苗」二字在不在行里
+    Example { handle: char, nth: u8, pct: i32, independent: bool, fused: bool, names_card: bool },
+    Intent { anti_free_lunch: bool, never_scrapped: bool },
+}
+
+#[cfg(test)]
+fn s3_bad(tag: &str, why: &str) -> ! {
+    panic!("{tag} 读不出 §三 的任何一条已登记规则（围栏里的行按**内容**分派，表体行按**键名**分派）：{why}。\
+            请先扩本解析器与它对应的实测断言，别让那一行从尺子外面漏过去（挂锚对围栏行不算实测）");
+}
+
+/// 中文序数字 → 档位。四挡是封顶的：文档把表2 改成「第五次」时这里返回 None，由调用方 panic，
+/// 而不是让 fold 收到一个凭空的档位（§三:85 那个「起」已经把第五档往后全部吃掉）。
+#[cfg(test)]
+fn s3_zi_nth(c: char) -> Option<u8> {
+    match c {
+        '一' => Some(1),
+        '二' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        _ => None,
+    }
+}
+
+/// 「第一次」→ (1,false)／「第四次起」→ (4,true)。键必须整行吃完：「第一次死亡」这种多出来的尾巴同样判 None。
+#[cfg(test)]
+fn s3_ordinal(key: &str) -> Option<(u8, bool)> {
+    let mut it = key.strip_prefix('第')?.chars();
+    let nth = s3_zi_nth(it.next()?)?;
+    if it.next() != Some('次') {
+        return None;
+    }
+    match it.as_str() {
+        "" => Some((nth, false)),
+        "起" => Some((nth, true)),
+        _ => None,
+    }
+}
+
+/// 句中的「第N次」（示例区那四行的序数藏在句子里，不单独成列）。
+#[cfg(test)]
+fn s3_nth_in(body: &str) -> Option<u8> {
+    let at = body.find('第')? + '第'.len_utf8();
+    let mut it = body[at..].chars();
+    let nth = s3_zi_nth(it.next()?)?;
+    if it.next() == Some('次') { Some(nth) } else { None }
+}
+
+/// 围栏行的内容分派。每条判据都配一个**数字个数**断言：文档把同一行多写一个数时，这里当场红，
+/// 而不是让 fold 拿错那一个。顺序也有讲究——三条同形获取行先按各自的死因／动作点名，剩下那条才靠句式认领。
+#[cfg(test)]
+fn s3_classify(t: &str, line: usize) -> S3Claim {
+    let tag = format!("md:{line}「{t}」");
+    // 标签判据比 §六 多一道「不带数字」：md:128「若玩家手牌为0且场上无卡牌：」也是一句抬头，
+    // 可它带的那个 0 就是**触发条件本身**，吞成标签等于把这条规则从实测里删掉。
+    if t.ends_with('：') && s15_digits(t).is_empty() {
+        return S3Claim::Label;
+    }
+    let body = if let Some((num, b)) = t.split_once(". ") {
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+            s3_bad(&tag, "看着像编号行，但「. 」前面不是纯数字");
+        }
+        b
+    } else if let Some(b) = t.strip_prefix("- ") {
+        b
+    } else if let Some(b) = t.strip_prefix("→ ") {
+        b.trim_start()
+    } else {
+        t
+    };
+    let nums = s15_digits(body);
+    let expect = |k: usize, what: &str| {
+        if nums.len() != k {
+            s3_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()));
+        }
+    };
+    // 每条判据用**只在一行里出现**的措辞；下面是本章围栏登记过的全部十五种内容。
+    if body.contains("己方卡牌死亡") {
+        expect(0, "「己方卡牌死亡 → …」那行（不该带数字）");
+        return S3Claim::GainNatural { by_cost: body.contains("该卡牌费用"), decays: body.contains("按死亡返还递减") };
+    }
+    if body.contains("越线死亡") {
+        expect(0, "「越线死亡 → …」那行（不该带数字）");
+        return S3Claim::GainCross { by_cost: body.contains("该卡牌费用"), decays: body.contains("按死亡返还递减") };
+    }
+    if body.contains("该卡牌费用") {
+        expect(0, "「主动献祭 → …」那行（不该带数字）");
+        return S3Claim::GainSacrifice { by_cost: true, full: body.contains("全额") };
+    }
+    if body.contains("不触发") {
+        expect(0, "围栏2 第一行（不该带数字）");
+        return S3Claim::SacNoDecayTrigger { full: body.contains("全额费用"), names_decay: body.contains("死亡返还递减") };
+    }
+    if body.contains("自然死亡") {
+        expect(0, "围栏2 第二行（不该带数字）");
+        return S3Claim::NaturalDeathDecays {
+            by_kill: body.contains("被击杀"),
+            by_cross: body.contains("越线"),
+            advances: body.contains("触发死亡返还递减"),
+        };
+    }
+    if body.contains("同名牌") {
+        expect(0, "「本回合不能再放置同名牌」那行（不该带数字）");
+        return S3Claim::SacCostNoRedeploy { this_turn: body.contains("本回合"), cannot: body.contains("不能再放置") };
+    }
+    if body.contains("献祭获得全额费用") {
+        expect(0, "「献祭获得全额费用」那行（不该带数字）");
+        return S3Claim::SacCostFull;
+    }
+    if body.contains("放置卡牌") {
+        expect(0, "围栏4 第一行（不该带数字）");
+        return S3Claim::SpendPlace { by_cost: body.contains("消耗业力 = 卡牌费用") };
+    }
+    if body.contains("副牌费用") {
+        expect(2, "融合那行（减几＋最低那几个数）");
+        return S3Claim::SpendFuse { minus: nums[0], floor: nums[1] };
+    }
+    if body.contains("不消耗业力") {
+        expect(0, "「开端 → 放置不消耗业力」那行（不该带数字）");
+        return S3Claim::SpendStarterFree;
+    }
+    if body.contains("献祭开端") {
+        expect(1, "核心循环那行（开端献祭定额）");
+        return S3Claim::CoreLoop { gain: nums[0], ends_in_fuse: body.contains("融合造牌") };
+    }
+    if body.contains("手牌为") {
+        expect(1, "保底条件行（手牌那几个字里的 0）");
+        return S3Claim::NetTrigger { hand_zero: nums[0] == 0, field_zero: body.contains("场上无卡牌") };
+    }
+    if body.contains("自动从开端堆抽") {
+        expect(1, "保底抽牌行（抽几张）");
+        return S3Claim::NetDraw { n: nums[0] };
+    }
+    if body.contains("不消耗每回合抽牌次数") {
+        expect(0, "「不消耗每回合抽牌次数」那行（不该带数字）");
+        return S3Claim::NetNotCounted;
+    }
+    if body.contains("每回合最多触发") {
+        expect(1, "「每回合最多触发N次」那行");
+        return S3Claim::NetOnce { n: nums[0] };
+    }
+    if body.contains("开端堆为空") {
+        expect(1, "临时生成那行（生成几张）");
+        return S3Claim::NetTemp { n: nums[0], temporary: body.contains("临时") };
+    }
+    s3_bad(&tag, "登记过的十五种内容（三种获取／两条互斥／两条献祭代价／三条消耗／核心循环／五条保底）一种都不匹配")
+}
+
+/// 表体行的分派。表2 是「第N次 比例」两段式；**表1 是 2 列表且 arity 不固定**
+/// （「初始业力」那格一句里塞了三个子句，空格切出来四段，「三位一体」那格七段），
+/// 所以表1 只要求「键 + 至少一段值」，内容判据一律只看值列（键名不替自己作证）。
+#[cfg(test)]
+fn s3_table_row(t: &str, line: usize, which: u8) -> S3Claim {
+    let tag = format!("md:{line}「{t}」");
+    let cols: Vec<&str> = t.split_whitespace().collect();
+    if which == 2 {
+        if cols.len() != 2 {
+            s3_bad(&tag, &format!("表2 的一行应是「第N次 比例」两段式，实测切成 {} 段（{cols:?}）", cols.len()));
+        }
+        let Some((nth, floor)) = s3_ordinal(cols[0]) else {
+            s3_bad(&tag, &format!("表2 的档位键只认「第一次／第二次／第三次／第四次起」那一族中文序数，实测键「{}」", cols[0]));
+        };
+        let nums = s15_digits(cols[1]);
+        if nums.len() != 1 {
+            s3_bad(&tag, &format!("比例列应恰有 1 个数字，实测 {nums:?}（列内容「{}」）", cols[1]));
+        }
+        return S3Claim::RefundTier { nth, pct: nums[0], floor: floor || cols[1].contains("保底") };
+    }
+    if cols.len() < 2 {
+        s3_bad(&tag, &format!("表1 的一行至少要有「键 值」两段，实测只有 {cols:?}"));
+    }
+    let (key, val) = (cols[0], cols[1..].join(" "));
+    let nums = s15_digits(&val);
+    let expect = |k: usize, what: &str| -> ! {
+        s3_bad(&tag, &format!("值列解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()))
+    };
+    match key {
+        "初始业力" => {
+            if nums.len() != 2 {
+                expect(2, "初始业力那格（我方起点＋普通关敌方起点）");
+            }
+            S3Claim::InitialKarma {
+                player: nums[0],
+                enemy_normal: nums[1],
+                player_first: val.starts_with("我方"),
+                by_encounter: val.contains("敌方按遭遇定义"),
+                boss_budget: val.contains("开场脚本预算"),
+            }
+        }
+        "恢复方式" => {
+            if !nums.is_empty() {
+                expect(0, "恢复方式那格");
+            }
+            S3Claim::RecoverRow { never_auto: val.contains("不自动恢复") }
+        }
+        "获取方式" => {
+            if !nums.is_empty() {
+                expect(0, "获取方式那格");
+            }
+            S3Claim::GainSourceRow {
+                on_death: val.contains("己方卡牌死亡"),
+                on_sacrifice: val.contains("主动献祭"),
+                only_two: val.matches('或').count() == 1,
+            }
+        }
+        "获取量" => {
+            if !nums.is_empty() {
+                expect(0, "获取量那格");
+            }
+            S3Claim::GainAmountRow { by_cost: val.contains("卡牌费用"), not_stat: val.contains("非数值") }
+        }
+        "用途" => {
+            if !nums.is_empty() {
+                expect(0, "用途那格");
+            }
+            S3Claim::UseRow {
+                place: val.contains("放置卡牌"),
+                fuse: val.contains("融合"),
+                only_two: val.matches('/').count() == 1,
+            }
+        }
+        "三位一体" => {
+            if !nums.is_empty() {
+                expect(0, "三位一体那格");
+            }
+            S3Claim::TrinityRow {
+                stat_is_hp_is_dmg: val.contains("数值 = 血量 = 伤害"),
+                karma_is_cost: val.contains("业力 = 费用"),
+            }
+        }
+        k => s3_bad(&tag, &format!("表1 的键名是封闭名单（初始业力／恢复方式／获取方式／获取量／用途／三位一体），实测键名「{k}」")),
+    }
+}
+
+/// 示例区的一行：「· 」圆点外壳＋一个牌名代号＋句里的「第N次」＋一个百分数。
+/// 代号取**那行唯一的大写字母**（A／B／C），牌名不取字符串——文档哪天改成「你放置的火种A」，
+/// 本测认的是"同一代号＝同一个实例"那件事，不是那两个字。
+#[cfg(test)]
+fn s3_example(t: &str, line: usize) -> S3Claim {
+    let tag = format!("md:{line}「{t}」");
+    let Some(body) = t.strip_prefix("· ") else {
+        s3_bad(&tag, "示例区的行必须带「· 」圆点外壳（文档那四行每一行都是这个形状）");
+    };
+    let ups: Vec<char> = body.chars().filter(|c| c.is_ascii_uppercase()).collect();
+    if ups.len() != 1 {
+        s3_bad(&tag, &format!("示例行应恰好点出一个牌名代号（A／B／C 那一个大写字母），实测 {ups:?}"));
+    }
+    let Some(nth) = s3_nth_in(body) else {
+        s3_bad(&tag, "句里读不到「第N次」那个中文序数（示例行的全部意义就是它指定了哪一档）");
+    };
+    let nums = s15_digits(body);
+    if nums.len() != 1 {
+        s3_bad(&tag, &format!("示例行应恰有 1 个数字（返还比例那一个百分数），实测 {nums:?}"));
+    }
+    S3Claim::Example {
+        handle: ups[0],
+        nth,
+        pct: nums[0],
+        independent: body.contains("独立"),
+        fused: body.contains("融合"),
+        names_card: body.contains("火苗"),
+    }
+}
+
+#[cfg(test)]
+fn s3_intent(t: &str, line: usize) -> S3Claim {
+    let tag = format!("md:{line}「{t}」");
+    let Some(body) = t.strip_prefix("设计意图：") else {
+        s3_bad(&tag, "那一行以「设计意图」开头却没有「设计意图：」这个外壳");
+    };
+    if !s15_digits(body).is_empty() {
+        s3_bad(&tag, &format!("设计意图那行不该带数字，实测 {:?}", s15_digits(body)));
+    }
+    S3Claim::Intent { anti_free_lunch: body.contains("防止") && body.contains("白嫖"), never_scrapped: body.contains("不会彻底废弃") }
+}
+
+/// 定位并解析 §三：章标题 → 到本域的 `---` 为止，途中按状态切成八块。
+/// 它同时是 §三 推导器实测路的**唯一口径**：那边的行集合必须由这里的行号构成（同 §五／§六／§十四）。
+#[cfg(test)]
+pub(crate) fn parse_section3_karma(lines: &[String]) -> S3Rows {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "三、业力系统")
+        .expect("§三 标题必须存在（文档结构变了就要同步改本解析器与 model.rs 的推导器）");
+    const S3_HEADERS: [(&str, u8); 2] = [("项目 规则", 1), ("死亡次数 返还比例", 2)];
+    let mut r = S3Rows {
+        labels: Vec::new(),
+        headers: Vec::new(),
+        table1: Vec::new(),
+        table2: Vec::new(),
+        examples: Vec::new(),
+        intent: Vec::new(),
+        fences: std::array::from_fn(|_| Vec::new()),
+    };
+    let mut fence: Option<u8> = None;
+    let mut table: Option<u8> = None;
+    let mut fences = 0usize;
+    let mut tables = 0usize;
+    for n in (head + 2)..=lines.len() {
+        let t = at(n).trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "```" {
+            match fence {
+                Some(_) => fence = None,
+                None => {
+                    fences += 1;
+                    if fences > 6 {
+                        s3_bad(&format!("md:{n}"), &format!("§三 只登记六道围栏（获取／互斥／献祭代价／消耗／核心循环／保底），实测第 {fences} 道"));
+                    }
+                    fence = Some(fences as u8);
+                    table = None;
+                }
+            }
+            continue;
+        }
+        if fence.is_none() && t == "---" {
+            break;
+        }
+        if let Some(fi) = fence {
+            let row = S3Line { line: n, claim: s3_classify(t, n) };
+            r.fences[(fi - 1) as usize].push(row);
+            continue;
+        }
+        if let Some((h, ti)) = S3_HEADERS.iter().find(|p| p.0 == t).copied() {
+            tables += 1;
+            if tables > 2 || ti != tables as u8 {
+                s3_bad(&format!("md:{n}「{h}」"), &format!("§三 的两张表只登记「项目 规则」在前、「死亡次数 返还比例」在后，实测第 {tables} 张表头是「{h}」"));
+            }
+            table = Some(ti);
+            r.headers.push(n);
+            continue;
+        }
+        // 标签判据排在表体之前：本章每张表的下一块都是一个单列标题开头（「业力获取」／「示例：」），
+        // 由它把上一张表关掉。尾巴带句号的那一行**不是**标题——「设计意图：…」就是这种句子。
+        if t.split_whitespace().count() == 1 && !t.ends_with('。') {
+            table = None;
+            r.labels.push(n);
+            continue;
+        }
+        if let Some(ti) = table {
+            let row = S3Line { line: n, claim: s3_table_row(t, n, ti) };
+            if ti == 1 {
+                r.table1.push(row);
+            } else {
+                r.table2.push(row);
+            }
+            continue;
+        }
+        if t.starts_with("· ") {
+            r.examples.push(S3Line { line: n, claim: s3_example(t, n) });
+            continue;
+        }
+        if t.starts_with("设计意图") {
+            r.intent.push(S3Line { line: n, claim: s3_intent(t, n) });
+            continue;
+        }
+        s3_bad(&format!("md:{n}「{t}」"), "围栏外、且没有正在读的表：既不是登记过的两张表头，也不是单列标题，也不是「· 」示例或「设计意图」行");
+    }
+    r
+}
+
+/// §三 八块折叠出来的业力规则。缺任何一项**当场 panic**（措辞同 `s6_fold`）：少一行＝那条规则不再有实测，
+/// 而它看上去仍像被覆盖过。
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct S3Rules {
+    pub labels: Vec<usize>,
+    pub headers: Vec<usize>,
+    /// 表1：我方起点／普通关敌方起点／那半句「按遭遇定义」在不在读
+    pub initial: Option<(i32, i32, bool, bool)>,
+    pub recover_never_auto: Option<bool>,
+    pub gain_source: Option<(bool, bool, bool)>,
+    pub gain_amount: Option<(bool, bool)>,
+    pub uses: Option<(bool, bool, bool)>,
+    pub trinity: Option<(bool, bool)>,
+    /// 表2 四档，按文档行序；fold 不排序——顺序本身就是被钉的东西
+    pub tiers: Vec<(u8, i32, bool)>,
+    /// 示例四行：代号／第几次／比例／独立／融合／点了牌名
+    pub examples: Vec<(char, u8, i32, bool, bool, bool)>,
+    pub intent: Option<(bool, bool)>,
+    pub gain_natural: Option<(bool, bool)>,
+    pub gain_sacrifice: Option<(bool, bool)>,
+    pub gain_cross: Option<(bool, bool)>,
+    pub sac_no_decay: Option<(bool, bool)>,
+    pub natural_decays: Option<(bool, bool, bool)>,
+    pub no_redeploy: Option<(bool, bool)>,
+    pub sac_full: Option<bool>,
+    pub spend_place: Option<bool>,
+    pub spend_fuse: Option<(i32, i32)>,
+    pub spend_starter: Option<bool>,
+    pub core_loop: Option<(i32, bool)>,
+    pub net_trigger: Option<(bool, bool)>,
+    pub net_draw: Option<i32>,
+    pub net_not_counted: Option<bool>,
+    pub net_once: Option<i32>,
+    pub net_temp: Option<(i32, bool)>,
+}
+
+#[cfg(test)]
+pub(crate) fn s3_fold(rows: &S3Rows) -> S3Rules {
+    let mut f = S3Rules {
+        labels: rows.labels.clone(),
+        headers: rows.headers.clone(),
+        initial: None,
+        recover_never_auto: None,
+        gain_source: None,
+        gain_amount: None,
+        uses: None,
+        trinity: None,
+        tiers: Vec::new(),
+        examples: Vec::new(),
+        intent: None,
+        gain_natural: None,
+        gain_sacrifice: None,
+        gain_cross: None,
+        sac_no_decay: None,
+        natural_decays: None,
+        no_redeploy: None,
+        sac_full: None,
+        spend_place: None,
+        spend_fuse: None,
+        spend_starter: None,
+        core_loop: None,
+        net_trigger: None,
+        net_draw: None,
+        net_not_counted: None,
+        net_once: None,
+        net_temp: None,
+    };
+    let need = |what: &str| -> ! { panic!("§三 缺「{what}」这一行 ⇒ 该规则无从复现，先把文档补回来") };
+    for c in &rows.table1 {
+        match c.claim {
+            S3Claim::InitialKarma { player, enemy_normal, by_encounter, boss_budget, .. } => {
+                f.initial = Some((player, enemy_normal, by_encounter, boss_budget))
+            }
+            S3Claim::RecoverRow { never_auto } => f.recover_never_auto = Some(never_auto),
+            S3Claim::GainSourceRow { on_death, on_sacrifice, only_two } => f.gain_source = Some((on_death, on_sacrifice, only_two)),
+            S3Claim::GainAmountRow { by_cost, not_stat } => f.gain_amount = Some((by_cost, not_stat)),
+            S3Claim::UseRow { place, fuse, only_two } => f.uses = Some((place, fuse, only_two)),
+            S3Claim::TrinityRow { stat_is_hp_is_dmg, karma_is_cost } => f.trinity = Some((stat_is_hp_is_dmg, karma_is_cost)),
+            _ => need("表1 那六行之一"),
+        }
+    }
+    for c in &rows.table2 {
+        match c.claim {
+            S3Claim::RefundTier { nth, pct, floor } => f.tiers.push((nth, pct, floor)),
+            _ => need("表2 那四行之一"),
+        }
+    }
+    for c in &rows.examples {
+        match c.claim {
+            S3Claim::Example { handle, nth, pct, independent, fused, names_card } => {
+                f.examples.push((handle, nth, pct, independent, fused, names_card))
+            }
+            _ => need("示例区那四行之一"),
+        }
+    }
+    for c in &rows.intent {
+        match c.claim {
+            S3Claim::Intent { anti_free_lunch, never_scrapped } => f.intent = Some((anti_free_lunch, never_scrapped)),
+            _ => need("设计意图那一行"),
+        }
+    }
+    for block in rows.fences.iter() {
+        for c in block {
+            match c.claim {
+                S3Claim::Label => {}
+                S3Claim::GainNatural { by_cost, decays } => f.gain_natural = Some((by_cost, decays)),
+                S3Claim::GainSacrifice { by_cost, full } => f.gain_sacrifice = Some((by_cost, full)),
+                S3Claim::GainCross { by_cost, decays } => f.gain_cross = Some((by_cost, decays)),
+                S3Claim::SacNoDecayTrigger { full, names_decay } => f.sac_no_decay = Some((full, names_decay)),
+                S3Claim::NaturalDeathDecays { by_kill, by_cross, advances } => {
+                    f.natural_decays = Some((by_kill, by_cross, advances))
+                }
+                S3Claim::SacCostNoRedeploy { this_turn, cannot } => f.no_redeploy = Some((this_turn, cannot)),
+                S3Claim::SacCostFull => f.sac_full = Some(true),
+                S3Claim::SpendPlace { by_cost } => f.spend_place = Some(by_cost),
+                S3Claim::SpendFuse { minus, floor } => f.spend_fuse = Some((minus, floor)),
+                S3Claim::SpendStarterFree => f.spend_starter = Some(true),
+                S3Claim::CoreLoop { gain, ends_in_fuse } => f.core_loop = Some((gain, ends_in_fuse)),
+                S3Claim::NetTrigger { hand_zero, field_zero } => f.net_trigger = Some((hand_zero, field_zero)),
+                S3Claim::NetDraw { n } => f.net_draw = Some(n),
+                S3Claim::NetNotCounted => f.net_not_counted = Some(true),
+                S3Claim::NetOnce { n } => f.net_once = Some(n),
+                S3Claim::NetTemp { n, temporary } => f.net_temp = Some((n, temporary)),
+                _ => need("围栏规则行"),
+            }
+        }
+    }
+    f.initial.unwrap_or_else(|| need("初始业力 我方 0；敌方按遭遇定义（普通关 0…）"));
+    f.recover_never_auto.unwrap_or_else(|| need("恢复方式 不自动恢复"));
+    f.gain_source.unwrap_or_else(|| need("获取方式 己方卡牌死亡 或 主动献祭"));
+    f.gain_amount.unwrap_or_else(|| need("获取量 卡牌费用（非数值）"));
+    f.uses.unwrap_or_else(|| need("用途 放置卡牌 / 融合"));
+    f.trinity.unwrap_or_else(|| need("三位一体 数值 = 血量 = 伤害；业力 = 费用"));
+    if f.tiers.len() != 4 {
+        need("死亡返还四档（表2 恰四行）");
+    }
+    if f.examples.len() != 4 {
+        need("示例四行（示例区恰四条圆点）");
+    }
+    f.intent.unwrap_or_else(|| need("设计意图：防止无限白嫖循环…"));
+    f.gain_natural.unwrap_or_else(|| need("己方卡牌死亡 → 获得业力 = 该卡牌费用（按死亡返还递减）"));
+    f.gain_sacrifice.unwrap_or_else(|| need("主动献祭 → 获得业力 = 该卡牌费用（全额，不递减）"));
+    f.gain_cross.unwrap_or_else(|| need("越线死亡 → 获得业力 = 该卡牌费用（按死亡返还递减）"));
+    f.sac_no_decay.unwrap_or_else(|| need("主动献祭 → …不触发死亡返还递减"));
+    f.natural_decays.unwrap_or_else(|| need("自然死亡（被击杀/越线）→ 触发死亡返还递减"));
+    f.no_redeploy.unwrap_or_else(|| need("本回合不能再放置同名牌"));
+    f.sac_full.unwrap_or_else(|| need("献祭获得全额费用"));
+    f.spend_place.unwrap_or_else(|| need("放置卡牌 → 消耗业力 = 卡牌费用"));
+    f.spend_fuse.unwrap_or_else(|| need("融合 → 消耗业力 = 副牌费用-1（最低0）"));
+    f.spend_starter.unwrap_or_else(|| need("开端 → 放置不消耗业力"));
+    f.core_loop.unwrap_or_else(|| need("献祭开端 → 获得N业力 → …"));
+    f.net_trigger.unwrap_or_else(|| need("若玩家手牌为0且场上无卡牌："));
+    f.net_draw.unwrap_or_else(|| need("自动从开端堆抽N张"));
+    f.net_not_counted.unwrap_or_else(|| need("不消耗每回合抽牌次数"));
+    f.net_once.unwrap_or_else(|| need("每回合最多触发N次"));
+    f.net_temp.unwrap_or_else(|| need("若开端堆为空 → 自动生成N张（临时）"));
+    f
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -2968,6 +3566,276 @@ mod rule_tests {
         want_ids.push(900);
         assert_eq!(b.hand.iter().map(|c| c.id).collect::<Vec<_>>(), want_ids, "{} 说「弃置最早进入手牌的牌，再抽新牌」：手里该剩 id {:?}，实测 {:?}", tag(243), want_ids, b.hand.iter().map(|c| c.id).collect::<Vec<_>>());
         assert!(b.discard_pile.iter().any(|c| c.id == ids[0]), "{} 弃掉的那张（id {}）该进弃牌堆，实测弃牌堆 {:?}", tag(243), ids[0], b.discard_pile.iter().map(|c| c.id).collect::<Vec<_>>());
+    }
+
+    /// §三「业力系统」的 31 条规则行（表1 六格＋表2 四档＋示例四条＋设计意图一行＋六道围栏十三条）
+    /// 用**文档自己写的数字与措辞**驱动引擎跑一遍：期望值一行都不写在代码里，全部由
+    /// `parse_section3_karma` ＋ `s3_fold` 从文档读进来（缺任一行 `s3_fold` 当场 panic）。
+    /// 为什么本章 31 行全走实测：与 §五／§六／§十四 同一条口径——锚点证不了"算出的数＝写的数"，
+    /// 而本章几乎每一行都在写一个数（比例、定额、消耗、触发次数）或一个"不"字（不自动恢复、不递减、不消耗额度）。
+    #[test]
+    fn section3_karma_fence_reproduces_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let rows = parse_section3_karma(&lines);
+        let got = |v: &[S3Line]| v.iter().map(|r| r.line).collect::<Vec<_>>();
+        assert_eq!(got(&rows.table1), vec![64, 65, 66, 67, 68, 69], "§三 表1 的表体应是 64–69 那六格，实测 {:?} ⇒ 表加了行或章界漂了", got(&rows.table1));
+        assert_eq!(got(&rows.table2), vec![82, 83, 84, 85], "§三 表2 的表体应是 82–85 那四档，实测 {:?} ⇒ 递减表加了第五档，而本章的尺只登记四档", got(&rows.table2));
+        assert_eq!(got(&rows.examples), vec![89, 90, 91, 92], "§三 示例区应是 89–92 那四条圆点，实测 {:?}", got(&rows.examples));
+        assert_eq!(got(&rows.intent), vec![94], "§三 的设计意图行应恰是 94 那一条，实测 {:?}", got(&rows.intent));
+        let shapes: Vec<usize> = rows.fences.iter().map(|b| b.len()).collect();
+        assert_eq!(shapes, vec![3, 2, 3, 3, 1, 5], "§三 六道围栏的行数（含围栏内抬头）应恰是 3／2／3／3／1／5，实测 {shapes:?} ⇒ 某道围栏加了行或少了一行，本测下面按块取数就会挂到别的条款上");
+        assert_eq!(got(&rows.fences[2]), vec![106, 107, 108], "§三 围栏3（献祭代价）应是 那句抬头＋两条编号行，实测 {:?}", got(&rows.fences[2]));
+        assert_eq!(got(&rows.fences[5]), vec![128, 129, 130, 131, 132], "§三 围栏6（保底机制）应是 那条条件行＋四条「→」行，实测 {:?}", got(&rows.fences[5]));
+        let f = s3_fold(&rows);
+        let tag = |n: usize| format!("md:{n}「{}」", lines[n - 1].trim());
+        assert_eq!(f.labels, vec![61, 71, 79, 87, 96, 103, 111, 119, 125], "§三 围栏外的标题应恰好是那九条，实测 {:?} ⇒ 有真规则行被当成标题吞掉（那一条就此从实测与配比里一起隐身），或标题判据失效", f.labels);
+        assert_eq!(f.headers, vec![63, 81], "§三 的表头应恰好是 63「项目 规则」与 81「死亡次数 返还比例」两张，实测 {:?} ⇒ 本章两张表的形变了（加列／换表头），表体逐格的读法就没法成立", f.headers);
+        assert_eq!(rows.fences[2][0].claim, S3Claim::Label, "围栏3 第一行「主动献祭后：」应读成标签（它是那两条编号规则的抬头，不是第三条代价），实测 {:?} ⇒ 标签判据在围栏内失效", rows.fences[2][0].claim);
+        assert_ne!(rows.fences[5][0].claim, S3Claim::Label, "md:128 那句「若玩家手牌为0且场上无卡牌：」也是抬头形状，可它带的那个 0 就是触发条件本身；被读成标签＝这条规则从实测里消失");
+
+        // ⓪ 文档先跟自己自洽（不自洽就轮不到引擎出场）。
+        let (p_init, e_init, enc_by_design, enc_boss_budget) = f.initial.unwrap();
+        let (src_death, src_sac, src_only_two) = f.gain_source.unwrap();
+        let (amt_by_cost, amt_not_stat) = f.gain_amount.unwrap();
+        let (use_place, use_fuse, use_only_two) = f.uses.unwrap();
+        let (tri_stat, tri_karma) = f.trinity.unwrap();
+        let (nat_by_cost, nat_decays) = f.gain_natural.unwrap();
+        let (sac_by_cost, sac_full_line) = f.gain_sacrifice.unwrap();
+        let (cross_by_cost, cross_decays) = f.gain_cross.unwrap();
+        let (sac_no_decay_full, sac_no_decay_names) = f.sac_no_decay.unwrap();
+        let (dec_by_kill, dec_by_cross, dec_advances) = f.natural_decays.unwrap();
+        let (redeploy_this_turn, redeploy_cannot) = f.no_redeploy.unwrap();
+        let (fuse_minus, fuse_floor) = f.spend_fuse.unwrap();
+        let (loop_gain, loop_ends_in_fuse) = f.core_loop.unwrap();
+        let (net_hand_zero, net_field_zero) = f.net_trigger.unwrap();
+        let net_draw = f.net_draw.unwrap();
+        let net_once = f.net_once.unwrap();
+        let (net_temp, net_is_temp) = f.net_temp.unwrap();
+        let tiers = f.tiers.clone();
+        let examples = f.examples.clone();
+        assert!(f.recover_never_auto.unwrap() && p_init == 0 && e_init == 0, "表1 那两格读不出「不自动恢复」或起点非 0（{p_init}/{e_init}）⇒ 本测① 拿它撞引擎的起点就没有依据");
+        assert!(enc_by_design && enc_boss_budget, "{} 里读不到「敌方按遭遇定义」与「开场脚本预算」那两半 ⇒ 本测只复现普通关那半件事、Boss 起点归 `new_boss` 这个边界没地方登记", tag(64));
+        assert!(src_death && src_sac && src_only_two, "{} 读不出「己方卡牌死亡」与「主动献祭」那两半、或「或」不止一次 ⇒ 表1 说获取只有两条路，而围栏1 写了三行（越线也算死亡），本测靠这个口径核对分支数", tag(66));
+        assert!(amt_by_cost && amt_not_stat, "{} 读不出「卡牌费用」与「非数值」那两半 ⇒ ① 那条「返还的是费用不是数值」的断言失去文档依据", tag(67));
+        assert!(use_place && use_fuse && use_only_two, "{} 读不出「放置卡牌」「融合」两样用途、或斜杠不止一个 ⇒ 那份「花业力只有两个动作」的封闭名单少了文档依据", tag(68));
+        assert!(tri_stat && tri_karma, "{} 的两半（数值=血量=伤害／业力=费用）读不全 ⇒ ① 那两条等值断言失去依据", tag(69));
+        assert!(nat_by_cost && nat_decays && cross_by_cost && cross_decays && sac_by_cost && sac_full_line, "围栏1 那三行同形句式的「= 该卡牌费用」与各自的「递减／全额」读不全 ⇒ 分派判据漂了，本测按死因取数的三步都失去依据");
+        assert!(sac_no_decay_full && sac_no_decay_names, "{} 读不出「全额费用」与「死亡返还递减」那两半 ⇒ ④ 那条「献祭不推进档位」的断言失去依据", tag(99));
+        assert!(dec_by_kill && dec_by_cross && dec_advances, "{} 的「（被击杀/越线）」两半读不全，或读不到「触发死亡返还递减」⇒ ③ 那两个死因都要各自推进档位这件事没文档依据", tag(100));
+        assert!(redeploy_this_turn && redeploy_cannot, "{} 读不出「本回合」或「不能再放置」⇒ ⑤ 那条「跨回合自动解禁」的断言失去依据（少了前者就是把闸做成永久的）", tag(107));
+        assert!(loop_ends_in_fuse, "{} 那条链的末尾不再是「融合造牌」⇒ 本测⑥ 只复现链的前两环这件事需要重新核对", tag(122));
+        assert!(net_hand_zero && net_field_zero, "{} 的两个子句读不全（手牌为 0／场上无卡牌）⇒ ⑦ 那两条「缺一半就不该补」的反例失去依据", tag(128));
+        assert!(net_is_temp && net_temp == net_draw, "{} 说的临时生成张数（{net_temp}）与{} 说的补牌张数（{net_draw}）不是同一个数 ⇒ 堆空与堆不空两条路给了两套配额", tag(132), tag(129));
+        assert_eq!(tiers.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2, 3, 4], "表2 四档的档位应恰好是 一／二／三／四 且按行序，实测 {:?}", tiers.iter().map(|t| t.0).collect::<Vec<_>>());
+        let pcts: Vec<i32> = tiers.iter().map(|t| t.1).collect();
+        assert!(pcts.windows(2).all(|w| w[0] > w[1]), "表2 的比例不是单调递减（{pcts:?}）⇒「递减」这个词在文档里已经不成立了，本测② 的档位序列失去依据");
+        assert!(pcts.iter().all(|&p| p > 0 && p <= 100), "表2 里有比例落在 (0,100] 之外：{pcts:?} ⇒ 0 就是「彻底废弃」，>100 就是白赚，两者都不是本章写的那件事");
+        assert!(tiers[3].2 && !tiers[..3].iter().any(|t| t.2), "「保底」那个标记应恰好落在第四档（表2 只有那一行写「起」），实测 {tiers:?} ⇒ 档位与封顶那一行分家了");
+        assert_eq!(examples.len(), 4, "fold 给出的示例应是四行，实测 {} 行", examples.len());
+        assert_eq!(examples[0].0, examples[2].0, "{} 与{} 说的是**同一张牌**的第二次死亡，两行点的代号却不同（{}/{}）⇒ 本测没法把它读成一个实例", tag(89), tag(91), examples[0].0, examples[2].0);
+        assert_ne!(examples[0].0, examples[1].0, "{} 与{} 用的是同一个代号（{}）⇒ 那两行就不再是「两张独立实例」，本测③ 失去示例依据", tag(89), tag(90), examples[0].0);
+        assert_ne!(examples[3].0, examples[0].0, "融合产物 C 不该与火苗同代号");
+        assert!(examples[..3].iter().all(|e| e.5) && !examples[3].5, "前三行都点名「火苗」而第四行不点（它是融合产物，文档只说「新牌C」）⇒ 这个形状一变，本测拿一张火苗当例子牌就没有文档依据了");
+        assert!(!examples[0].3 && examples[1].3 && !examples[2].3 && examples[3].4, "示例四行的「独立／融合」两半应与文档一致（只有第 2 行说独立、只有第 4 行说融合），实测 {examples:?}");
+        for (handle, nth, pct, ..) in examples.iter() {
+            let t = tiers.iter().find(|t| t.0 == *nth).unwrap_or_else(|| panic!("示例里代号 {handle} 指着第 {nth} 档，表2 却没有那一档 ⇒ 示例与递减表分家"));
+            assert_eq!(&t.1, pct, "{} 那行说第 {nth} 次返 {pct}%，表2 同一档却写着 {}", tag(89), t.1);
+        }
+        assert_eq!(tiers[1].1, examples[2].2, "示例第 3 行（第二次死亡）的比例与表2 第二档不齐");
+
+        let fire = crate::model::card_by_name(Faction::Ember, "火苗").expect("文档示例点名的「火苗」必须在烬火教团基础表里");
+        assert_ne!(fire.cost, fire.power, "{} 那句「获取量＝卡牌费用（非数值）」在本测里靠一张**费用≠数值**的牌来分辨，而示例点名的「{}」两格却是 {} 与 {}", tag(67), fire.name, fire.cost, fire.power);
+        let starter = crate::model::card_by_name(Faction::Ember, "开端").expect("开端定义必须在");
+        // 档位的分辨力靠费用最大的那张非开端牌：费用太小会让两档撞在同一个整数上（整数除法），那时本测② 就不成立。
+        let big = faction_cards(Faction::Ember)
+            .iter()
+            .copied()
+            .filter(|d| d.cost > 0)
+            .max_by_key(|d| d.cost)
+            .expect("总有一张非开端牌");
+
+        // ① 表1 六格逐格撞引擎：起点、不自动恢复、三位一体、获取量按费用。
+        let b0 = fresh_battle();
+        assert_eq!(b0.p_karma, p_init, "{} 说我方初始业力 {p_init}，引擎的构造起点却是 {}", tag(64), b0.p_karma);
+        assert_eq!(b0.e_karma, e_init, "{} 说普通关敌方 {e_init}，引擎普通关构造器的敌方起点却是 {}", tag(64), b0.e_karma);
+        let mut b = fresh_battle();
+        b.p_karma = 3; // 借三笔业力在手里，再看它会不会自己长回来
+        b.draw_pile.clear();
+        b.player_turn_start();
+        assert_eq!(b.p_karma, 3, "{} 说业力「不自动恢复」，引擎一个回合开始却把它从 3 变成 {}", tag(65), b.p_karma);
+        let one = CardInst::new(700, fire);
+        assert_eq!(one.hp, fire.power, "{} 说「数值 = 血量」，{} 的数值 {} 落地却是 {}", tag(69), fire.name, fire.power, one.hp);
+        let mut b = fresh_battle();
+        b.p_front[0] = Some(CardInst::new(701, fire));
+        let dmg = b.card_hit_damage(SideK::Player, 701, 0, 1, one.hp, false);
+        assert_eq!(dmg, fire.power, "{} 说「血量 = 伤害」，引擎那一击给的是 {dmg}，牌面数值 {}", tag(69), fire.power);
+        let mut b = fresh_battle();
+        let k0 = b.p_karma;
+        b.on_death(CardInst::new(702, fire), SideK::Player, None, DeathCause::Battle);
+        let gain_of_fire = b.p_karma - k0;
+        assert_eq!(gain_of_fire, fire.cost * tiers[0].1 / 100, "{}：{} 第一次死亡该返费用的 {}%（＝{}），引擎返了 {gain_of_fire}", tag(67), fire.name, tiers[0].1, fire.cost * tiers[0].1 / 100);
+        assert_ne!(gain_of_fire, fire.power, "返还撞上「数值」去了（{}＝费用与数值分不清）⇒ 本测① 这一条失去分辨力", gain_of_fire);
+
+        // ② 表2 四档：文档写的那四个百分数既就是 `refund_pct` 的档位，也是引擎实际返的钱。
+        let mut b = fresh_battle();
+        let mut inst = CardInst::new(710, big);
+        let mut gains: Vec<i32> = Vec::new();
+        for (i, (nth, pct, _)) in tiers.iter().enumerate() {
+            let line = rows.table2[i].line;
+            assert_eq!(inst.deaths as usize, i, "{} 之前那张实例已经死了 {} 次 ⇒ 上一轮的回收没把计数带回来，「实例独立」这条在本测里断了", tag(line), inst.deaths);
+            assert_eq!(refund_pct(inst.deaths), *pct, "{} 说第 {nth} 次返 {pct}%，可引擎在 deaths＝{} 那一档给的是 {}", tag(line), inst.deaths, refund_pct(inst.deaths));
+            let k = b.p_karma;
+            b.on_death(inst.clone(), SideK::Player, None, DeathCause::Battle);
+            let g = b.p_karma - k;
+            assert_eq!(g, big.cost * pct / 100, "{}：{}（费用 {}）第 {nth} 次死亡该返 {pct}%＝{}，引擎返了 {g}", tag(line), big.name, big.cost, big.cost * pct / 100);
+            gains.push(g);
+            inst = b.discard_pile.last().cloned().unwrap_or_else(|| panic!("{} 那次死亡之后那张牌没回收进弃牌堆，档位没法往下走", tag(line)));
+        }
+        assert_eq!(gains.iter().collect::<std::collections::HashSet<_>>().len(), 4, "四档返还出现相同整数（{gains:?}）⇒ 这一章的尺量不到档位差别了，换一张费用更大的牌或改走 refund_pct");
+        assert_eq!(inst.deaths as usize, 4, "四轮死亡之后那张实例的计数应是 4，实测 {}", inst.deaths);
+
+        // ③ 实例独立（标题 79 的从句＋示例 89／90／91）：A 死过一次不掉 B 的档，A 自己第二次才掉。
+        let ex = |i: usize| (examples[i].1, examples[i].2);
+        let mut b = fresh_battle();
+        b.draw_pile.clear();
+        let (mut a_inst, mut b_inst) = (CardInst::new(720, fire), CardInst::new(721, fire));
+        let k = b.p_karma;
+        b.on_death(a_inst.clone(), SideK::Player, None, DeathCause::Battle);
+        let g_a1 = b.p_karma - k;
+        assert_eq!(g_a1, fire.cost * ex(0).1 / 100, "{}：火苗A 第一次死亡该返 {}%，＝{}，引擎返了 {g_a1}", tag(rows.examples[0].line), ex(0).1, fire.cost * ex(0).1 / 100);
+        let k = b.p_karma;
+        b.on_death(b_inst.clone(), SideK::Player, None, DeathCause::Battle);
+        let g_b1 = b.p_karma - k;
+        assert_eq!(g_b1, g_a1, "{} 说火苗B 第一次死亡同样返 {pct}%（独立），可 A 先死过一次之后 B 就少拿了（{g_a1} → {g_b1}）⇒ 计数挂在牌名上而不是实例上", tag(rows.examples[1].line), pct = ex(1).1);
+        a_inst = b.discard_pile.iter().find(|c| c.id == 720).cloned().expect("A 该带着自己的计数回收进弃牌堆");
+        b_inst = b.discard_pile.iter().find(|c| c.id == 721).cloned().expect("B 同上");
+        assert_eq!((a_inst.deaths, b_inst.deaths), (1, 1), "两张同名牌各死一次，计数应各自为 1，实测 {}/{}", a_inst.deaths, b_inst.deaths);
+        let k = b.p_karma;
+        b.on_death(a_inst.clone(), SideK::Player, None, DeathCause::Battle);
+        let g_a2 = b.p_karma - k;
+        assert_eq!(g_a2, fire.cost * ex(2).1 / 100, "{} 说火苗A 第二次死亡返 {}%＝{}，引擎返了 {g_a2}", tag(rows.examples[2].line), ex(2).1, fire.cost * ex(2).1 / 100);
+        let a_third = b.discard_pile.iter().rev().find(|c| c.id == 720).cloned().expect("A 第二次死亡之后又回收了一份");
+        assert_eq!((a_third.deaths as usize, ex(2).0 as usize), (2, 2), "示例第 3 行说的「第二次」与那张实例回收后的计数没对上（{}/{}）⇒ 档位不是跟着实例走的", a_third.deaths, ex(2).0);
+        assert_eq!(examples[2].0, examples[0].0, "示例第 1、3 行不是同一个代号 ⇒ ③ 没法把它读成同一张牌");
+
+        // ④ 献祭与死亡返还互斥（围栏1 三条＋围栏2 两条）：全额、不推进档位；两种自然死法都推进。
+        let mut b = fresh_battle();
+        let mut late = CardInst::new(730, big);
+        late.deaths = 3; // 已经吃到最低那一档
+        let last_pct = tiers[3].1;
+        let k = b.p_karma;
+        b.on_death(late.clone(), SideK::Player, None, DeathCause::Sacrifice);
+        assert_eq!(b.p_karma - k, big.cost, "{}／{} 都说主动献祭拿**全额**费用（{}），引擎在档位已经掉到 {last_pct}% 之后给了 {}", tag(rows.fences[0][1].line), tag(rows.fences[2][2].line), big.cost, b.p_karma - k);
+        let late = b.discard_pile.last().cloned().expect("献祭掉的牌同样回收进弃牌堆");
+        assert_eq!(late.deaths, 3, "{} 说献祭「不触发死亡返还递减」，可那份实例的计数从 3 变成 {} ⇒ 档位被献祭推进了", tag(rows.fences[1][0].line), late.deaths);
+        for (cause, line) in [(DeathCause::Battle, rows.fences[1][1].line), (DeathCause::Cross, rows.fences[0][2].line)] {
+            let k = b.p_karma;
+            b.on_death(late.clone(), SideK::Player, None, cause);
+            assert_eq!(b.p_karma - k, big.cost * last_pct / 100, "{}／{}：档位停在 {last_pct}% 的那张牌自然死亡（{cause:?}）该返 {}，引擎返了 {}", tag(line), tag(rows.table2[3].line), big.cost * last_pct / 100, b.p_karma - k);
+            let back = b.discard_pile.last().cloned().expect("回收的那份带着推进后的计数");
+            assert_eq!(back.deaths, 4, "{cause:?} 之后计数应推进到 4，实测 {} ⇒ 那一支不再推进档位（或反过来，献祭那支开始推进了）", back.deaths);
+        }
+
+        // ⑤ 献祭代价：本回合不能再放置同名牌，且那份禁令只在**本回合**。
+        let mut b = Battle::new(43, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 2);
+        let mut on_field = CardInst::new(740, fire);
+        on_field.placed_turn = b.turn - 1; // 在场已满 1 回合（§十二:431 那道闸），本测要撞的是下面那条同名闸
+        b.p_front[0] = Some(on_field);
+        b.pf.sacrifice_used = false;
+        b.player_sacrifice_field(0).unwrap_or_else(|e| panic!("{} 说的献祭在引擎里被拒：{e}", tag(rows.fences[2][1].line)));
+        b.p_karma = fire.cost + 2;
+        b.hand.clear();
+        b.hand.push(CardInst::new(741, fire));
+        let err = b.player_place(0, 1).expect_err(&format!("{} 说献祭之后「本回合不能再放置同名牌」，引擎却放行了", tag(rows.fences[2][1].line)));
+        assert!(err.contains("本回合献祭过同名"), "那道闸该落在同名牌上，引擎给的拒绝理由却是「{err}」");
+        b.player_turn_start();
+        b.hand.clear();
+        b.hand.push(CardInst::new(742, fire));
+        b.p_karma = fire.cost + 2;
+        b.player_place(0, 1).unwrap_or_else(|e| panic!("{} 那句禁令只说「本回合」，可过了一个回合开始引擎仍不放行：{e}", tag(rows.fences[2][1].line)));
+        assert_eq!(b.p_karma, 2, "{} 说放置消耗业力＝卡牌费用（{}），余额从 {} 变成 {}", tag(rows.fences[3][0].line), fire.cost, fire.cost + 2, b.p_karma);
+
+        // ⑥ 业力消耗三条＋核心循环那一环：放置按费用、开端按 0、融合按副牌费用减一。
+        let mut b = fresh_battle();
+        b.p_front = Default::default();
+        b.hand.clear();
+        b.hand.push(CardInst::new(750, starter));
+        let k = b.p_karma;
+        b.player_place(0, 0).unwrap_or_else(|e| panic!("{} 说开端放置不消耗业力，引擎却拒放：{e}", tag(rows.fences[3][2].line)));
+        assert_eq!(b.p_karma, k, "{}：放置开端前后业力应不变（0），实测 {k} → {}", tag(rows.fences[3][2].line), b.p_karma);
+        assert_eq!(starter.cost, 0, "{} 那句「不消耗」在本测里既靠{} 那个 `is_starter` 三元、也顺带靠开端自己的 0 费；这个 0 一变，两条依据就只剩一条", tag(rows.fences[3][2].line), "battle.rs 里的 cost 三元");
+        let kindle = faction_cards(Faction::Ember)[2]; // 2 费：减一之后是 1，能分辨「减没减」
+        let mut inherit = vec![CardInst::new(760, fire), CardInst::new(761, kindle)];
+        let mut karma = 9;
+        crate::progress::fuse_cards(&mut inherit, 0, 1, &mut karma).unwrap_or_else(|e| panic!("融合两张普通牌被拒：{e}"));
+        let price = (kindle.cost - fuse_minus).max(fuse_floor);
+        assert_eq!(karma, 9 - price, "{} 说融合消耗＝副牌费用减 {fuse_minus}（最低 {fuse_floor}），副牌 {} 费 ⇒ 该扣 {price}，实测扣了 {}", tag(rows.fences[3][1].line), kindle.cost, 9 - karma);
+        assert_eq!(price, 1, "本测挑的这张 2 费副牌要求减一后≠原价（否则那条断言量不到「减一」），实测 price＝{price} ⇒ 文档把减数改成 0 了，换卡或改本测");
+        let mut inherit = vec![CardInst::new(770, fire), CardInst::new(771, fire)];
+        let mut karma = 0;
+        crate::progress::fuse_cards(&mut inherit, 0, 1, &mut karma).unwrap_or_else(|e| panic!("1 费副牌的融合被拒（那份价格本该是 0）：{e}"));
+        assert_eq!(karma, 0, "1 费副牌融合的价格应落在{} 说的那个下限上（{fuse_floor}），实测余额 {}", tag(rows.fences[3][1].line), karma);
+        assert_eq!(fuse_floor, 0, "文档那句「最低{fuse_floor}」若改成别的数，码面那个 `.max({fuse_floor})` 就是唯一字面 ⇒ 本测只能靠余额红，另一条走 §三 推导器的码面 grep");
+        let fused_c = inherit[0].clone();
+        assert!(fused_c.crafted, "融合产物该被标成自造牌（§九:334 那句话在 §三 这一章只作为示例第 4 行的前提出现）");
+        assert_eq!(fused_c.def.cost, fire.cost, "新牌 C 的费用应沿用主牌（{}），实测 {}", fire.cost, fused_c.def.cost);
+        let mut b = fresh_battle();
+        let k = b.p_karma;
+        b.on_death(fused_c, SideK::Player, None, DeathCause::Battle);
+        assert_eq!(b.p_karma - k, fire.cost * ex(3).1 / 100, "{} 说融合后的新牌C 第一次死亡返 {}%＝{}，引擎返了 {}", tag(rows.examples[3].line), ex(3).1, fire.cost * ex(3).1 / 100, b.p_karma - k);
+        let mut b = fresh_battle();
+        b.hand.clear();
+        b.hand.push(CardInst::new(780, starter));
+        let k = b.p_karma;
+        b.player_sacrifice_hand(0).unwrap_or_else(|e| panic!("{} 那条链的第一环（献祭开端）在引擎里被拒：{e}", tag(rows.fences[4][0].line)));
+        assert_eq!(b.p_karma - k, loop_gain, "{} 说「献祭开端 → 获得{loop_gain}业力」，引擎给了 {}", tag(rows.fences[4][0].line), b.p_karma - k);
+        let nxt = faction_cards(Faction::Ember)
+            .iter()
+            .copied()
+            .find(|d| d.cost > 0 && d.cost <= loop_gain)
+            .unwrap_or_else(|| panic!("{} 说拿到 {loop_gain} 业力之后「→ 放卡」，可烬火教团没有一张费用 ≤{loop_gain} 的牌，那一环在引擎里走不通", tag(rows.fences[4][0].line)));
+        b.hand.push(CardInst::new(781, nxt));
+        b.player_place(0, 1).unwrap_or_else(|e| panic!("{}：拿着 {loop_gain} 业力放不下那张 {} 费的「{}」：{e}", tag(rows.fences[4][0].line), nxt.cost, nxt.name));
+        assert_eq!(b.p_karma, loop_gain - nxt.cost, "那一环的余额对不上：{loop_gain} 业力花掉 {} 费之后应剩 {}", nxt.cost, loop_gain - nxt.cost);
+
+        // ⑦ 保底机制五条：条件两半都要在、补的张数与来源、不吃抽牌额度、每回合一次、堆空也照补。
+        let mk_empty = |pile: u32| {
+            let mut b = fresh_battle();
+            b.draw_pile.clear();
+            b.hand.clear();
+            b.p_front = Default::default();
+            b.starter_pile = pile;
+            b
+        };
+        let mut b = mk_empty(net_draw as u32 + 3);
+        let pile0 = b.starter_pile;
+        b.player_turn_start();
+        assert_eq!(b.hand.len(), net_draw as usize, "{}＋{} 说条件成立时补 {net_draw} 张，一个回合开始之后手里有 {}", tag(rows.fences[5][0].line), tag(rows.fences[5][1].line), b.hand.len());
+        assert!(b.hand.iter().all(|c| c.is_starter()), "{} 说从开端堆抽，补来的却是 {:?}", tag(rows.fences[5][1].line), b.hand.iter().map(|c| c.def.name).collect::<Vec<_>>());
+        assert_eq!(b.starter_pile, pile0 - net_draw as u32, "{} 那次补牌该从开端堆扣掉 {net_draw}，堆计数 {pile0} → {}", tag(rows.fences[5][1].line), b.starter_pile);
+        // 那两份额度在回合开始那一步**先被重置**（§六:232／§六:233 各自那处重置），所以这里只能在重置之后取基线——
+        // 而补牌发生在它们之后（`player_turn_start` 末尾那一句），正好是文档{} 说的那件事。
+        let (m0, s0) = (b.pf.manual_draws, b.pf.starter_draws);
+        b.grant_free_starter();
+        assert_eq!((b.pf.manual_draws, b.pf.starter_draws), (m0, s0), "{} 说那次补牌「不消耗每回合抽牌次数」，直接再走一次补牌之后额度从 ({m0},{s0}) 变成 ({},{})", tag(rows.fences[5][2].line), b.pf.manual_draws, b.pf.starter_draws);
+        let mut b = mk_empty(9);
+        b.player_turn_start();
+        assert_eq!(b.hand.len(), net_once as usize, "{} 说「每回合最多触发 {net_once} 次」，而{} 每次给 {net_draw} 张 ⇒ 一个回合开始之后手里应恰是 {} 张，实测 {}", tag(rows.fences[5][3].line), tag(rows.fences[5][1].line), (net_once * net_draw) as usize, b.hand.len());
+        assert_eq!(net_once, 1, "{} 说每回合最多触发 {net_once} 次，可码面那一支是**写死的一次**调用（`player_turn_start` 里唯一一个 `grant_free_starter`）⇒ 文档改成 2 次时本章没有第二处字面可撞，只能靠上面那条手牌增量红", tag(rows.fences[5][3].line));
+        let mut b = mk_empty(0);
+        b.player_turn_start();
+        assert_eq!(b.hand.len(), net_temp as usize, "{} 说开端堆为空时「自动生成 {net_temp} 张」，实测手里 {}", tag(rows.fences[5][4].line), b.hand.len());
+        assert_eq!(b.starter_pile, 0, "{} 说那是**临时**生成的一张，不该反过来预支堆计数，实测堆 {}", tag(rows.fences[5][4].line), b.starter_pile);
+        assert!(b.hand.iter().all(|c| c.is_starter()), "临时生成的那张也必须是开端");
+        let mut b = mk_empty(9);
+        b.hand.push(CardInst::new(790, fire));
+        let h0 = b.hand.len();
+        b.player_turn_start();
+        assert_eq!(b.hand.len(), h0, "{} 的两个子句要同时成立：手牌非空（{} 张）时不该补，引擎补了 {} 张", tag(rows.fences[5][0].line), h0, b.hand.len() - h0);
+        let mut b = mk_empty(9);
+        b.p_front[2] = Some(CardInst::new(791, fire));
+        b.player_turn_start();
+        assert_eq!(b.hand.len(), 0, "{} 的后半个子句：场上有卡时同样不该补，引擎给了 {} 张", tag(rows.fences[5][0].line), b.hand.len());
     }
 
     /// §十六「触发示例」三行（687/688/689）用**文档自己写的数字**驱动引擎跑一遍：每行给一个阈值与一个
