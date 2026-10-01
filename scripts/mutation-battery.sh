@@ -19,7 +19,7 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 89 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 90 条记录的补丁有没有真打上；
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -740,7 +740,7 @@ a=\"    if t.ends_with('：') && s15_digits(t).is_empty() {\"
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,\"    if t.ends_with('：') {\"))"
 run
-echo "### M88 摘掉「初始业力那格该有 2 个数字」那道分类守卫 ＋ 文档 md:64 同一格追加第三个数（键名与 arity 都不动）⇒ 读数：只剩 ② 那份独立计数在喊（M78＋M79 的成对姊妹条）；守卫单独降级时四把尺全绿，那一半由 M88 的前半段单独代证"
+echo "### M88 摘掉「初始业力那格该有 2 个数字」那道分类守卫 ＋ 文档 md:64 同一格追加第三个数（键名与 arity 都不动）⇒ 实测 1 红：只剩 ② 那份**独立**计数在喊（model.rs:3771，红字直接报出实测 [0, 0, 3] 对登记口径 2）——M78＋M79 那对成对姊妹条的 §三 版本，两处各数一遍不是重复，一处降级另一处仍红"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='            if nums.len() != 2 {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'
@@ -752,3 +752,10 @@ assert ls[63].endswith(b), ls[63]
 ls[63]=ls[63][:-1]+' 3）'
 open(q,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
+echo "### M89 只摘「初始业力那格该有 2 个数字」那道分类守卫、文档不动 ⇒ **预期全绿**：§三 自己的 M68／M78——守卫单独降级、四把尺都看不见，它的牙只在文档那一格多写第三个数时才出（M88 就是那一条）。这一半不测就只是推断，所以单独立一条"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            if nums.len() != 2 {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'))"
+run
