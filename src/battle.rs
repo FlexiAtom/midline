@@ -203,7 +203,8 @@ impl Battle {
             c
         };
         let mut draw_pile: Vec<CardInst>;
-        // §廿二:966 开局手牌来源：第1关从基础牌堆抽，第2关起从继承堆抽。
+        // §六:220 表1 那行「继承堆抽牌 3张 第1关从基础牌堆抽，第2关起从继承堆抽」＝§廿二:966 同一句话在 §六 的写法。
+        // §六:223 「第1关：从基础牌堆抽3张」的落点是下面那个分支：不看递进来的堆，只洗阵营基础牌。
         // `inherit.is_empty()` 这一支是**静默回落**——跳关/新开打第2关以上时，头报写着第N关、牌序却是第1关的。
         // 存档包（meta-main）因此要求载入端先校验阵营与关卡一致性，不许拿空堆假装续关。
         if level <= 1 || inherit.is_empty() {
@@ -211,7 +212,7 @@ impl Battle {
             rng.shuffle(&mut pool);
             draw_pile = pool.into_iter().map(|d| mk(&mut id, &mut rng, d, true)).collect();
         } else {
-            draw_pile = inherit;  // §廿三:993 继承堆即牌库；上限10见 progress.rs:87，开端不入堆见 battle.rs:1457
+            draw_pile = inherit;  // §六:224 「第2关起：从继承堆抽3张」——那份堆原序即牌库（裁定11 按堆顶顺序取）；§廿三:993 继承堆即牌库；上限10见 `collect_survivors`，开端不入堆见 `battle_survivors`
             for c in draw_pile.iter_mut() {
                 c.hp = c.def.power; // 每关血量重置满格（升级已写入实例定义）
                 c.flame = 0;
@@ -219,7 +220,7 @@ impl Battle {
                 c.placed_turn = i64::MIN;
                 c.triggered_turn = i64::MIN;
             }
-            // §五:191 开局手牌：继承堆不足3张 → 从基础牌堆补齐（文档那句括号的落点）
+            // §五:191 开局手牌：继承堆不足3张 → 从基础牌堆补齐（文档那句括号的落点）；§六:225 同一句规则在 §六 围栏1 的写法
             if draw_pile.len() < 3 {
                 let mut pool: Vec<CardDef> = faction_cards(player_faction)[1..].to_vec();
                 rng.shuffle(&mut pool);
@@ -236,8 +237,8 @@ impl Battle {
         let p_starter = mk(&mut id, &mut rng, faction_cards(player_faction)[0], false);
         let e_starter = mk(&mut id, &mut rng, faction_cards(enemy_faction)[0], false);
 
-        let mut hand = vec![p_starter];  // §十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）；§五:191 开局手牌＝开端＋3 张 ｜ §五:185 开端每关固定发放（不从堆里来）
-        for _ in 0..3 {  // §十二:421 开局从继承堆抽 3 张（裁定11：按堆顶顺序取）；§廿三:992 开局手牌（固定开端＋3张，不经 manual_draws）
+        let mut hand = vec![p_starter];  // §六:219 「开端 1张 固定发放」——它是 vec 的字面首项，不经任何抽牌路径；§十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）；§五:191 开局手牌＝开端＋3 张 ｜ §五:185 开端每关固定发放（不从堆里来）
+        for _ in 0..3 {  // §六:220 那 3 张的张数出自表1「继承堆抽牌 3张」；§六:226 这个循环**不碰** pf.manual_draws，所以开局手牌不计入每回合抽牌次数；§十二:421 开局从继承堆抽 3 张（裁定11：按堆顶顺序取）；§廿三:992 开局手牌（固定开端＋3张，不经 manual_draws）
             if !draw_pile.is_empty() {
                 hand.push(draw_pile.remove(0)); // 开局手牌按继承堆顺序取（裁定11）
             }
@@ -405,7 +406,8 @@ impl Battle {
 
     // ---------- 抽牌 ----------
 
-    /// §廿二:948 手牌上限 8 张，超出弃置**最早进入手牌**的牌（`hand` 尾插 ⇒ 堆头即最早）；§十二:429 满 8 张时弃置最早进入手牌的牌。
+    /// §六:243 「若手牌已满8张 → 弃置最早进入手牌的牌，再抽新牌」＝`push_hand` 这一处：所有进手牌的路径都走它（自动抽、主动抽、保底补开端），
+    /// 所以「满 8 弃最早」在本章只有一条落点。§廿二:948 手牌上限 8 张，超出弃置**最早进入手牌**的牌（`hand` 尾插 ⇒ 堆头即最早）；§十二:429 满 8 张时弃置最早进入手牌的牌。
     /// §廿二:949 弃的牌进弃牌堆、本关不再使用（自造牌例外：任何离场永久消失，§十:372）；§廿三:996 弃牌堆的定义行。
     fn push_hand(&mut self, c: CardInst) {
         self.hand.push(c);
@@ -430,7 +432,7 @@ impl Battle {
             }
         }
         self.karma_penalty_next = 0;
-        if !self.draw_pile.is_empty() {  // §十二:427 每回合自动从继承堆抽 1 张
+        if !self.draw_pile.is_empty() {  // §六:239 每回合开始「自动从继承堆抽1张」——这一支不碰 `manual_draws`，所以它花掉的是 §六:232 那份「1自动」；§十二:427 每回合自动从继承堆抽 1 张
             let mut c = self.draw_pile.remove(0); // 堆顶抽取，继承堆顺序有意义（裁定11）
             if c.skills.is_empty() && !c.is_starter() {
                 let pool = Skill::list();
@@ -442,8 +444,8 @@ impl Battle {
         } else {
             self.log.push(format!("回合{}·继承堆已空，无法抽牌（开端堆仍可抽）", self.turn));
         }
-        self.pf.manual_draws = 2;  // §十二:428 主动抽牌每回合 2 次，两堆可混合来源
-        self.pf.starter_draws = 1;
+        self.pf.manual_draws = 2;  // §六:232 表2 那句「每回合可抽3次（1自动+2可选）」里的 2 可选＝这里重置的额度；§六:240 「行动阶段可主动抽2张」同一个数；§十二:428 主动抽牌每回合 2 次，两堆可混合来源
+        self.pf.starter_draws = 1;  // §六:233 表2 开端堆那行「每回合可抽1次」——每回合重置，与 `manual_draws` 各记各的（混来源时两条闸都要过）
         self.pf.sacrifice_used = false;
         self.pf.sacrificed_names.clear();
         // §十五:637 "触发后：本回合已打出的伤害全部消耗"——引擎里 A 是一次性额度：每个敌方攻击阶段只结算一次
@@ -469,14 +471,15 @@ impl Battle {
         self.push_hand(c);
     }
 
+    /// §六:240 主动抽牌的唯一入口（「从继承堆 或 开端堆，可混合」＝同一个函数、`from_starter_pile` 一个 bool 选来源）。
     /// §廿二:968 继承堆耗尽 → `di` 只能失败，牌仍可走 `ds` 从开端堆抽；
     /// §廿二:952 开端堆为空 → 自动生成1张临时开端（不扣堆计数）。
     pub fn action_draw(&mut self, from_starter_pile: bool) -> Result<(), String> {
-        if self.pf.manual_draws <= 0 {
+        if self.pf.manual_draws <= 0 {  // §六:242 「每回合最多抽3张」= 自动 1（player_turn_start 那一支）＋这里的 2；这道闸是那个"最多"的唯一兑现处
             return Err("本回合主动抽牌次数已用完（每回合2次，可混合来源）".into());
         }
         if from_starter_pile {
-            if self.pf.starter_draws <= 0 {
+            if self.pf.starter_draws <= 0 {  // §六:233 开端堆那行「每回合可抽1次」的闸；同一函数下面用 `faction_cards(…)[0]` 兑现那句「全是开端」
                 return Err("开端堆每回合只能抽1次".into());
             }
             self.pf.starter_draws -= 1;
@@ -1479,7 +1482,7 @@ impl Battle {
         v.extend(std::mem::take(&mut self.hand));
         v.extend(self.p_front.iter_mut().map(|s| s.take()).flatten());
         v.extend(std::mem::take(&mut self.discard_pile));
-        v.retain(|c| !c.is_starter());  // §五:185 入继承堆 ❌（这一行就是那个 ❌）
+        v.retain(|c| !c.is_starter());  // §六:219 那句「不入继承堆」与 §六:232 那半句「不包含开端」的同一处落点；§五:185 入继承堆 ❌（这一行就是那个 ❌）
         v
     }
 }
@@ -2103,6 +2106,358 @@ pub(crate) fn s5_fold(rows: &[S5Line]) -> S5Fence {
     f
 }
 
+/// §六「开局手牌与双牌堆」的四块（两张表＋两道围栏）各收一份行集。行号单调只能看出先后、看不出块界，
+/// 所以块界由解析器按"表头行开一张表／``` 开一道围栏"的状态**显式**分派——推导器那三张名单由这里给（同 §十四／§十五／§十六）。
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct S6Rows {
+    /// 围栏外的标签行（「开局手牌」／「双牌堆」／「抽牌规则」）
+    pub labels: Vec<usize>,
+    /// 两张表的表头行
+    pub headers: Vec<usize>,
+    pub table1: Vec<S6Line>,
+    pub fence1: Vec<S6Line>,
+    pub table2: Vec<S6Line>,
+    pub fence2: Vec<S6Line>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct S6Line {
+    pub line: usize,
+    pub claim: S6Claim,
+}
+
+/// §六 一行读成的断言。**形态与 §五 不同**：这一章围栏里的规则行没有前缀（「第1关：从基础牌堆抽3张」自己就是规则行），
+/// 所以"编号行／规则行／标签行"三种外壳在这里**不构成判据**——分派改成按内容匹配已登记的规则行，一条都不匹配就 panic。
+/// 那条 panic 是本章的牙：文档往围栏里加第五种写法时，实测路必须当场喊"这行我没读法"，不能安静走过去。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S6Claim {
+    /// 「开局手牌」／「双牌堆」／「抽牌规则」／围栏里的「每回合开始：」
+    Label,
+    /// 「开端 1张 固定发放，不入继承堆」（表1）
+    StarterRow { count: i32, keeps_out_of_pile: bool },
+    /// 「继承堆抽牌 3张 第1关从基础牌堆抽，第2关起从继承堆抽」（表1）
+    InheritDrawRow { count: i32, stage1_from_base: bool, stage2_from_inherit: bool },
+    /// 「第1关：从基础牌堆抽3张」／「第2关起：从继承堆抽3张」（围栏1）
+    DrawSource { stage: i32, from_inherit: bool, n: i32 },
+    /// 「若继承堆不足3张 → 从基础牌堆补齐」（围栏1）
+    TopUp { threshold: i32 },
+    /// 「开局手牌不计入每回合抽牌次数」（围栏1）
+    OpeningNotCounted,
+    /// 「继承堆 牌库，上一关剩余+新造牌，不包含开端 每回合可抽3次（1自动+2可选）」（表2）
+    InheritPileRow { total: i32, auto: i32, manual: i32, excludes_starter: bool, holds_both_kinds: bool },
+    /// 「开端堆 全是“开端” 每回合可抽1次」（表2）
+    StarterPileRow { per_turn: i32, all_starters: bool },
+    /// 「1. 自动从继承堆抽1张」（围栏2）
+    AutoDraw { n: i32 },
+    /// 「2. 行动阶段可主动抽2张（从继承堆 或 开端堆，可混合）」（围栏2）
+    ManualDraw { n: i32, mixable: bool },
+    /// 「即：每回合最多抽3张，来源可选」（围栏2）
+    PerTurnMax { total: i32 },
+    /// 「若手牌已满8张 → 弃置最早进入手牌的牌，再抽新牌」（围栏2）
+    HandCapFifo { cap: i32 },
+}
+
+#[cfg(test)]
+fn s6_bad(tag: &str, why: &str) -> ! {
+    panic!("{tag} 读不出 §六 的任何一条已登记规则（围栏里的规则行**没有前缀**，所以判据是内容匹配，不是外壳形态）：{why}。\
+            请先扩本解析器与它对应的实测断言，别让那一行从尺子外面漏过去（挂锚对围栏行不算实测）");
+}
+
+/// 围栏行的内容分派。每种形态同样**钉死它该带几个数字**：「第1关：从基础牌堆抽3张」带 2 个（关号＋张数），
+/// 其余各带 1 个或 0 个——文档把同一行多写一个数时，这里当场红，而不是让 fold 拿错那一个。
+#[cfg(test)]
+fn s6_classify(t: &str, line: usize) -> S6Claim {
+    let tag = format!("md:{line}「{t}」");
+    if t.ends_with('：') {
+        return S6Claim::Label;
+    }
+    let body = if let Some((num, b)) = t.split_once(". ") {
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+            s6_bad(&tag, "看着像编号行，但「. 」前面不是纯数字");
+        }
+        b
+    } else if let Some(b) = t.strip_prefix("- ") {
+        b
+    } else {
+        t
+    };
+    let nums = s15_digits(body);
+    let expect = |k: usize, what: &str| {
+        if nums.len() != k {
+            s6_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()));
+        }
+    };
+    // 判据都用**只在一行里出现**的措辞；同一行被两条判据同时命中时按这里的顺序取第一条，所以每条都配了自己的数字个数断言。
+    if body.contains("第1关") && body.contains("从基础牌堆抽") {
+        expect(2, "第1关行（关号＋张数）");
+        return S6Claim::DrawSource { stage: nums[0], from_inherit: false, n: nums[1] };
+    }
+    if body.contains("第2关") && body.contains("从继承堆抽") {
+        expect(2, "第2关行（关号＋张数）");
+        return S6Claim::DrawSource { stage: nums[0], from_inherit: true, n: nums[1] };
+    }
+    if body.contains("不足") && body.contains("补齐") {
+        expect(1, "补齐行（触发线那一个数）");
+        return S6Claim::TopUp { threshold: nums[0] };
+    }
+    if body.contains("不计入") {
+        expect(0, "「不计入」行（不该带数字）");
+        return S6Claim::OpeningNotCounted;
+    }
+    if body.contains("自动") && body.contains("抽") {
+        expect(1, "自动抽牌行（每回合几张）");
+        return S6Claim::AutoDraw { n: nums[0] };
+    }
+    if body.contains("主动抽") {
+        expect(1, "主动抽牌行（每回合几次）");
+        return S6Claim::ManualDraw { n: nums[0], mixable: body.contains("混合") };
+    }
+    if body.contains("每回合最多抽") {
+        expect(1, "合计行（每回合最多几张）");
+        return S6Claim::PerTurnMax { total: nums[0] };
+    }
+    if body.contains("手牌已满") && body.contains("弃置") {
+        expect(1, "手牌上限行（满几张弃牌）");
+        return S6Claim::HandCapFifo { cap: nums[0] };
+    }
+    s6_bad(&tag, "登记过的八种内容（两关来源／补齐／不计入／自动抽／主动抽／合计／满额弃牌）一种都不匹配")
+}
+
+/// 表体行的分派：一行必须是「键 数量 说明」三段式（arity 恰为 3），键名必须在**本章**的名单里。
+/// 键名换成别的字（例如「继承堆抽牌」写成「继承堆抽卡」）当场 panic——那意味着表换脸了，而实测还在按旧名读数。
+#[cfg(test)]
+fn s6_table_row(t: &str, line: usize, which: u8) -> S6Claim {
+    let tag = format!("md:{line}「{t}」");
+    let cols: Vec<&str> = t.split_whitespace().collect();
+    if cols.len() != 3 {
+        s6_bad(&tag, &format!("表体行应是「键 数量 说明」三段式，实测切成 {} 段（{cols:?}）", cols.len()));
+    }
+    let (key, note) = (cols[0], cols[2]);
+    let nums = s15_digits(t);
+    let expect = |k: usize, what: &str| -> ! {
+        s6_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()))
+    };
+    match (which, key) {
+        (1, "开端") => {
+            if nums.len() != 1 {
+                expect(1, "表1 开端行（每关发几张）");
+            }
+            S6Claim::StarterRow { count: nums[0], keeps_out_of_pile: note.contains("不入继承堆") }
+        }
+        (1, "继承堆抽牌") => {
+            if nums.len() != 3 {
+                expect(3, "表1 抽牌行（张数＋两个关号）");
+            }
+            S6Claim::InheritDrawRow {
+                count: nums[0],
+                stage1_from_base: note.contains("第1关从基础牌堆"),
+                stage2_from_inherit: note.contains("第2关起从继承堆"),
+            }
+        }
+        (2, "继承堆") => {
+            if nums.len() != 3 {
+                expect(3, "表2 继承堆行（可抽几次＋自动几次＋可选几次）");
+            }
+            // 内容判据只看**内容列**（cols[1]）：键列「继承堆」和规则列里的字都不该替它作证。
+            S6Claim::InheritPileRow {
+                total: nums[0],
+                auto: nums[1],
+                manual: nums[2],
+                excludes_starter: cols[1].contains("不包含开端"),
+                holds_both_kinds: cols[1].contains("上一关剩余") && cols[1].contains("新造牌"),
+            }
+        }
+        (2, "开端堆") => {
+            if nums.len() != 1 {
+                expect(1, "表2 开端堆行（每回合可抽几次）");
+            }
+            // 「全是开端」在内容列里（键列本身就含「开端」二字，整行匹配会替它作证）。
+            S6Claim::StarterPileRow { per_turn: nums[0], all_starters: cols[1].contains("全是") && cols[1].contains("开端") }
+        }
+        (w, k) => s6_bad(&tag, &format!("表{w} 的键名只登记了「开端／继承堆抽牌」（表1）与「继承堆／开端堆」（表2），实测键名「{k}」")),
+    }
+}
+
+/// 定位并解析 §六：章标题 → 到本域的 `---` 为止，途中按状态切成四块。
+/// 它同时是 §六 推导器实测路的**唯一口径**：那边的行集合必须由这里的行号构成（同 §五／§十四／§十五／§十六）。
+#[cfg(test)]
+pub(crate) fn parse_section6_dealing(lines: &[String]) -> S6Rows {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "六、开局手牌与双牌堆")
+        .expect("§六 标题必须存在（文档结构变了就要同步改本解析器与 model.rs 的推导器）");
+    const S6_HEADERS: [(&str, u8); 2] = [("手牌 数量 说明", 1), ("牌堆 内容 抽取规则", 2)];
+    let mut r = S6Rows {
+        labels: Vec::new(),
+        headers: Vec::new(),
+        table1: Vec::new(),
+        fence1: Vec::new(),
+        table2: Vec::new(),
+        fence2: Vec::new(),
+    };
+    let mut fence: Option<u8> = None;
+    let mut table: Option<u8> = None;
+    let mut fences = 0usize;
+    let mut tables = 0usize;
+    for n in (head + 2)..=lines.len() {
+        let t = at(n).trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "```" {
+            match fence {
+                Some(_) => fence = None,
+                None => {
+                    fences += 1;
+                    if fences > 2 {
+                        s6_bad(&format!("md:{n}"), &format!("§六 只登记两道围栏（开局手牌／抽牌规则），实测第 {fences} 道"));
+                    }
+                    fence = Some(fences as u8);
+                    table = None;
+                }
+            }
+            continue;
+        }
+        if fence.is_none() && t == "---" {
+            break;
+        }
+        if let Some(fi) = fence {
+            let row = S6Line { line: n, claim: s6_classify(t, n) };
+            if fi == 1 {
+                r.fence1.push(row);
+            } else {
+                r.fence2.push(row);
+            }
+            continue;
+        }
+        let hdr = S6_HEADERS.iter().find(|pair| pair.0 == t).copied();
+        if let Some((h, ti)) = hdr {
+            tables += 1;
+            if tables > 2 || ti != tables as u8 {
+                s6_bad(&format!("md:{n}「{h}」"), &format!("§六 的两张表只登记「手牌 数量 说明」在前、「牌堆 内容 抽取规则」在后，实测第 {tables} 张表头是「{h}」"));
+            }
+            table = Some(ti);
+            r.headers.push(n);
+            continue;
+        }
+        if t.split_whitespace().count() == 1 {
+            table = None;
+            r.labels.push(n);
+            continue;
+        }
+        match table {
+            Some(ti) => {
+                let row = S6Line { line: n, claim: s6_table_row(t, n, ti) };
+                if ti == 1 {
+                    r.table1.push(row);
+                } else {
+                    r.table2.push(row);
+                }
+            }
+            None => s6_bad(&format!("md:{n}「{t}」"), "围栏外、表头之后的一处都不匹配：既不是表头，也不是单列标签，也没有正在读的表接它"),
+        }
+    }
+    r
+}
+
+/// §六 四块折叠出来的发牌规则。缺任何一项**当场 panic**（措辞同 `s5_fold`）：少一行＝那条规则不再有实测，
+/// 而它看上去仍像被覆盖过。
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct S6Fence {
+    pub labels: Vec<usize>,
+    pub headers: Vec<usize>,
+    pub starter_row: Option<(i32, bool)>,
+    pub inherit_draw_row: Option<(i32, bool, bool)>,
+    pub stage1: Option<(i32, i32)>,
+    pub stage2: Option<(i32, i32)>,
+    pub topup: Option<i32>,
+    pub opening_not_counted: Option<()>,
+    pub inherit_pile: Option<(i32, i32, i32, bool, bool)>,
+    pub starter_pile: Option<(i32, bool)>,
+    pub auto_draw: Option<i32>,
+    pub manual_draw: Option<(i32, bool)>,
+    pub per_turn_max: Option<i32>,
+    pub hand_cap: Option<i32>,
+}
+
+#[cfg(test)]
+pub(crate) fn s6_fold(rows: &S6Rows) -> S6Fence {
+    let mut f = S6Fence {
+        labels: rows.labels.clone(),
+        headers: rows.headers.clone(),
+        starter_row: None,
+        inherit_draw_row: None,
+        stage1: None,
+        stage2: None,
+        topup: None,
+        opening_not_counted: None,
+        inherit_pile: None,
+        starter_pile: None,
+        auto_draw: None,
+        manual_draw: None,
+        per_turn_max: None,
+        hand_cap: None,
+    };
+    let need = |what: &str| -> ! { panic!("§六 缺「{what}」这一行 ⇒ 该规则无从复现，先把文档补回来") };
+    for c in rows.table1.iter().chain(rows.table2.iter()) {
+        match c.claim {
+            S6Claim::StarterRow { count, keeps_out_of_pile } => f.starter_row = Some((count, keeps_out_of_pile)),
+            S6Claim::InheritDrawRow { count, stage1_from_base, stage2_from_inherit } => {
+                f.inherit_draw_row = Some((count, stage1_from_base, stage2_from_inherit))
+            }
+            S6Claim::InheritPileRow { total, auto, manual, excludes_starter, holds_both_kinds } => {
+                f.inherit_pile = Some((total, auto, manual, excludes_starter, holds_both_kinds))
+            }
+            S6Claim::StarterPileRow { per_turn, all_starters } => f.starter_pile = Some((per_turn, all_starters)),
+            S6Claim::Label => {}
+            _ => need("表体行（四行之一）"),
+        }
+    }
+    for c in rows.fence1.iter().chain(rows.fence2.iter()) {
+        match c.claim {
+            S6Claim::Label => {}
+            S6Claim::DrawSource { stage, from_inherit, n } => {
+                if from_inherit {
+                    if f.stage2.is_some() {
+                        need("第2关来源行（出现了第二条）");
+                    }
+                    f.stage2 = Some((stage, n));
+                } else {
+                    if f.stage1.is_some() {
+                        need("第1关来源行（出现了第二条）");
+                    }
+                    f.stage1 = Some((stage, n));
+                }
+            }
+            S6Claim::TopUp { threshold } => f.topup = Some(threshold),
+            S6Claim::OpeningNotCounted => f.opening_not_counted = Some(()),
+            S6Claim::AutoDraw { n } => f.auto_draw = Some(n),
+            S6Claim::ManualDraw { n, mixable } => f.manual_draw = Some((n, mixable)),
+            S6Claim::PerTurnMax { total } => f.per_turn_max = Some(total),
+            S6Claim::HandCapFifo { cap } => f.hand_cap = Some(cap),
+            _ => need("围栏规则行"),
+        }
+    }
+    f.starter_row.unwrap_or_else(|| need("开端 1张 固定发放，不入继承堆"));
+    f.inherit_draw_row.unwrap_or_else(|| need("继承堆抽牌 3张 第1关…第2关起…"));
+    f.stage1.unwrap_or_else(|| need("第1关：从基础牌堆抽N张"));
+    f.stage2.unwrap_or_else(|| need("第2关起：从继承堆抽N张"));
+    f.topup.unwrap_or_else(|| need("若继承堆不足N张 → 从基础牌堆补齐"));
+    f.opening_not_counted.unwrap_or_else(|| need("开局手牌不计入每回合抽牌次数"));
+    f.inherit_pile.unwrap_or_else(|| need("继承堆 … 每回合可抽N次（a自动+b可选）"));
+    f.starter_pile.unwrap_or_else(|| need("开端堆 全是开端 每回合可抽N次"));
+    f.auto_draw.unwrap_or_else(|| need("自动从继承堆抽N张"));
+    f.manual_draw.unwrap_or_else(|| need("行动阶段可主动抽N张（可混合）"));
+    f.per_turn_max.unwrap_or_else(|| need("每回合最多抽N张，来源可选"));
+    f.hand_cap.unwrap_or_else(|| need("若手牌已满N张 → 弃置最早进入手牌的牌"));
+    f
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -2428,6 +2783,186 @@ mod rule_tests {
             assert_eq!(b.p_karma, budget - n * each, "{}：{plan}＝{n} 张 {each} 费该花掉 {} 业力，引擎余额 {}", tag(205), n * each, b.p_karma);
             assert_eq!(field_count(&b), n as usize, "{}：{plan}放下后场上应 {n} 张，实测 {} 张", tag(205), field_count(&b));
         }
+    }
+
+    /// §六「开局手牌与双牌堆」的 12 条规则行（两张表 4 行＋两道围栏 8 行）用**文档自己写的数字**驱动引擎跑一遍。
+    /// 期望值一行都不写在代码里：全部由 `parse_section6_dealing` ＋ `s6_fold` 从文档读进来（缺任一行 `s6_fold` 当场 panic）。
+    /// 为什么这一章走实测而不止挂锚：与 §五／§十四 同一条口径——锚点证不了"算出的数＝写的数"。
+    /// 而 §六 比 §五 多一层：它管的是**抽牌额度**这件事，所以这里既要对账文档自己那三处数字
+    /// （表2 的「3次（1自动+2可选）」↔ 围栏2 的「自动1」↔「主动2」↔「最多3」），也要真开一局把额度用光。
+    #[test]
+    fn section6_dealing_fence_reproduces_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let rows = parse_section6_dealing(&lines);
+        let got = |v: &[S6Line]| v.iter().map(|r| r.line).collect::<Vec<_>>();
+        assert_eq!(got(&rows.table1), vec![219, 220], "§六 表1 表体应是 219 开端／220 继承堆抽牌 那两行，实测 {:?}", got(&rows.table1));
+        assert_eq!(got(&rows.table2), vec![232, 233], "§六 表2 表体应是 232 继承堆／233 开端堆 那两行，实测 {:?}", got(&rows.table2));
+        assert_eq!(got(&rows.fence1), vec![223, 224, 225, 226], "§六 围栏1（开局手牌）应是 两关来源＋补齐＋不计入 那四行，实测 {:?}", got(&rows.fence1));
+        assert_eq!(got(&rows.fence2), vec![238, 239, 240, 242, 243], "§六 围栏2（抽牌规则）应是 那句标签＋自动＋主动＋合计＋满额弃牌，实测 {:?}", got(&rows.fence2));
+        let f = s6_fold(&rows);
+        let tag = |n: usize| format!("md:{n}「{}」", lines[n - 1].trim());
+        assert_eq!(f.labels, vec![216, 229, 235], "§六 围栏外的标签应恰好是 216 开局手牌／229 双牌堆／235 抽牌规则，实测 {:?} ⇒ 有真规则行被当成标签吞掉（那一条就此从实测与配比里一起隐身），或标签判据失效", f.labels);
+        assert_eq!(f.headers, vec![218, 231], "§六 的表头应恰好是 218「手牌 数量 说明」与 231「牌堆 内容 抽取规则」两张，实测 {:?} ⇒ 本章两张表的形变了（加列／换表头），表体逐行的读法就没法成立", f.headers);
+        assert_eq!(rows.fence2[0].claim, S6Claim::Label, "围栏2 第一行「每回合开始：」应读成标签（它是那两条编号规则的抬头，不是第五条规则），实测 {:?} ⇒ 标签判据在围栏内失效，本章必检集会多出一行", rows.fence2[0].claim);
+
+        // ⓪ 文档先跟自己自洽（不自洽就轮不到引擎出场）：三处写「几次」的措辞必须是同一本账。
+        let (starter_each, starter_not_in_pile) = f.starter_row.unwrap();
+        let (draw_each, t1_stage1_base, t1_stage2_inherit) = f.inherit_draw_row.unwrap();
+        let (s1_stage, s1_n) = f.stage1.unwrap();
+        let (s2_stage, s2_n) = f.stage2.unwrap();
+        let topup = f.topup.unwrap();
+        let (pile_total, pile_auto, pile_manual, pile_no_starter, pile_holds_both) = f.inherit_pile.unwrap();
+        let (starter_turns, starter_pile_all) = f.starter_pile.unwrap();
+        let auto_n = f.auto_draw.unwrap();
+        let (manual_n, mixable) = f.manual_draw.unwrap();
+        let per_turn_max = f.per_turn_max.unwrap();
+        let hand_cap = f.hand_cap.unwrap();
+        assert_eq!(s1_stage, 1, "{} 的关号读成 {s1_stage} ⇒ 那一行不再说第1关，本测① 的来源分派失去依据", tag(223));
+        assert_eq!(s2_stage, 2, "{} 的关号读成 {s2_stage} ⇒ 那一行不再说「第2关起」，本测① 的来源分派失去依据", tag(224));
+        assert_eq!(draw_each, s1_n, "{} 说每关抽 {draw_each} 张，{} 却说第1关抽 {s1_n} 张", tag(220), tag(223));
+        assert_eq!(s1_n, s2_n, "{}／{} 两关抽的不是同一个张数（{s1_n} vs {s2_n}）⇒ 本测那套「开端＋n 张前缀」的复现法只在两数相同时成立", tag(223), tag(224));
+        assert_eq!(topup, s1_n, "{} 的补齐线是 {topup} 张，{} 的张数却是 {s1_n} ⇒ 「不足」读不出触发线", tag(225), tag(223));
+        assert!(t1_stage1_base && t1_stage2_inherit, "{} 里读不到「第1关从基础牌堆」与「第2关起从继承堆」那两半 ⇒ 本测① 按关号分派来源就没有文档依据", tag(220));
+        assert_eq!(pile_auto + pile_manual, pile_total, "{} 自己不合账：{pile_auto} 自动 + {pile_manual} 可选 ≠ 每回合可抽 {pile_total} 次", tag(232));
+        assert_eq!(auto_n, pile_auto, "{} 说自动抽 {auto_n} 张，{} 里那份自动却是 {pile_auto} 次", tag(239), tag(232));
+        assert_eq!(manual_n, pile_manual, "{} 说主动抽 {manual_n} 张，{} 里那份可选却是 {pile_manual} 次", tag(240), tag(232));
+        assert_eq!(auto_n + manual_n, per_turn_max, "{} 的自动 {auto_n} ＋主动 {manual_n} 落不到 {} 说的每回合最多 {per_turn_max} 张", tag(239), tag(242));
+        assert_eq!(pile_total, per_turn_max, "{} 说每回合可抽 {pile_total} 次，{} 说的上限却是 {per_turn_max} 张", tag(232), tag(242));
+        assert!(mixable, "{} 里读不到「可混合」⇒ ⑤ 那条「两种来源同一回合混着抽」的断言失去文档依据", tag(240));
+        assert!(starter_pile_all, "{} 里读不到「全是开端」⇒ ⑤ 那句「从开端堆抽出的必须是开端」失去文档依据", tag(233));
+        assert!(starter_not_in_pile && pile_no_starter, "{} 的「不入继承堆」与{} 的「不包含开端」至少一处读不到了 ⇒ ③ 那条收尸断言失去依据（同一句规则两处措辞，本章各写一次）", tag(219), tag(232));
+        assert!(pile_holds_both, "{} 里读不到「上一关剩余＋新造牌」这两样内容 ⇒ 本章那条「继承堆装什么」的口径少了一半", tag(232));
+        assert!(starter_each > 0 && draw_each > 0 && hand_cap > 0 && starter_turns > 0, "读出的数里有非正数：开端 {starter_each}／抽牌 {draw_each}／手牌上限 {hand_cap}／开端堆每回合 {starter_turns} ⇒ 推不开发牌序列");
+        assert!(manual_n > starter_turns, "{} 的主动次数 {manual_n} 不大于{} 的开端堆次数 {starter_turns} ⇒ ⑤ 无法把「开端堆那道闸」与「主动额度用尽」分开指认，本测要跟着改", tag(240), tag(233));
+
+        let mk_inherit = |n: usize| -> Vec<CardInst> {
+            faction_cards(Faction::Ember)
+                .iter()
+                .skip(1)
+                .enumerate()
+                .take(n)
+                .map(|(i, d)| CardInst::new(500 + i as u64, *d))
+                .collect()
+        };
+        let base_names: Vec<&str> = faction_cards(Faction::Ember).iter().skip(1).map(|d| d.name).collect();
+        // 来源判别：`mk_inherit` 造的件 id 从 500 起，引擎自己发的件 id 从 1 起 ⇒ id≥500 就是「从递进去的那份继承堆来的」。
+        let from_given_pile = |c: &CardInst| c.id >= 500;
+        let opening = (starter_each + draw_each) as usize;
+
+        // ① 开局那 draw 张的来源按关号分派（220／223／224），顺带复核 219 的「开端固定发放」。
+        // 注意 `Battle::new` 末尾会走 §十二:426 的回合开始自动抽，所以这里按**前缀**复现（沿 §五 那条口径）：
+        // 手牌开头必须恰是「开端＋那 draw 张」，多出来的那一张归 §十二 那把尺管。
+        let rich = mk_inherit(topup as usize + 5);
+        let b1 = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, rich, 1);
+        let n1: Vec<&str> = b1.hand.iter().map(|c| c.def.name).collect();
+        assert!(b1.hand.len() >= opening, "{} 说开局手牌是 {starter_each} 张开端＋{draw_each} 张抽牌，引擎只发到 {} 张", tag(219), b1.hand.len());
+        assert!(b1.hand[0].is_starter(), "{} 把开端写在手牌最前（「开端 1张 固定发放」），引擎手牌第一位却是「{}」", tag(219), n1[0]);
+        assert_eq!(b1.hand[..opening].iter().filter(|c| c.is_starter()).count(), starter_each as usize, "{} 说开端每关固定发放 {starter_each} 张，引擎开局前 {opening} 张里有 {} 张开端", tag(219), b1.hand[..opening].iter().filter(|c| c.is_starter()).count());
+        for c in &b1.hand[1..opening] {
+            assert!(!from_given_pile(c), "{} 说第1关「从基础牌堆抽」，引擎发的那张「{}」却出自递进去的继承堆（id {}）", tag(223), c.def.name, c.id);
+            assert!(base_names.contains(&c.def.name), "{} 说第1关从基础牌堆抽，引擎发的「{}」不在烬火教团基础牌表里", tag(223), c.def.name);
+        }
+        let rich2 = mk_inherit(topup as usize + 5);
+        let want_top: Vec<&str> = rich2.iter().map(|c| c.def.name).take(draw_each as usize).collect();
+        let b2 = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, rich2, 2);
+        let got_top: Vec<&str> = b2.hand[1..opening].iter().map(|c| c.def.name).collect();
+        assert_eq!(got_top, want_top, "{} 说第2关起「从继承堆抽」且按堆顶顺序（裁定11），引擎前 {draw_each} 张却是 {got_top:?}（堆顶 {want_top:?}）", tag(224));
+        for c in &b2.hand[1..opening] {
+            assert!(from_given_pile(c), "{} 说第2关起从继承堆抽，引擎发的「{}」id {} 却是引擎自己发的基础牌", tag(224), c.def.name, c.id);
+        }
+        // 不足 → 从基础牌堆补齐（225）：手头那几张先发来，差额必须出自基础牌堆、且不与手头重复。
+        let few = mk_inherit(topup as usize - 1);
+        let have_names: Vec<&str> = few.iter().map(|c| c.def.name).collect();
+        let b3 = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, few, 2);
+        let n3: Vec<&str> = b3.hand.iter().map(|c| c.def.name).collect();
+        assert_eq!(&n3[1..1 + have_names.len()], have_names.as_slice(), "{} 说不足时先把手头那 {} 张发来，引擎却是 {:?}", tag(225), have_names.len(), &n3[1..opening]);
+        for c in &b3.hand[1 + have_names.len()..opening] {
+            assert!(!from_given_pile(c), "{} 说差额「从基础牌堆补齐」，补进来的「{}」id {} 却出自那份不够长的继承堆", tag(225), c.def.name, c.id);
+            assert!(base_names.contains(&c.def.name), "{} 补的「{}」不在烬火教团基础牌表里", tag(225), c.def.name);
+            assert!(!have_names.contains(&c.def.name), "{} 补进来的「{}」是继承堆里本来就有的牌 ⇒ 那不是补齐，是重复发放", tag(225), c.def.name);
+        }
+
+        // ② 开局手牌不计入每回合抽牌次数（226）：额度在开局之后必须**原封不动**。
+        assert_eq!(b2.pf.manual_draws, manual_n, "{} 说开局那 {draw_each} 张「不计入每回合抽牌次数」，可引擎开局后主动抽牌只剩 {} 次 ⇒ 把开局手牌记成了主动抽", tag(226), b2.pf.manual_draws);
+        assert_eq!(b2.pf.starter_draws, starter_turns, "{} 说开端堆每回合可抽 {starter_turns} 次，引擎开局后给了 {}", tag(233), b2.pf.starter_draws);
+
+        // ③ 开端不入继承堆（219 后半句＝232 那半句「不包含开端」）：四个收尸位置里的开端一张都不许带走。
+        let mut b = Battle::new(23, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 5), 2);
+        let sdef = faction_cards(Faction::Ember)[0];
+        // 引擎开局发的那张开端此刻就躺在手牌里，它同样该被剔掉 ⇒ 基线只数**非开端**的那些。
+        fn at_home(b: &Battle) -> Vec<&CardInst> {
+            let mut v: Vec<&CardInst> = b.draw_pile.iter().collect();
+            v.extend(b.hand.iter());
+            v.extend(b.p_front.iter().filter_map(|s| s.as_ref()));
+            v.extend(b.discard_pile.iter());
+            v
+        }
+        let mut want: Vec<u64> = at_home(&b).iter().filter(|c| !c.is_starter()).map(|c| c.id).collect();
+        want.sort_unstable();
+        b.hand.push(CardInst::new(600, sdef));
+        b.draw_pile.push(CardInst::new(601, sdef));
+        b.discard_pile.push(CardInst::new(602, sdef));
+        b.p_front[0] = Some(CardInst::new(603, sdef));
+        let survivors = b.battle_survivors();
+        assert_eq!(survivors.iter().filter(|c| c.is_starter()).count(), 0, "{}／{} 都说开端不入继承堆，收尸结果里却有 {} 张开端（四个位置各塞了一张，开局那张开端也还在手里）", tag(219), tag(232), survivors.iter().filter(|c| c.is_starter()).count());
+        let mut got_ids: Vec<u64> = survivors.iter().map(|c| c.id).collect();
+        got_ids.sort_unstable();
+        assert_eq!(got_ids, want, "开端该被剔掉，可其余每张（手牌＋堆底＋场上＋弃牌堆）都该带走 ⇒ 那道 retain 剔得比文档说的多（期望 {want:?}）");
+
+        // ④ 每回合开始自动抽（239，且那一份出自 232 的「1自动」）。
+        let mut b = Battle::new(29, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 5), 2);
+        let (h0, p0, m0) = (b.hand.len(), b.draw_pile.len(), b.pf.manual_draws);
+        b.player_turn_start();
+        assert_eq!(b.hand.len(), h0 + auto_n as usize, "{} 说每回合开始自动抽 {auto_n} 张，实测手牌从 {h0} 变成 {}", tag(239), b.hand.len());
+        assert_eq!(b.draw_pile.len(), p0 - auto_n as usize, "{} 说那 {auto_n} 张「从继承堆抽」，实测继承堆从 {p0} 变成 {}", tag(239), b.draw_pile.len());
+        assert_eq!(b.pf.manual_draws, m0, "{} 的自动抽牌不许吃掉{} 那 {manual_n} 次主动额度（实测 {m0} → {}）", tag(239), tag(240), b.pf.manual_draws);
+
+        // ⑤ 主动抽的额度、来源与那道开端堆闸（240＋233）。
+        let mut b = Battle::new(31, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 5), 2);
+        b.action_draw(true)
+            .unwrap_or_else(|e| panic!("{} 说行动阶段可主动抽 {manual_n} 张，引擎第一次就拒绝：{e}", tag(240)));
+        let drawn_is_starter = b.hand.last().expect("抽完必有那张牌落在手里").is_starter();
+        let drawn_name = b.hand.last().expect("抽完必有那张牌落在手里").def.name;
+        assert!(drawn_is_starter, "{} 说开端堆「全是开端」，从开端堆抽出的却是「{}」", tag(233), drawn_name);
+        assert_eq!(b.pf.starter_draws, starter_turns - 1, "{} 说开端堆每回合可抽 {starter_turns} 次，抽 1 次之后还剩 {}", tag(233), b.pf.starter_draws);
+        assert!(b.pf.manual_draws > 0, "此处主动额度已归零（{}），下面那条断言就无法区分「开端堆闸」与「额度用尽」", b.pf.manual_draws);
+        let err = b.action_draw(true).expect_err(&format!("{} 说开端堆每回合只 {starter_turns} 次，引擎却让第 {} 次也成功", tag(233), starter_turns + 1));
+        assert!(err.contains("开端堆"), "{} 的闸该落在开端堆上，引擎给的拒绝理由却是「{err}」", tag(233));
+        let before = b.hand.len();
+        b.action_draw(false)
+            .unwrap_or_else(|e| panic!("{} 那句「从继承堆 或 开端堆，可混合」没兑现：同一回合里开端堆抽过之后从继承堆抽被拒：{e}", tag(240)));
+        assert_eq!(b.hand.len(), before + 1, "混合来源那次抽牌该落进手里一张");
+        let mixed = b.hand.last().expect("刚抽的那张必在手里");
+        assert!(!mixed.is_starter(), "{} 说从继承堆抽，抽出来的却是开端「{}」", tag(240), mixed.def.name);
+
+        // ⑥ 每回合最多抽 per_turn_max 张（242＝232 那本账）：自动那次已在构造里发生，主动必须恰好再 {manual_n} 次。
+        let mut b = Battle::new(37, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 5), 2);
+        let h0 = b.hand.len();
+        let mut ok = 0;
+        let mut why = String::from("一直成功，没撞闸");
+        for i in 0..manual_n + 2 {
+            match b.action_draw(i % 2 == 1) {
+                Ok(_) => ok += 1,
+                Err(e) => { why = e; break }
+            }
+        }
+        assert_eq!(ok, manual_n, "{} 说每回合最多抽 {per_turn_max} 张、其中自动 {auto_n} ⇒ 主动该恰好 {manual_n} 次，实测成功 {ok} 次（第一次被拒的理由：{why}）", tag(242));
+        assert_eq!(b.hand.len(), h0 + ok as usize, "那 {ok} 次抽牌在手牌上留下的增量对不上（{h0} → {}）⇒ 中途走了弃牌路径，本测⑥ 的读法失效", b.hand.len());
+
+        // ⑦ 满手牌上限弃最早（243）。
+        assert_eq!(HAND_LIMIT, hand_cap as usize, "文档{} 写的上限是 {hand_cap} 张，引擎常量 `HAND_LIMIT` 却是 {} ⇒ 那一句在人话里对、在代码里不对", tag(243), HAND_LIMIT);
+        let mut b = Battle::new(41, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 5), 2);
+        b.hand.clear();
+        let ids: Vec<u64> = (0..hand_cap as u64).map(|i| 800 + i).collect();
+        for id in &ids {
+            b.push_hand(CardInst::new(*id, faction_cards(Faction::Ember)[1]));
+        }
+        assert_eq!(b.hand.len(), hand_cap as usize, "{} 说手牌上限 {hand_cap} 张，装到 {hand_cap} 张还不弃 ⇒ 实测 {}", tag(243), b.hand.len());
+        b.push_hand(CardInst::new(900, faction_cards(Faction::Ember)[2]));
+        let mut want_ids = ids[1..].to_vec();
+        want_ids.push(900);
+        assert_eq!(b.hand.iter().map(|c| c.id).collect::<Vec<_>>(), want_ids, "{} 说「弃置最早进入手牌的牌，再抽新牌」：手里该剩 id {:?}，实测 {:?}", tag(243), want_ids, b.hand.iter().map(|c| c.id).collect::<Vec<_>>());
+        assert!(b.discard_pile.iter().any(|c| c.id == ids[0]), "{} 弃掉的那张（id {}）该进弃牌堆，实测弃牌堆 {:?}", tag(243), ids[0], b.discard_pile.iter().map(|c| c.id).collect::<Vec<_>>());
     }
 
     /// §十六「触发示例」三行（687/688/689）用**文档自己写的数字**驱动引擎跑一遍：每行给一个阈值与一个
