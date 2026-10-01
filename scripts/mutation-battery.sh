@@ -19,7 +19,7 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 80 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 89 条记录的补丁有没有真打上；
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -412,7 +412,7 @@ n='    *karma -= price;'
 assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n, n+'  // §九:341 变异检验：给示例行补一枚锚'))"
 run
-echo "### M49 只改融合价的一侧（progress.rs 的 -1→-2，ai.rs 不动）⇒ 应红在 ⑤ 逐字同式计数 2→1 ＋ 三条扣费测"
+echo "### M49 只改融合价的一侧（progress.rs 的 -1→-2，ai.rs 不动）⇒ 应红在 ⑤ 逐字同式计数 2→1 ＋ 三条扣费测（§三 入列后实测 **6 红**：既有那 4 条＋§三 复现测（红字落在 md:115「融合 → 消耗业力 = 副牌费用-1」）＋§三 推导器 ③ 的融合价同式 grep——同一条变异多两条红，见其五 状态文档）"
 restore; py "
 p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
 n='(inherit[sub].def.cost - 1).max(0)'
@@ -567,7 +567,7 @@ a='入继承堆 ❌（每关固定发放）'
 assert s.count(a)==1
 open(p,'w',encoding='utf8').write(s.replace(a,'入继承堆 ❌'))"
 DOC="$D/doc.md" run
-echo "### M67 引擎侧把继承堆那行的开端剔除换成恒真 ⇒ 应红在 ⑤ 否定式 cell 的封闭名单 ＋ meta.rs 那条行为测（实测 4 红：⑤ 名单＋ai.rs:907＋meta.rs:590＋session 的 EOF 行为测——这条有正向测兜，行为与形状同时撞）"
+echo "### M67 引擎侧把继承堆那行的开端剔除换成恒真 ⇒ 应红在 ⑤ 否定式 cell 的封闭名单 ＋ meta.rs 那条行为测（§六 入列后实测 **5 红**：⑤ 名单＋ai.rs:907＋meta.rs:590＋session 的 EOF 行为测＋§六 复现测——同一条变异的红字数绑定「哪几章有推导器／复现测」这个前提，章数增加时既有读数会漂）"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='v.retain(|c| !c.is_starter());'
@@ -674,5 +674,81 @@ q='$D/doc.md'; ls=open(q,encoding='utf8').read().split('\n')
 b='（1自动+2可选）'
 assert ls[231].endswith(b), ls[231]
 ls[231]=ls[231][:-1]+'，牌库上限10）'
+open(q,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+
+# ===== §三 业力系统（第十三步·其五）：双记账那层／档位数字↔码面字面／互斥与闸的**执行**／封闭业力写点名单／标签判据那道「不带数字」／分类守卫降级＋独立计数 =====
+echo "### M80 抹掉 battle.rs 里 §三:83 那枚锚（表2「第二次 50%」那档的行尾注释）⇒ 应只红在 §三 推导器「31 行全有锚」那层（双记账）"
+# 配比 锚点0／挂债0／实测31 把整章记成实测，摘锚它看不见。M72 量的是 §六 那一份，一章验过不等于别的章也验过——
+# 这条与 M72 的差别只在章号与行数：文档没动，所以复现测照样绿（引擎返的仍是码面那个 50）。
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+assert s.count('§三:83')==1, s.count('§三:83')
+s2=re.sub(r'  // §三:83[^\n]*','',s)
+assert s2!=s, '正则没命中那行注释'
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M81 文档副本只改 md:83 那一档（第二次 50%→40%，其余三档不动）⇒ 实测 2 红：③ 码面 grep（「1 => 40,」0 处 @ model.rs:3805）＋复现测。复现测那条红在**示例↔表2 的文档内部对账**（battle.rs:3642「md:89 那行说第 2 次返 50%，表2 同一档却写着 40」），比拿档位去驱动引擎那一句更早。② 那层的数字个数仍是 1，拦不住换了值的数"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[82]=='第二次 50%', ls[82]
+ls[82]='第二次 40%'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M82 把献祭那一支从裸费用改成乘**当前**档位（摘掉 md:75「全额，不递减」的机器形式；档位推进仍留着不碰）⇒ 实测 3 红：复现测④ 第一段（battle.rs:3728，档位已掉到 10% 的那张牌献祭仍该拿全额 5，引擎给 0）＋两条**既有**献祭行为测（battle.rs:3097／4036）。本章的牙不是新长的，是把既有盲区接上账"
+# 这条特意不写成 `c.def.cost * pct / 100`——那个式子是 ③ 那份「恰有 2 处」的 needle（另一处是终影吞名，出处速查:985），
+# 写成它会把「互斥被摘」报成「有人硬编了同一个式子」，读数就分不清是哪一句话坏了。
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='                    c.def.cost  // §三:75'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'                    c.def.cost * refund_pct(c.deaths) / 100  // §三:75'))"
+run
+echo "### M83 摘掉同名牌那道闸（条件写成 false，报错文案、名单维护与回合开始清空都留着）⇒ 读数：这条只红在复现测⑤——③ 咬的是那句「本回合献祭过同名」还在不在，不是闸到底执行没执行"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'if false {'))"
+run
+echo "### M84 保底补开端多触发一次（把那个调用点复制一行）⇒ 应红在 ③「self.grant_free_starter(); 实测 1 处」＋复现测⑦ 那条手牌张数（每回合最多1次 ⇒ 一次给 2 张）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            self.grant_free_starter();'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a, a+chr(10)+a))"
+run
+echo "### M85 生产码面新写一条文档里根本没有的业力增补（dead_code 方法，行为不变）⇒ 应只红在 §三 ④ 那份封闭业力写点名单 12→13（M76 的姊妹条，换个章各量一遍）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='impl Battle {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+chr(10)+'    #[allow(dead_code)]'+chr(10)+'    fn s3_probe_charge(&mut self) { self.p_karma += 1; }'))"
+run
+echo "### M86 让那张免费补牌吃掉开端堆额度（在 grant_free_starter 开头扣一次）⇒ 实测 2 红：§三 ④「体内零额度写点」名单由空变非空（model.rs:3841）＋复现测⑦ 那句「不消耗每回合抽牌次数」（battle.rs:3821，额度 (2,0)→(2,-1)）。原设计预测的第三把尺（§六 ④）**没有喊**：那份封闭名单只管 manual_draws，starter_draws 的写点全章只有 §三 ④ 在点名——这条红字里那句「与 §六:226 一起落空」是口径连带，不是另一条测"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        if self.starter_pile > 0 {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        self.pf.starter_draws -= 1;'+chr(10)+a))"
+run
+echo "### M87 摘掉标签判据里那道「不带数字」（M71 的姊妹条）⇒ §三 多这一道是因为 md:128「若玩家手牌为0且场上无卡牌：」那句头里那个 0 **就是触发条件**：吞成标签等于把这条规则从实测里删掉。实测 2 红：复现测红在解析器自己那句「缺 md:128 这一行」（battle.rs:2967，走不到那两组「非空不补」的断言）＋推导器红在 ① 的围栏行集对账（model.rs:3660，第六道围栏 5 行变 4 行）——不是预测的那条 assert_ne"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a=\"    if t.ends_with('：') && s15_digits(t).is_empty() {\"
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,\"    if t.ends_with('：') {\"))"
+run
+echo "### M88 摘掉「初始业力那格该有 2 个数字」那道分类守卫 ＋ 文档 md:64 同一格追加第三个数（键名与 arity 都不动）⇒ 读数：只剩 ② 那份独立计数在喊（M78＋M79 的成对姊妹条）；守卫单独降级时四把尺全绿，那一半由 M88 的前半段单独代证"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            if nums.len() != 2 {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'))
+q='$D/doc.md'; ls=open(q,encoding='utf8').read().split('\n')
+b='开场脚本预算）'
+assert ls[63].endswith(b), ls[63]
+ls[63]=ls[63][:-1]+' 3）'
 open(q,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
