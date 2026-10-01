@@ -2873,8 +2873,13 @@ mod rule_tests {
         // 不足 → 从基础牌堆补齐（225）：手头那几张先发来，差额必须出自基础牌堆、且不与手头重复。
         let few = mk_inherit(topup as usize - 1);
         let have_names: Vec<&str> = few.iter().map(|c| c.def.name).collect();
+        let pile_len = have_names.len();
         let b3 = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, few, 2);
         let n3: Vec<&str> = b3.hand.iter().map(|c| c.def.name).collect();
+        // 长度先单独钉一条：文档张数一旦大于引擎实际发到手里的张数，下面那个切片会**越界 panic**，
+        // 红字就成了「range end index N out of range」这种机器话——落点得是可读的规则陈述（变异 M74 量到的正是这里）。
+        let t225 = tag(225);
+        assert_eq!(b3.hand.len(), opening, "{t225} 说不足时「从基础牌堆补齐」，那么那份 {pile_len} 张的堆补完就该是 {opening} 张手牌（开端 {starter_each}＋抽牌 {draw_each}），引擎实有 {} 张 ⇒ 差额没被填满", b3.hand.len());
         assert_eq!(&n3[1..1 + have_names.len()], have_names.as_slice(), "{} 说不足时先把手头那 {} 张发来，引擎却是 {:?}", tag(225), have_names.len(), &n3[1..opening]);
         for c in &b3.hand[1 + have_names.len()..opening] {
             assert!(!from_given_pile(c), "{} 说差额「从基础牌堆补齐」，补进来的「{}」id {} 却出自那份不够长的继承堆", tag(225), c.def.name, c.id);
