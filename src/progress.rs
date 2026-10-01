@@ -37,11 +37,11 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
         // §九:363 开端不可融合——主牌、副牌**两侧都查**，且不论它此刻在手牌还是继承堆；§五:184 可融合 ❌（同一条规则的两种文档措辞）
         return Err("开端不可融合（无论在手牌还是继承堆）".into());
     }
-    let price = (inherit[sub].def.cost - 1).max(0);  // §廿三:1001 融合费用＝副牌费用-1，最低 0；§九:326 §九:350 同一条规则的两种文档措辞（流程第 3 步／设计意图行）
+    let price = (inherit[sub].def.cost - 1).max(0);  // §廿三:1001 融合费用＝副牌费用-1，最低 0；§九:326 §九:350 同一条规则的两种文档措辞（流程第 3 步／设计意图行）；§三:115 围栏4 第二行「融合 → 消耗业力 = 副牌费用-1（最低0）」＝那个 `- 1` 与那个兜底的 0
     if *karma < price {
         return Err(format!("业力不足：融合需{price}，当前{karma}"));
     }
-    *karma -= price;
+    *karma -= price;  // §三:68 表1「用途 放置卡牌 / 融合」那格的后半句：融合是全仓第二类花业力的动作（第一类在 battle.rs 的放置里）
     let s = inherit.remove(sub); // §九:325 副牌的作用域到此为止：它只在这里被读，之后只贡献 skills
     // 先按原下标校正主牌位置：sub 被摘除后，其后的下标整体前移一位
     let m = &mut inherit[if main > sub { main - 1 } else { main }]; // §九:324 新牌占用主牌那一格；§九:327 生成新牌＝就地改写主牌；§九:334 新牌留在继承堆里
@@ -50,7 +50,7 @@ pub fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, karma: &
         // §九:332 技能＝主牌技能＋副牌技能：逐条 append，不去重、不折叠成集合
         m.skills.push(sk); // §九:352 §九:354 同名技能叠加（§九:357 那条 1+1=2 的等式就是它的落点）
     }
-    m.crafted = true; // 自造牌：任何离场永久消失（§十:372）
+    m.crafted = true; // 自造牌：任何离场永久消失（§十:372）；§三:92 示例第四行「融合后的新牌C，第一次死亡 → 返还100%」＝新牌沿用主牌那份死亡计数、这里**不**清零，所以那句 100% 兑现的前提是"它的主牌本关还没死过"（文档没写"死过两次的牌再融合"吃哪一档，这处边界由 §三 推导器如实登记）
     Ok(format!("{} 吸收副牌「{}」的{n}个技能 → {}", m.def.name, s.def.name, short_card(m)))
 }
 

@@ -96,11 +96,11 @@ impl SideK {
 }
 
 fn refund_pct(deaths_before: u32) -> i32 {  // §廿三:984 递减档 100/50/25/10%，入参是每张牌实例自己的死亡数
-    match deaths_before {
-        0 => 100,
-        1 => 50,
-        2 => 25,
-        _ => 10,
+    match deaths_before {  // §三:94 「设计意图」那两半的机器形状＝档位随死亡次数**下降**（防无限白嫖循环）而最低档**不为 0**（卡牌不会彻底废弃），这两件事在同一张 match 表里
+        0 => 100,  // §三:82 表2「第一次 100%」；§三:89 示例第一行「火苗A，第一次死亡 → 返还100%」
+        1 => 50,  // §三:83 表2「第二次 50%」
+        2 => 25,  // §三:84 表2「第三次 25%」
+        _ => 10,  // §三:85 表2「第四次起 10%（保底）」——那个「起」就是这条 `_`：第五次、第六次都吃同一个数
     }
 }
 
@@ -264,8 +264,8 @@ impl Battle {
                 enemy_faction.name()
             )],
             player_faction,
-            p_karma: 0,  // §十二:422 战斗开始业力 0；§十二:504 进入下一关重新起算；§廿三:982 业力是唯一资源，不自动恢复（回合开始无任何补给）；§五:193 战斗开始：业力 0
-            e_karma: 0,
+            p_karma: 0,  // §十二:422 战斗开始业力 0；§十二:504 进入下一关重新起算；§廿三:982 业力是唯一资源，不自动恢复（回合开始无任何补给）；§五:193 战斗开始：业力 0；§三:64 表1「初始业力」那一格里我方那半句的 0
+            e_karma: 0,  // §三:64 表1 那半句「敌方按遭遇定义（普通关 0）」＝普通关的起点，Boss 关的开场预算在 `new_boss` 里另给
             p_candle: CANDLE_HP,  // §十四:590 我方持业者一侧的起点
             e_candle: CANDLE_HP,  // §十四:595 敌方持业者一侧的起点
             p_front: Default::default(),  // §十二:423 战斗开始场上为空；§五:192 战斗开始：场上空
@@ -306,7 +306,7 @@ impl Battle {
         b.e_candle2 = p.holder_hp2;
         b.holder_names = p.holder_names;
         b.turn_limit = TURN_LIMIT;
-        b.e_karma = p.start_karma;
+        b.e_karma = p.start_karma;  // §三:64 表1 那半句「Boss 关有开场脚本预算」＝全仓唯一一处让敌方业力不是从零起，那个数由 BossProfile 给（数值待人给口径）
         b.log.push(format!("— Boss 登场：{}·{} —", p.name, p.title));
         b.log.push(format!("特殊规则【{}】：{}", p.rule.label(), p.rule_text));
         b
@@ -422,7 +422,7 @@ impl Battle {
         }
     }
 
-    pub fn player_turn_start(&mut self) {  // §十二:426 我方回合「抽牌」步的入口
+    pub fn player_turn_start(&mut self) {  // §十二:426 我方回合「抽牌」步的入口；§三:65 表1「恢复方式 不自动恢复」的落点就是这一句的**里面**——回合开始这一步没有任何业力补给，那件事的机器形式是一份封闭的写点名单（见 model.rs 的 §三 推导器④层）
         self.turn += 1; // §十六:681 跨回合保留：回合推进只动 turn，这里没有 flame 重置（否定式锚，同 §十五:621 一类）
         if self.karma_penalty_next > 0 {
             let before = self.p_karma;
@@ -453,18 +453,18 @@ impl Battle {
         self.dealt_this_turn = 0;
         self.attack_order.clear();
         // §廿二:951 手牌为0且场上无卡 → 免费补1张开端（走 `grant_free_starter`，不占 `manual_draws` 额度）。
-        if self.hand.is_empty() && self.p_front.iter().all(|s| s.is_none()) {
-            self.grant_free_starter();
+        if self.hand.is_empty() && self.p_front.iter().all(|s| s.is_none()) {  // §三:128 围栏6 那条件行的两个子句「手牌为0」且「场上无卡牌」＝这两个判据，缺一不可（少了后半个，场上有卡也会白补一张）
+            self.grant_free_starter();  // §三:131 「每回合最多触发1次」的机器形式＝本函数体里这一个调用点，而 player_turn_start 每回合只被调一次（「全仓只有这一处」由 §三 推导器的封闭调用点名单钉）
         }
     }
 
     /// §廿二:951 保底补开端；§廿二:952 开端堆为空时自动生成1张临时开端（不退还堆计数）。
-    fn grant_free_starter(&mut self) {
-        if self.starter_pile > 0 {
+    fn grant_free_starter(&mut self) {  // §三:130 那句「不消耗每回合抽牌次数」＝这个函数从头到尾不碰两份抽牌额度（主动额度与开端堆额度），它只减继承用不了的堆计数；写点名单由 §六 推导器那份封闭名单管着，多一处扣额度当场红
+        if self.starter_pile > 0 {  // §三:129 「自动从开端堆抽1张」那张数落在这个减一上，抽来的那张在函数末尾进手
             self.starter_pile -= 1;
             self.log.push("保底机制：免费抽1张开端".to_string());
         } else {
-            self.log.push("保底机制：开端堆为空，自动生成1张临时开端".to_string());
+            self.log.push("保底机制：开端堆为空，自动生成1张临时开端".to_string());  // §三:132 「若开端堆为空 → 自动生成1张」那一支：不报错、不减计数，仍然给一张
         }
         let def = faction_cards(self.player_faction)[0];
         let c = self.make_card(def, false);
@@ -529,7 +529,7 @@ impl Battle {
         self.pf.sacrifice_used = true;
         self.pf.sacrificed_names.push(c.def.name);
         self.log.push(format!("献祭（场上）{}", c.def.name));
-        self.on_death(c, SideK::Player, Some(col), DeathCause::Sacrifice);
+        self.on_death(c, SideK::Player, Some(col), DeathCause::Sacrifice);  // §三:108 围栏3 第2条「献祭获得全额费用」的兑现入口：死因记成献祭，收益那一支因此不走递减（同 §三:99）
         Ok(())
     }
 
@@ -598,9 +598,9 @@ impl Battle {
     /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
     /// §廿二:944 越线死亡统一走 `on_death(.., DeathCause::Cross)`：触发亡语、按死亡返还递减获得业力。
     fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
-        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力；§五:198 开端放到 P1＝0 费、不消耗业力
+        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力；§五:198 开端放到 P1＝0 费、不消耗业力；§三:116 围栏4 第三行「开端 → 放置不消耗业力」＝那个 0
         match side {
-            SideK::Player => self.p_karma -= cost,
+            SideK::Player => self.p_karma -= cost,  // §三:114 围栏4 第一行「放置卡牌 → 消耗业力 = 卡牌费用」与 §三:68 表1「用途」那格前半句的共同落点
             SideK::Enemy => self.e_karma -= cost,
         }
         let mut c = card;
@@ -625,7 +625,7 @@ impl Battle {
         let _ = slot;
         if let Some(old) = old {  // §十七:755 我方挤压＝新卡挤旧卡，越线死亡（同一条路径对两侧通用）
             self.log.push(format!("挤压：{} 越线死亡", short_card(&old)));  // §十二:435 旧卡越线死亡
-            self.on_death(old, side, Some(col), DeathCause::Cross);  // §十二:435 越线死亡按死亡返还递减返业力；§廿三:1006 挤压；§十七:733 新卡占位＋旧卡越线＋业力＝旧卡费用（按递减）；§十七:764 越过＝直接死亡（本行是唯一出口，没有"越过后再落到某格"的分支）
+            self.on_death(old, side, Some(col), DeathCause::Cross);  // §十二:435 越线死亡按死亡返还递减返业力；§廿三:1006 挤压；§十七:733 新卡占位＋旧卡越线＋业力＝旧卡费用（按递减）；§十七:764 越过＝直接死亡（本行是唯一出口，没有"越过后再落到某格"的分支）；§三:76 围栏1 第三行「越线死亡 → …按死亡返还递减」＝死因记成越线的那一支
         }
         let slot_now = match (side, row) {
             (SideK::Player, _) => &self.p_front[col],
@@ -661,7 +661,7 @@ impl Battle {
         }
         let starter = self.hand[hand_idx].is_starter();
         let cost = if starter { 0 } else { self.hand[hand_idx].def.cost };
-        if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {
+        if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {  // §三:107 围栏3 第1条「本回合不能再放置同名牌」的闸；那份名单在回合开始清空＝只管本回合，跨回合自动解禁（与 §廿二 那条"献祭过的牌下关照常回归"不是一回事）
             return Err(format!("本回合献祭过同名牌「{}」，不能再放置", self.hand[hand_idx].def.name));
         }
         if self.p_karma < cost {  // §十二:433 业力不足即拒绝；§五:205 「2 业力放一张 2 费或两张 1 费」的余额闸就是这一行
@@ -1110,10 +1110,10 @@ impl Battle {
         let devour = cause == DeathCause::Sacrifice
             && side == SideK::Player
             && self.boss_rule() == crate::boss::BossRule::DevourName;
-        let gain = match cause {  // §廿三:983 死亡/献祭的业力收益只在这一处算，基数＝卡牌费用
-            DeathCause::Sacrifice => {  // §廿三:986 开端献祭定额 2 业力，不走递减（裁定1）；§五:204 献祭开端 → 获得 2 业力（来源：特性）
+        let gain = match cause {  // §廿三:983 死亡/献祭的业力收益只在这一处算，基数＝卡牌费用；§三:66 表1「获取方式 己方卡牌死亡 或 主动献祭」＝这个 match 的**全部**分支（没有第三种收益来源）；§三:67 表1「获取量 卡牌费用（非数值）」＝这里只读卡定义里的费用，一次都不读那张牌的血量/伤害
+            DeathCause::Sacrifice => {  // §廿三:986 开端献祭定额 2 业力，不走递减（裁定1）；§五:204 献祭开端 → 获得 2 业力（来源：特性）；§三:99 围栏2 第一行「主动献祭…不触发死亡返还递减」＝这一整支里都不推进死亡计数
                 if c.is_starter() {
-                    2
+                    2  // §三:122 围栏5 那一长串里的「获得2业力」＝开端献祭的定额，与它的 0 费无关（同 §五:182 特性第三子句）
                 } else if devour {
                     // 终影「吞名」：我方主动献祭改按**当前**死亡返还档位计。
                     // 不推进 deaths——速查:985「主动献祭…不触发死亡返还递减」；推进档位会让单场惩罚
@@ -1121,21 +1121,21 @@ impl Battle {
                     let pct = refund_pct(c.deaths);
                     c.def.cost * pct / 100
                 } else {
-                    c.def.cost
+                    c.def.cost  // §三:75 围栏1 第二行「主动献祭 → 获得业力 = 该卡牌费用（全额，不递减）」＝这一支拿的是裸费用，上面那一支才乘档位
                 }
             }
-            DeathCause::Battle | DeathCause::Cross => {
+            DeathCause::Battle | DeathCause::Cross => {  // §三:74 围栏1 第一行「己方卡牌死亡 → …（按死亡返还递减）」＝被击杀这一支；§三:100 后半句说的"自然死亡"两种死因都在这里合流（越线那处另有自己的锚）
                 if c.is_starter() {  // §五:182 特性第一子句「死亡获 2 业力」：自然死亡/越线也不走递减
                     2
                 } else {
                     let pct = refund_pct(c.deaths);  // §十二:494 业力＝卡牌费用，按死亡返还递减；§廿三:989 业力＝费用
-                    c.deaths += 1;
+                    c.deaths += 1;  // §三:100 围栏2 第二行「自然死亡（被击杀/越线）→ 触发死亡返还递减」＝就这一句推进档位；§三:91 示例第三行「火苗A第二次死亡 → 返还50%」里那个"第二次"存在这张牌自己身上（同 §三:90 的实例独立）
                     c.def.cost * pct / 100
                 }
             }
         };
         match side {
-            SideK::Player => self.p_karma += gain,
+            SideK::Player => self.p_karma += gain,  // §三:69 表1「三位一体」后半句「业力 = 费用」在我这一侧的落点：赚的那头读的是费用、花的那头（放置/融合）扣的也是同一个数
             SideK::Enemy => self.e_karma += gain,
         }
         let tag = if devour { "（吞名·按死亡返还递减）" } else { "" };

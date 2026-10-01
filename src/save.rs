@@ -395,7 +395,7 @@ fn parse_card(faction: Faction, body: &str, no: usize) -> Result<CardInst, Strin
     let mut c = CardInst::new(num::<u64>(id, "id", no)?, def);
     c.deaths = num::<u32>(deaths, "deaths", no)?;
     // 这条**不是规则边界**：§三:85「第四次起10%（保底）」说明档位到 3 就不再变，更大的数没有语义。
-    // 它是防回绕闸：`battle.rs:1102` 的 `deaths += 1` 撞上 u32::MAX 时 debug 直接 panic，release 回绕成 0
+    // 它是防回绕闸：battle.rs 里那句 `c.deaths += 1`（自然死亡那一支）撞上 u32::MAX 时 debug 直接 panic，release 回绕成 0
     // ⇒ 返还从 10% 跳回 100%，把一个坏字节变成一笔白赚的收益。整局 60 关 × 300 回合也到不了一百万次死亡。
     if c.deaths > MAX_DEATHS {
         return Err(format!("第{no}行 deaths＝{} 不合理（防回绕上限 {MAX_DEATHS}）", c.deaths));
