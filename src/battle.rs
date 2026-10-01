@@ -2395,7 +2395,7 @@ mod rule_tests {
             seq.push(b.p_karma);
         }
         let want: Vec<i32> = (1..=cap + 2).map(|i| karma_after_place + gain * i.min(cap)).collect();
-        assert_eq!(seq, want, "开端在场时回合末的业力序列对不上文档：{} 说每次 +{gain}、{} 说每关最多 {cap} 次（期望 {want:?}）", tag(200), tag(201));
+        assert_eq!(seq, want, "开端在场时回合末的业力序列对不上文档：每次 +{gain} 与每关最多 {cap} 次**都**出自 {}（后者写在那行的括号里），{} 的长期收益只佐证每次 +1（期望 {want:?}）", tag(200), tag(201));
 
         // ④ 选择B（204／206／207）：手牌献祭开端得 sac 业力、场上仍是 sac 行说的那 0 张、且那份长期收益从此不再给。
         let mut b = Battle::new(13, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 2), 2);

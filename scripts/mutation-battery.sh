@@ -19,7 +19,7 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 62 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 72 条记录的补丁有没有真打上；
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -284,7 +284,7 @@ restore; py "
 import re
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
 n=len(re.findall(r'§七:266(?![0-9])', s))
-assert n==2, '§七:266 现有 %d 处（本记录预期 2 处）' % n + ' ⇒ 有人新增或删掉了一处提及：交叉引用也算锚，多出来的那一处会吸收掉这条抹除，整族静默转绿（M33 就曾被 §五 帧新写的「见 §七:265／§七:266」吸收过一次）'
+assert n==3, '§七:266 现有 %d 处（本记录预期 3 处）' % n + ' ⇒ 有人新增或删掉了一处提及：交叉引用也算锚，多出来的那一处会吸收掉这条抹除，整族静默转绿（M33 就曾被 §五 帧新写的「见 §七:265／§七:266」吸收过一次）'
 s2=re.sub(r'§七:266(?![0-9])','',s)
 assert s2!=s, '没抹到 §七:266'
 open(p,'w',encoding='utf8').write(s2)"
@@ -483,14 +483,16 @@ ls[341]=ls[341].replace('3费','4费',1)
 open(p,'w',encoding='utf8').write(chr(10).join(ls))"
 DOC="$D/doc.md" run
 echo "### M57 §九 那台推导器的同一行围栏守卫做同样降级 ⇒ 实测红在**标签计数**（347／363 被吞成标签）而非 rows：同一处降级在两章落在不同层，这条落点是量出来的不是推的"
+# 判据多带一行（§九 那条「不以全角冒号收尾」的否决）：§五 帧把这台 walk 照了一遍，那 4 行成了两处，
+# 单靠前 4 行 replace 会同时打进两章——落点就读不出是谁红的了。§五 的同一降级是 M71。
 restore; py "
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
-n='            if t.is_empty() || fence {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'
+n='            if t.is_empty() || fence {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'+chr(10)+\"            if arity(n) == 1 && !t.ends_with('：')\"
 assert s.count(n)==1, s.count(n)
-open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'))"
+open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'+chr(10)+\"            if arity(n) == 1 && !t.ends_with('：')\"))"
 run
 echo "### M19 收尾：全部复原后整族应全绿"; restore; run
-echo "### M58 生产码里抹掉一枚真锚点的冒号（ai.rs 的 §五:210 写成 §五210）⇒ 应只红在 隐形锚点测"
+echo "### M58 生产码里抹掉一枚真锚点的冒号（ai.rs 的 §五:210 写成 §五210）⇒ 实测双红：隐形锚点测（model.rs:3680）＋ §五 推导器的认领路（model.rs:3072）——本帧 §五 立了推导器，md:210 那行从此两把尺都看得见，这条的落点由一红变两红"
 # 本帧 bug 类的反证，也是那条测存在的理由：同一个补丁打在 HEAD（6bb2725，收成语法之前）**151 全绿**——
 # 臂A 实测。少冒号的写法反向覆盖看不见、正向尺当时还替它作证（冒号写成可选），全仓唯一的信号是"绿"。
 restore; py "
@@ -520,4 +522,89 @@ p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
 a=\"                Some(&':' | &'：') => j + 1,\"
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,chr(32)*16+\"Some(&':') => j + 1,\"))"
+run
+
+# ===== §五 开端·核心起始牌（第十三步·其三）：表体逐字段等值／特性↔围栏对撞／否定式 cell 封闭名单 =====
+echo "### M62 抹掉 battle.rs 里 §五:199 那枚锚（放置后场上那 1 张卡）⇒ 应只红在 §五 推导器「19 行全有锚」那层"
+# 配比 锚点8／挂债0／实测11 把围栏行按实测优先记，摘掉围栏行的锚它看不见。§十四 的 M39 量过这条路，
+# 这里逐章补量一次：双记账那层靠的是各章自己的行名单，一章验过不等于别的章也验过。
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2=re.sub(r'\s*//\s*§五:199[^\n]*','',s)
+assert s2!=s, s.count('§五:199')
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M63 文档副本 md:200「每关最多2次」→3（md:182 与 §十二:452 都不动）⇒ 应红在 ③ 特性行↔围栏 对撞 ＋ 复现测"
+# 按行号打，不按整篇 replace：'（每关最多2次）' 在文档里有两处（md:200 与 §十二:452 那条流程步），
+# 整篇替换会顺手把 §十二 那一处也改掉——那就不再是"§五 一处改动"，落点读不出是谁红的。
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert '（每关最多2次）' in ls[199] and '每回合结束获得1业力' in ls[199], ls[199]
+ls[199]=ls[199].replace('（每关最多2次）','（每关最多3次）')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M64 文档副本把 md:182 与 md:200 两处上限同步改成 3 ⇒ ③ 平了，应红在 ④ 码面闸与复现测（正证 ④ 不是 ③ 的重复）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert '（每关上限2次）' in ls[181], ls[181]
+assert '（每关最多2次）' in ls[199], ls[199]
+ls[181]=ls[181].replace('（每关上限2次）','（每关上限3次）')
+ls[199]=ls[199].replace('（每关最多2次）','（每关最多3次）')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M65 文档副本 md:180「数值 1（血量=伤害=1）」两处一起 →2 ⇒ 应红在 ② 逐字段等值（文档内部自洽那条照样绿，正是它该绿的地方）"
+restore; py "
+p='$D/doc.md'; s=open(p,encoding='utf8').read()
+a='数值 1（血量=伤害=1）'
+assert s.count(a)==1
+open(p,'w',encoding='utf8').write(s.replace(a,'数值 2（血量=伤害=2）'))"
+DOC="$D/doc.md" run
+echo "### M66 文档副本删掉 md:185 括号那句「每关固定发放」⇒ 应红在 ③ 那句与 md:191 手牌行的连线（❌ 那半截仍绿）"
+restore; py "
+p='$D/doc.md'; s=open(p,encoding='utf8').read()
+a='入继承堆 ❌（每关固定发放）'
+assert s.count(a)==1
+open(p,'w',encoding='utf8').write(s.replace(a,'入继承堆 ❌'))"
+DOC="$D/doc.md" run
+echo "### M67 引擎侧把继承堆那行的开端剔除换成恒真 ⇒ 应红在 ⑤ 否定式 cell 的封闭名单 ＋ meta.rs 那条行为测（实测 4 红：⑤ 名单＋ai.rs:907＋meta.rs:590＋session 的 EOF 行为测——这条有正向测兜，行为与形状同时撞）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='v.retain(|c| !c.is_starter());'
+assert s.count(a)==1
+open(p,'w',encoding='utf8').write(s.replace(a,'v.retain(|c| c.hp >= 0);'))"
+run
+echo "### M68 摘掉 s5_classify 回合末分支的数字个数守卫（expect(2)→expect(nums.len())，文档不动）⇒ 实测全绿：这条是盲区登记"
+# 记录形状本身：守卫单独降级、不打文档配合，四把尺量不到——它的牙只在"文档那一行多写了第四个数"时才出。
+# 与 M33 同一类（抹除被别的层吸收），差别是这条**根本不红**，所以必须留字，别等到哪天把它当成有牙的尺。
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        expect(2, \"回合末行（每次多少＋上限几次）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        expect(nums.len(), \"回合末行（每次多少＋上限几次）\");'))"
+run
+echo "### M69 M68 那层守卫降级 ＋ 文档 md:200 写成「每2回合结束获得1业力」⇒ 实测红在解析器的**形态 panic**（battle.rs:1931，复现测与推导器同一条）：落点没有漂到数值层，原先那句「会误导人去查引擎」被实测否掉——守卫降级丢的只是「第几个数不对」这半句人话"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        expect(2, \"回合末行（每次多少＋上限几次）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        expect(nums.len(), \"回合末行（每次多少＋上限几次）\");'))
+q='$D/doc.md'; d=open(q,encoding='utf8').read()
+b='但开端在场时，每回合结束获得1业力'
+assert d.count(b)==1, d.count(b)
+open(q,'w',encoding='utf8').write(d.replace(b,'但开端在场时，每2回合结束获得1业力'))"
+DOC="$D/doc.md" run
+echo "### M70 M69 的那处文档改动、守卫**不**降级 ⇒ 应红在解析器当场 panic（正证那条 expect 买到的就是这一句人话落点）"
+restore; py "
+q='$D/doc.md'; d=open(q,encoding='utf8').read()
+b='但开端在场时，每回合结束获得1业力'
+assert d.count(b)==1, d.count(b)
+open(q,'w',encoding='utf8').write(d.replace(b,'但开端在场时，每2回合结束获得1业力'))"
+DOC="$D/doc.md" run
+echo "### M71 §五 那台推导器的围栏内不判标签（M57 的姊妹条）⇒ 实测红在哪一层是量出来的：rows 与标签名单一起长，围栏那 15 行不再只由解析器给"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='            if t.is_empty() || fence {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'+chr(10)+'            if arity(n) == 1 && (nb_text == '
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'            if t.is_empty() {'+chr(10)+'                continue;'+chr(10)+'            }'+chr(10)+'            let nb_text = at(next_non_blank(n)).trim();'+chr(10)+'            if arity(n) == 1 && (nb_text == '))"
 run
