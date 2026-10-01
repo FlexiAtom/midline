@@ -2922,6 +2922,300 @@ mod anchor_tests {
         engine_repro_test_exists("section9_fuse_rows_reproduce_on_the_engine");
     }
 
+    /// §五 开端·核心起始牌反向覆盖：19 条必检行——**这一章第一次把文档那张卡逐字段撞回 `STARTER`**。
+    ///
+    /// 形状：列头「项目 内容」＋七行表体（179–185）＋一道开局围栏（189–208）。表体走"锚点指回＋逐字段等值"，
+    /// 围栏走"锚点指回＋文档数字驱动引擎"（`battle::parse_section5_opening` ＋ `s5_fold` ＋
+    /// `section5_opening_fence_reproduces_on_the_engine`）。与 §十四 那台模板的差别只有一处：**标签分两档给**——
+    /// 围栏外的 `开端`／`开局选择` 由形状路判（arity 1 且下一非空行是列头或 ```），围栏内的 4 条标签
+    /// （190/195/197/203）由**解析器**给，推导器不在围栏里再判一次（同 §十四 那条理由：两处各判会朝不同方向错）。
+    ///
+    /// **双记账**同 §十四——19 行**全**要求锚点指回，走了实测路也不豁免。两层的牙不一样：
+    /// 摘掉 md:199 的锚 ⇒ 只有"19 行全有锚"那条红（配比 锚点8／挂债0／实测11 看不见）；
+    /// 把文档副本 md:200 的「每关最多2次」改成 3 ⇒ 只有引擎实测那条红（行数没变，形状尺量不到数字）。
+    ///
+    /// 六层各钉一件事：
+    /// ① 认领路：配比 锚点8／挂债0／实测11；19 行全有锚；`NOT_A_RULE` 不吃本章任何一行。
+    /// ② 表体逐字段等值 vs `STARTER`：键是**封闭词表**（7 个），费用→`cost`／数值→`power`（那一格里两个数
+    ///    必须彼此相等且等于 `power`，文档"血量=伤害=1"就是这一个字段）／阈值→`threshold`／特性→`TraitKind::Starter`，
+    ///    外加 md:176 那两个字 ↔ `STARTER.name` 逐字节。
+    /// ③ **文档两处对撞**（表体 ↔ 围栏，不碰引擎）：182 第一子句那个数 ↔ 204 ↔ 207；182 第三子句 (+N／上限M) ↔ 200 ↔ 201；
+    ///    179 费用 ↔ 198 那个费；185「每关固定发放」↔ 191 手牌行含开端。
+    /// ④ 上限那道闸在码面只认一个数，而且那个数由文档给（③ 已把它与 182/200 撞平）。
+    /// ⑤ 三条**否定式** cell 各落成一份**封闭的**码面形状——"没有这东西"只能靠点名实现处来证。
+    /// ⑥ 复现测还在（`engine_repro_test_exists`）。
+    ///
+    /// 边界如实登记：md:191 在复现测里只复现成**前缀**（开局手牌的头几张），因为 `Battle::new` 末尾调
+    /// `player_turn_start()`——§十二:426 那张"回合开始自动抽 1 张"归 §十二，把它算进 §五 的张数就是替别的章作证。
+    /// md:210「设计意图」只拿到一个锚（`ai.rs` 献祭分支）：它写的是"取舍"，机器侧唯一可读的形状就是 AI 真选了哪一侧，
+    /// 语义本身仍不可机检。把「长期收益」实现成一次性 +1，③ 量不到（数都对），靠 `flags.starter_gains` 那个计数器
+    /// 与复现测里逐回合递增的那条序列兜。
+    #[test]
+    fn every_row_of_section5_starter_is_anchored_back_and_its_opening_fence_is_reproduced() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "五、开端 · 核心起始牌")
+            .expect("§五 标题必须存在（文档结构变了就要同步改本检查）");
+        let arity = |n: usize| -> usize { at(n).split_whitespace().count() };
+        let next_non_blank = |n: usize| -> usize {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            k
+        };
+        let block_len = |n: usize| -> usize {
+            let mut k = n;
+            let mut cnt = 0usize;
+            while k <= lines.len() && !at(k).trim().is_empty() && at(k).trim() != "---" && at(k).trim() != "```" {
+                cnt += 1;
+                k += 1;
+            }
+            cnt
+        };
+
+        // 围栏外的形状路（标签／列头）＋围栏内的解析器路，两条拼成必检集。
+        const S5_HEADERS: [&str; 1] = ["项目 内容"];
+        let mut rows: Vec<usize> = Vec::new();
+        let mut labels: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence = false;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if !fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence = !fence;
+                fence_ticks += 1;
+                continue;
+            }
+            if t.is_empty() || fence {
+                continue;
+            }
+            let nb_text = at(next_non_blank(n)).trim();
+            if arity(n) == 1 && (nb_text == "```" || S5_HEADERS.contains(&nb_text)) {
+                labels.push(n);
+                continue;
+            }
+            if S5_HEADERS.contains(&t) {
+                assert!(block_len(n) >= 2, "md:{n}「{t}」在列头词表里却不在任何表格块的开头 ⇒ 文档改了表形，词表得跟着改（结构与字面两个方向都要对得上）");
+                headers.push(n);
+                continue;
+            }
+            rows.push(n);
+        }
+        assert_eq!(fence_ticks, 2, "§五 应只有一道 ``` 围栏（开局选择那一段），实测 {fence_ticks} 个围栏符 ⇒ 文档加了第二段围栏，而解析器只读第一道，那里的新行会从两把尺外面一起漏过去");
+        assert!(!fence, "§五 的围栏没有闭合（数到奇数个 ```）");
+        assert_eq!(
+            labels,
+            vec![176, 187],
+            "§五 围栏外的标签应恰好是 176 开端／187 开局选择，实测 {labels:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效"
+        );
+        assert_eq!(headers, vec![178], "§五 的列头应恰好是 178「项目 内容」，实测 {headers:?} ⇒ 列头判据失效（结构＋字面两个条件缺一不可）");
+        assert_eq!(
+            rows,
+            vec![179, 180, 181, 182, 183, 184, 185, 210],
+            "§五 围栏外应得表体 7 行＋设计意图 210，实测 {rows:?} ⇒ 表体行数或 210 的形状判据变了"
+        );
+
+        let parsed = crate::battle::parse_section5_opening(&lines);
+        let fence_labels: Vec<usize> = parsed.iter().filter(|c| c.claim == crate::battle::S5Claim::Label).map(|c| c.line).collect();
+        let verified: Vec<usize> = parsed.iter().filter(|c| c.claim != crate::battle::S5Claim::Label).map(|c| c.line).collect();
+        assert_eq!(
+            fence_labels,
+            vec![190, 195, 197, 203],
+            "§五 围栏内的标签由解析器给，应恰好是 190 战斗开始／195 我方回合1／197 选择A／203 选择B，实测 {fence_labels:?} ⇒ 有围栏行被当成标签吞掉（那一条就此从实测与配比里一起隐身）"
+        );
+        assert_eq!(
+            verified,
+            vec![191, 192, 193, 198, 199, 200, 201, 204, 205, 206, 207],
+            "§五 围栏实测行应为 开局3＋选择A的4＋选择B的4＝11 行，实测 {verified:?} ⇒ 解析器与本推导器对同一段围栏读法不同"
+        );
+        rows.extend(verified.iter().copied());
+        rows.sort_unstable();
+        assert_eq!(rows.len(), 19, "§五 必检行应恰好 19 行（围栏外 8＋围栏内 11），实测 {} 行 ⇒ 文档加了规则或推导口径失效", rows.len());
+        // 成员级双向钉：三种形态各钉一行必须在必检集，各类排除行各钉一行必须不在。
+        for n in [179usize, 182, 185, 191, 199, 207, 210] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §五 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [174usize, 176, 178, 187, 189, 190, 197, 208, 212] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／标签／列头／围栏符判据失效", at(n));
+        }
+
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §五 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+
+        // ① 三条认领路＋配比。
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§五 有 {} 行既无锚点指回、也不在债表里、又不是围栏里被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (8, 0, 11),
+            "§五 三条认领路应为 锚点8／挂债0／实测11（围栏行按实测优先计），实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从一条路悄悄挪到另一条"
+        );
+        for n in [179usize, 180, 181, 182, 183, 184, 185, 210] {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）是围栏外必检行，登记的处置是「锚点指回」，现在没有锚点＝实现被删或锚被摘", at(n));
+        }
+        // 双记账那层：分区计数把围栏行按实测优先记，摘掉它们的锚它**看不见**（同 §十四 的 M39）。
+        for &n in &rows {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）没有锚点指回 ⇒ §五 的纪律是 19 行**全**指回，走了实测路也不豁免锚点", at(n));
+        }
+        assert!(
+            rows.iter().all(|n| !debited.contains(n)),
+            "§五 不该有挂债行：本章 19 行全部已实现并已指回，任何一行躺进债表都说明实现被撤"
+        );
+
+        // ② 表体逐字段等值。列头之后那 7 行是「键 值」，键是**封闭词表**，值里的数就是文档给的数。
+        const S5_KEYS: [&str; 7] = ["费用", "数值", "阈值", "特性", "技能", "可融合", "入继承堆"];
+        let mut cells: Vec<(usize, String, String)> = Vec::new();
+        for n in (headers[0] + 1)..=lines.len() {
+            let t = at(n).trim();
+            if t.is_empty() {
+                break;
+            }
+            let mut it = t.split_whitespace();
+            let k = it.next().unwrap_or("").to_string();
+            let rest: Vec<&str> = it.collect();
+            assert!(
+                S5_KEYS.contains(&k.as_str()) && rest.len() == 1,
+                "md:{n}「{t}」不是 §五 表体那 7 个键之一的「键 单值」形态（键表 {S5_KEYS:?}，实测键「{k}」／值段 {} 段）⇒ 文档改了这张表的形（加列、或把一个值拆成两段），逐字段等值就没法成立",
+                rest.len()
+            );
+            cells.push((n, k, rest[0].to_string()));
+        }
+        assert_eq!(
+            cells.iter().map(|(_, k, _)| k.as_str()).collect::<Vec<&str>>(),
+            S5_KEYS.to_vec(),
+            "§五 表体的键与顺序应恰好是 {S5_KEYS:?}，实测 {:?}（行号 {:?}）⇒ 加行、删行或换序都会让「这张表描述的就是引擎那张卡」失去唯一读法",
+            cells.iter().map(|(_, k, _)| k.as_str()).collect::<Vec<&str>>(),
+            cells.iter().map(|(n, _, _)| *n).collect::<Vec<usize>>()
+        );
+        let cell = |key: &str| -> &str {
+            cells.iter().find(|(_, k, _)| k == key).map(|(_, _, v)| v.as_str()).unwrap_or_else(|| panic!("§五 表体没有「{key}」这一格"))
+        };
+        assert_eq!(crate::battle::s15_digits(cell("费用")), vec![super::STARTER.cost], "md:179「费用 {}」与 `STARTER.cost`={} 不等 ⇒ 文档改了价、代码没跟着改（围栏里那个「0费」由 ③ 撞回来）", cell("费用"), super::STARTER.cost);
+        let powers = crate::battle::s15_digits(cell("数值"));
+        assert_eq!(powers.len(), 2, "md:180「数值 {}」应给两个数（数值本身＋「血量=伤害=1」那两个里的一个），实测 {powers:?} ⇒ 这一格换了形制，\"一个字段两处用\"那条就不成立了", cell("数值"));
+        assert_eq!(powers[0], powers[1], "md:180「数值 {}」里那两个数不等 {powers:?} ⇒ 文档这张卡自己血量与伤害分家，而引擎只有 `power` 一个字段（§七:265／§七:266），按哪头都不服另一头", cell("数值"));
+        assert_eq!(super::STARTER.power, powers[0], "md:180 的数值 {} ≠ `STARTER.power`={} ⇒ 改任何一侧都要撞这里，挂锚证不了\"数相等\"", powers[0], super::STARTER.power);
+        assert_eq!(crate::battle::s15_digits(cell("阈值")), vec![super::STARTER.threshold], "md:181「阈值 {}」≠ `STARTER.threshold`={}（触发特性所需业火值，比较点在 `battle.rs` 的触发闸）", cell("阈值"), super::STARTER.threshold);
+        assert!(matches!(super::STARTER.tr, super::TraitKind::Starter), "md:182 那一整行说这张卡自带特性 ⇒ 码面类型标签必须是 `TraitKind::Starter`；实测不是，则 ④⑤ 点名的那些靠 `is_starter()` 的开端闸会集体失效（免费放置、回合末 +1、献祭定额、不入堆）");
+
+        // ③ 文档两处对撞：特性行的三个子句 ↔ 围栏里选择A／选择B 那几条。按位置取，所以先钉顺序。
+        let clauses: Vec<&str> = cell("特性").split('；').collect();
+        assert_eq!(clauses.len(), 3, "md:182「特性 {}」按全角分号切出 {} 子句，应为 3（死亡获业力／放置不消耗业力／在场回合末 +N 上限M）⇒ 文档加了第四子句，得同步扩这里与它的落点", cell("特性"), clauses.len());
+        assert!(
+            clauses[0].contains("死亡") && clauses[1].contains("不消耗业力") && clauses[2].contains("每回合结束"),
+            "md:182 三个子句的**顺序**变了（0「{}」1「{}」2「{}」）⇒ 这里是按位置取数的，换序等于把数挂到别的条款上",
+            clauses[0], clauses[1], clauses[2]
+        );
+        let death = crate::battle::s15_digits(clauses[0]);
+        assert_eq!(death.len(), 1, "md:182 第一子句「{}」应恰给一个数（死亡获N业力），实测 {death:?}", clauses[0]);
+        assert_eq!(crate::battle::s15_digits(clauses[1]), Vec::<i32>::new(), "md:182 第二子句「{}」里出现了数字 ⇒ 「放置不消耗业力」被写成了别的东西（那个 0 费在 md:198，别在这里加第二处真值）", clauses[1]);
+        let turn = crate::battle::s15_digits(clauses[2]);
+        assert_eq!(turn.len(), 2, "md:182 第三子句「{}」应给两个数（每次 +N／每关上限M），实测 {turn:?}", clauses[2]);
+        // 围栏折叠出的那几个数**由文档给**（`s5_fold` 少一行当场 panic）：③ 拿它们撞表体，复现测拿它们撞引擎。
+        let f = crate::battle::s5_fold(&parsed);
+        let f_starter_in_hand = f.hand.expect("折叠后必有手牌行：缺它 `s5_fold` 已 panic").0;
+        let f_place_cost = f.place_free.expect("折叠后必有放置行").1;
+        let (fe_gain, fe_cap) = f.turn_end.expect("折叠后必有回合末行");
+        let f_accumulate = f.accumulate.expect("折叠后必有长期收益行");
+        let f_sac_gain = f.sac_gain.expect("折叠后必有献祭行");
+        let f_burst_gain = f.burst.expect("折叠后必有短期爆发行").0;
+
+        assert_eq!(
+            (turn[0], turn[1]),
+            (fe_gain, fe_cap),
+            "md:182 特性行给的 (+{}／上限{}) 与 md:200 围栏里的 (+{}／最多{}) 不等 ⇒ 同一条规则在文档两处各写一套，引擎按哪边都不服另一边",
+            turn[0], turn[1], fe_gain, fe_cap
+        );
+        assert_eq!(
+            turn[0], f_accumulate,
+            "md:182 那份每回合 +{} 与 md:201「长期收益：每回合+{}业力」不等 ⇒ 长期收益那条与特性行分叉",
+            turn[0], f_accumulate
+        );
+        assert_eq!(
+            death[0], f_sac_gain,
+            "md:182 第一子句「死亡获{}业力」与 md:204「献祭开端 → 获得{}业力」不等 ⇒ md:204 明写「来源：特性」，那两个数必须就是同一个数",
+            death[0], f_sac_gain
+        );
+        assert_eq!(
+            f_sac_gain, f_burst_gain,
+            "md:204 那个 {} 与 md:207「短期爆发：立即获得{}业力」不等 ⇒ 选择B 的价在围栏里两处各写一套",
+            f_sac_gain, f_burst_gain
+        );
+        assert_eq!(
+            super::STARTER.cost, f_place_cost,
+            "md:179 表体那个费用 {} 与 md:198「开端放到P1，{}费」不等 ⇒ 卡表费用与放置费分叉（引擎只按 `is_starter()` 硬编 0，文档任一处改了都得撞这里）",
+            super::STARTER.cost, f_place_cost
+        );
+        assert!(f_starter_in_hand, "md:191 的手牌行不含「开端」⇒ md:185「{}」那条在本章实测里隐身了（开局第一张必须就是开端，不是从堆里抽来的）", cell("入继承堆"));
+        assert_eq!(cell("技能"), "无", "md:183「技能 {}」不是那个否定字面 ⇒ 文档开始给开端写技能了，⑤ 那四处发牌口闸和 §八 的技能尺都得跟着改", cell("技能"));
+        assert!(cell("可融合").starts_with('❌'), "md:184「可融合 {}」不以 ❌ 开头 ⇒ 这一格从否定翻成肯定，⑤ 那条融合闸就成了在实现文档没写的东西", cell("可融合"));
+        assert!(cell("入继承堆").starts_with('❌'), "md:185「入继承堆 {}」不以 ❌ 开头 ⇒ 同上，那一格是本章唯一说\"开端不进堆\"的字面", cell("入继承堆"));
+        assert!(cell("入继承堆").contains("每关固定发放"), "md:185「入继承堆 {}」丢了括号里那句「每关固定发放」⇒ 它与 md:191 手牌行的「开端」和 §十二:421 各说一套（③ 与 §十二 的锚靠这句连起来）", cell("入继承堆"));
+
+        // ④ 上限那道闸在码面只认一个数，而且那个数由文档给（③ 已把 fe_cap 与 turn[1] 撞平）。
+        let gate = format!("starter_gains >= {fe_cap}");
+        assert_eq!(
+            code_occurrences(&gate),
+            1,
+            "md:200／md:182 说每关上限 {fe_cap} 次 ⇒ 生产码面上那道闸 `{gate}` 必须恰有 1 处，实测 {} 处 ⇒ 0 处＝闸被摘（回合末无限 +1，复现测那条序列会跟着红）；≥2 处＝有人另起一份计数器，文档没写过第二个上限",
+            code_occurrences(&gate)
+        );
+
+        // ⑤ 三条否定式 cell 各落成一份**封闭的**码面形状："没有这东西"只能靠点名实现处来证。
+        assert_eq!(
+            code_occurrences("&& !c.is_starter()"),
+            4,
+            "md:183「技能 无」＝四处发牌口（`Battle::new` 的 `mk`／`make_card`／`player_turn_start` 自动抽牌／`action_draw` 手动抽牌）**全部**把开端排除在技能之外，实测 {} 次 ⇒ 少一次＝有一口会给开端发技能（文档那格「无」成假账）；多一次＝文档没登记的地方在按这个形状闸，先把它挂进本章口径再改这里",
+            code_occurrences("&& !c.is_starter()")
+        );
+        assert_eq!(
+            code_occurrences("inherit[main].is_starter() || inherit[sub].is_starter()"),
+            1,
+            "md:184「可融合 ❌」＝融合闸两侧各查一次、且只在这一处（`progress::fuse_cards`），实测 {} 次 ⇒ 0 次＝开端可融；2 次＝另起炉灶又闸一遍（§九:363 那条同一规则的措辞会跟着分叉）",
+            code_occurrences("inherit[main].is_starter() || inherit[sub].is_starter()")
+        );
+        assert_eq!(
+            code_occurrences("v.retain(|c| !c.is_starter())"),
+            1,
+            "md:185「入继承堆 ❌」＝继承堆构造时剔开端、且只在这一处（`battle.rs` 的继承堆构造），实测 {} 次 ⇒ 0 次＝开端会跨关继承（与 md:191 的「固定发放」和 md:185 自己同时相反）；2 次＝有人多剔一遍，那第二处的口径文档里找不到",
+            code_occurrences("v.retain(|c| !c.is_starter())")
+        );
+
+        // ⑥ 文档唯一的卡名 ↔ 引擎那张卡；那些数字真的被引擎跑过。
+        assert_eq!(at(176).trim(), super::STARTER.name, "md:176「{}」与 `STARTER.name`=「{}」不等 ⇒ 这张表描述的不是引擎里那张开端（逐字段等值全部作废）", at(176).trim(), super::STARTER.name);
+        engine_repro_test_exists("section5_opening_fence_reproduces_on_the_engine");
+    }
+
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
     /// 规则层欠的是校验（引擎收了它不该收的走法）。后者会让同一局打出不同结果，前者不会。
     /// 第三档 `Mode` 是本帧被 §廿一 逼出来的：整块模式没做（Roguelike／金币／每日固定卡组）既不是
