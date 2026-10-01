@@ -543,7 +543,7 @@ impl Battle {
             }
             self.pf.sacrifice_used = true;
         }
-        let c = self.hand.remove(idx);
+        let c = self.hand.remove(idx);  // §五:206 手牌献祭只动这只手，场上仍是 0 张卡（这条路的节奏快在这里）
         self.pf.sacrificed_names.push(c.def.name);
         self.log.push(format!("献祭（手牌）{}", c.def.name));
         self.on_death(c, SideK::Player, None, DeathCause::Sacrifice);
@@ -618,7 +618,7 @@ impl Battle {
             if side == SideK::Player { "P" } else if row == Row::Front { "E" } else { "E后" },
             col + 1
         ));
-        *slot = Some(c);
+        *slot = Some(c);  // §五:199 放置后场上那 1 张卡就是从这一行进场的（业力仍为 0 由上面那行 cost=0 保证）
         let _ = slot;
         if let Some(old) = old {  // §十七:755 我方挤压＝新卡挤旧卡，越线死亡（同一条路径对两侧通用）
             self.log.push(format!("挤压：{} 越线死亡", short_card(&old)));  // §十二:435 旧卡越线死亡
@@ -661,7 +661,7 @@ impl Battle {
         if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {
             return Err(format!("本回合献祭过同名牌「{}」，不能再放置", self.hand[hand_idx].def.name));
         }
-        if self.p_karma < cost {  // §十二:433 业力不足即拒绝
+        if self.p_karma < cost {  // §十二:433 业力不足即拒绝；§五:205 「2 业力放一张 2 费或两张 1 费」的余额闸就是这一行
             return Err(format!("业力不足：需{cost}，当前{}", self.p_karma));
         }
         let c = self.hand.remove(hand_idx);
@@ -1072,7 +1072,7 @@ impl Battle {
             SideK::Player => vec![Row::Front],
             SideK::Enemy => vec![Row::Front, Row::Back],
         };
-        let has = rows.iter().any(|r| (0..4).any(|c| self.slot(side, *r, c).as_ref().is_some_and(|x| x.is_starter() && x.hp > 0)));
+        let has = rows.iter().any(|r| (0..4).any(|c| self.slot(side, *r, c).as_ref().is_some_and(|x| x.is_starter() && x.hp > 0)));  // §五:207 「失去长期收益」的落点：开端不在场就直接返回，回合末不再有那份 +1
         if !has {
             return;
         }
@@ -1083,7 +1083,7 @@ impl Battle {
         if flags.starter_gains >= 2 {  // §十二:452 开端回合末业力每关上限 2 次；§五:200「每关最多 2 次」这道闸
             return;
         }
-        flags.starter_gains += 1;
+        flags.starter_gains += 1;  // §五:201 「持续积累」＝这个计数器在涨；写满上限就不再给业力
         match side {
             SideK::Player => {
                 self.p_karma += 1;  // §十二:452 开端在场→我方获得 1 业力；§五:200 开端在场→我方回合结束 +1 业力
@@ -1895,6 +1895,214 @@ pub(crate) fn s14_fold(side: &'static str, rows: &[S14Line]) -> S14Rule {
     r
 }
 
+/// §五「开局选择」围栏（189–208）里一行读成的断言。形态只有三种（编号行「N. 」、规则行「- 」、标签行），
+/// 但**形态对不上照样 panic**——理由同 §十四／§十六：平跳＝文档加了第四种写法，而尺子量不到那一行。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S5Claim {
+    /// 「战斗开始：」／「我方回合1，玩家有两个选择：」／「选择A：放置开端」／「选择B：献祭开端」
+    Label,
+    /// 「1. 手牌：开端 + 从继承堆抽3张（若继承堆不足3张 → 从基础牌堆补齐）」
+    Hand { starter: bool, draw: i32, topup: i32 },
+    /// 「2. 场上：空」
+    FieldEmpty,
+    /// 「3. 业力：0」
+    StartKarma(i32),
+    /// 「- 开端放到P1，0费，不消耗业力」
+    PlaceFree { col: i32, cost: i32 },
+    /// 「- 场上1张卡，业力仍为0」
+    AfterPlace { cards: i32, karma: i32 },
+    /// 「- 但开端在场时，每回合结束获得1业力（每关最多2次）」
+    TurnEndGain { gain: i32, cap: i32 },
+    /// 「- 长期收益：每回合+1业力，持续积累」
+    Accumulate { gain: i32 },
+    /// 「- 献祭开端 → 获得2业力（来源：特性）」
+    SacGain(i32),
+    /// 「- 用2业力放1张2费卡 或 2张1费卡」
+    Afford { karma: i32, big_n: i32, big: i32, small_n: i32, small: i32 },
+    /// 「- 场上0张卡，但节奏快」
+    AfterSac { cards: i32 },
+    /// 「- 短期爆发：立即获得2业力，但失去长期收益」
+    ShortBurst { gain: i32, loses_long_term: bool },
+}
+
+#[cfg(test)]
+fn s5_bad(tag: &str, why: &str) -> ! {
+    panic!("{tag} 不像 §五 开局围栏的行（形态只有三种：编号行「N. 」、规则行「- 」、标签行）：{why}。\
+            请先扩本解析器与它对应的实测断言，别让那一行从尺子外面漏过去（挂锚对围栏行不算实测）");
+}
+
+/// 一行的形态分派。每种形态**钉死它该带几个数字**：文档在同一行里多写一个数（例如把「每关最多2次」
+/// 改写成「每2回合最多2次」）会让"哪个数是上限"变得含糊，这里当场红，而不是让后面的断言拿错那一个。
+#[cfg(test)]
+fn s5_classify(t: &str, line: usize) -> S5Claim {
+    let tag = format!("md:{line}「{t}」");
+    let body = if let Some(b) = t.strip_prefix("- ") {
+        b
+    } else if let Some((n, b)) = t.split_once(". ") {
+        if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+            s5_bad(&tag, "看着像编号行，但「. 」前面不是纯数字");
+        }
+        b
+    } else if t.ends_with('：') || t.starts_with("选择") {
+        return S5Claim::Label;
+    } else {
+        s5_bad(&tag, "三种形态一种都不像");
+    };
+    let nums = s15_digits(body);
+    let expect = |k: usize, what: &str| {
+        if nums.len() != k {
+            s5_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()));
+        }
+    };
+    // 判据全部用**只在一行里出现**的措辞；两处以上命中同一条时按书写顺序取第一条，
+    // 所以每条判据都配了它自己的数字个数断言——蹭错分支会立刻在数字个数上红，而不是安静地走成别的形态。
+    if body.contains("手牌：") {
+        expect(2, "手牌行（抽几张／不足几张）");
+        return S5Claim::Hand { starter: body.contains("开端"), draw: nums[0], topup: nums[1] };
+    }
+    if body.starts_with("场上：") {
+        expect(0, "场上行（「空」不带数字）");
+        return S5Claim::FieldEmpty;
+    }
+    if body.starts_with("业力：") {
+        expect(1, "业力行（开局那个数）");
+        return S5Claim::StartKarma(nums[0]);
+    }
+    if body.contains("不消耗业力") {
+        expect(2, "放置行（格号＋费用）");
+        return S5Claim::PlaceFree { col: nums[0], cost: nums[1] };
+    }
+    if body.contains("业力仍为") {
+        expect(2, "放置后果行（张数＋业力）");
+        return S5Claim::AfterPlace { cards: nums[0], karma: nums[1] };
+    }
+    if body.contains("每回合结束获得") {
+        expect(2, "回合末行（每次多少＋上限几次）");
+        return S5Claim::TurnEndGain { gain: nums[0], cap: nums[1] };
+    }
+    if body.starts_with("长期收益") {
+        expect(1, "长期收益行（那份 +N）");
+        return S5Claim::Accumulate { gain: nums[0] };
+    }
+    if body.contains("献祭开端 →") {
+        expect(1, "献祭行（得几业力）");
+        return S5Claim::SacGain(nums[0]);
+    }
+    if body.contains("费卡") {
+        expect(5, "负担行（预算／几张／几费／几张／几费）");
+        return S5Claim::Afford { karma: nums[0], big_n: nums[1], big: nums[2], small_n: nums[3], small: nums[4] };
+    }
+    if body.contains("节奏快") {
+        expect(1, "献祭后果行（场上几张）");
+        return S5Claim::AfterSac { cards: nums[0] };
+    }
+    if body.starts_with("短期爆发") {
+        expect(1, "短期爆发行（立即得几业力）");
+        return S5Claim::ShortBurst { gain: nums[0], loses_long_term: body.contains("失去长期收益") };
+    }
+    s5_bad(&tag, "十二种形态一种都不像")
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct S5Line {
+    pub line: usize,
+    pub claim: S5Claim,
+}
+
+/// 定位并解析 §五「开局选择」围栏：章标题 → 其后第一道 ``` → 到下一道 ```。
+/// 它同时是 §五 推导器实测路的**唯一口径**：那边的行集合必须由这里的行号构成（同 §十四／§十五／§十六）。
+#[cfg(test)]
+pub(crate) fn parse_section5_opening(lines: &[String]) -> Vec<S5Line> {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "五、开端 · 核心起始牌")
+        .expect("§五 标题必须存在（文档结构变了就要同步改本解析器与 model.rs 的推导器）");
+    let open = ((head + 2)..=lines.len())
+        .find(|&n| at(n).trim() == "```")
+        .expect("§五 必须有一道 ``` 围栏（开局选择那一段）");
+    let mut out: Vec<S5Line> = Vec::new();
+    for n in (open + 1)..=lines.len() {
+        let t = at(n).trim();
+        if t == "```" {
+            return out;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        out.push(S5Line { line: n, claim: s5_classify(t, n) });
+    }
+    panic!("§五 开局选择围栏没有闭围栏（{open} 之后找不到 ```）")
+}
+
+/// §五 围栏折叠出来的开局规则。缺任何一项**当场 panic**（措辞同 `s14_fold`）：少一行＝那条规则不再有实测，
+/// 而它看上去仍像被覆盖过。`labels` 单独收着，由推导器钉名单——标签吞掉真规则行是这类尺子最先要防的错。
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct S5Fence {
+    pub labels: Vec<usize>,
+    pub hand: Option<(bool, i32, i32)>,
+    pub field_empty: Option<()>,
+    pub start_karma: Option<i32>,
+    pub place_free: Option<(i32, i32)>,
+    pub after_place: Option<(i32, i32)>,
+    pub turn_end: Option<(i32, i32)>,
+    pub accumulate: Option<i32>,
+    pub sac_gain: Option<i32>,
+    pub afford: Option<(i32, i32, i32, i32, i32)>,
+    pub after_sac: Option<i32>,
+    pub burst: Option<(i32, bool)>,
+}
+
+#[cfg(test)]
+pub(crate) fn s5_fold(rows: &[S5Line]) -> S5Fence {
+    let mut f = S5Fence {
+        labels: Vec::new(),
+        hand: None,
+        field_empty: None,
+        start_karma: None,
+        place_free: None,
+        after_place: None,
+        turn_end: None,
+        accumulate: None,
+        sac_gain: None,
+        afford: None,
+        after_sac: None,
+        burst: None,
+    };
+    let need = |what: &str| -> ! { panic!("§五 开局围栏缺「{what}」这一行 ⇒ 该规则无从复现，先把文档补回来") };
+    for c in rows {
+        match c.claim {
+            S5Claim::Label => f.labels.push(c.line),
+            S5Claim::Hand { starter, draw, topup } => f.hand = Some((starter, draw, topup)),
+            S5Claim::FieldEmpty => f.field_empty = Some(()),
+            S5Claim::StartKarma(v) => f.start_karma = Some(v),
+            S5Claim::PlaceFree { col, cost } => f.place_free = Some((col, cost)),
+            S5Claim::AfterPlace { cards, karma } => f.after_place = Some((cards, karma)),
+            S5Claim::TurnEndGain { gain, cap } => f.turn_end = Some((gain, cap)),
+            S5Claim::Accumulate { gain } => f.accumulate = Some(gain),
+            S5Claim::SacGain(v) => f.sac_gain = Some(v),
+            S5Claim::Afford { karma, big_n, big, small_n, small } => f.afford = Some((karma, big_n, big, small_n, small)),
+            S5Claim::AfterSac { cards } => f.after_sac = Some(cards),
+            S5Claim::ShortBurst { gain, loses_long_term } => f.burst = Some((gain, loses_long_term)),
+        }
+    }
+    f.hand.unwrap_or_else(|| need("手牌：开端 + 抽N张"));
+    f.field_empty.unwrap_or_else(|| need("场上：空"));
+    f.start_karma.unwrap_or_else(|| need("业力：N"));
+    f.place_free.unwrap_or_else(|| need("开端放到P1，0费，不消耗业力"));
+    f.after_place.unwrap_or_else(|| need("场上1张卡，业力仍为0"));
+    f.turn_end.unwrap_or_else(|| need("每回合结束获得N业力（每关最多M次）"));
+    f.accumulate.unwrap_or_else(|| need("长期收益：每回合+N业力"));
+    f.sac_gain.unwrap_or_else(|| need("献祭开端 → 获得N业力"));
+    f.afford.unwrap_or_else(|| need("用N业力放X张Y费卡 或 Z张W费卡"));
+    f.after_sac.unwrap_or_else(|| need("场上0张卡，但节奏快"));
+    f.burst.unwrap_or_else(|| need("短期爆发：立即获得N业力，但失去长期收益"));
+    f
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -2089,6 +2297,136 @@ mod rule_tests {
                     }
                 }
             }
+        }
+    }
+
+    /// §五「开局选择」围栏（190–207）用**文档自己写的数字**驱动引擎跑一遍：开局手牌张数、场上、业力、
+    /// 放置扣不扣费、回合末 +N 与每关上限、献祭得 N、那份预算买得起什么、献祭后场上几张、失去长期收益——
+    /// 期望值一行都不写在代码里，全从文档那几行读进来（`parse_section5_opening` ＋ `s5_fold`）。
+    /// 为什么这十一行走实测而不止挂锚：锚点证不了"算出的数＝写的数"（§十四 那条口径的同族）；
+    /// 而 §五 比 §十四 多一层——这里每一条都是**开局之后的时序**，要真开局、真放置、真走完回合末才算复现。
+    /// 「继承堆不足3张 → 从基础牌堆补齐」那句是**第二个场景**：只跑充足那一支就证不了它，所以这里开局两次。
+    #[test]
+    fn section5_opening_fence_reproduces_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let rows = parse_section5_opening(&lines);
+        assert_eq!(
+            rows.iter().map(|r| r.line).collect::<Vec<_>>(),
+            vec![190, 191, 192, 193, 195, 197, 198, 199, 200, 201, 203, 204, 205, 206, 207],
+            "§五 围栏行的名单由解析器给，应为 190–193＋195＋197–201＋203–207，实测 {:?} ⇒ 解析器与本测对同一段围栏读法不同",
+            rows.iter().map(|r| r.line).collect::<Vec<_>>()
+        );
+        let f = s5_fold(&rows);
+        let tag = |n: usize| format!("md:{n}「{}」", lines[n - 1].trim());
+        assert_eq!(f.labels, vec![190, 195, 197, 203], "§五 围栏里的标签行应恰好是那四条（战斗开始／两个选择／选择A／选择B），实测 {:?} ⇒ 有真规则行被当成标签吞掉，或标签判据失效", f.labels);
+        let (starter_written, draw, topup) = f.hand.unwrap();
+        let (place_col, place_cost) = f.place_free.unwrap();
+        let (cards_after_place, karma_after_place) = f.after_place.unwrap();
+        let (gain, cap) = f.turn_end.unwrap();
+        let (budget, big_n, big, small_n, small) = f.afford.unwrap();
+        let sac = f.sac_gain.unwrap();
+        let cards_after_sac = f.after_sac.unwrap();
+        let (burst, loses_long_term) = f.burst.unwrap();
+        let start_karma = f.start_karma.unwrap();
+
+        // ⓪ 文档先跟自己自洽（不自洽就轮不到引擎出场）：两处 +N 同数、两个方案花同一份预算、献祭两处同数。
+        assert!(starter_written, "{} 那句里没有「开端」了 ⇒ 解析器读不出手牌构成，本测的前提（开局手里有固定发放的那张）失效", tag(191));
+        assert_eq!(gain, f.accumulate.unwrap(), "{} 说每回合结束获得 {gain} 业力，{} 说的长期收益却是 {} ⇒ 文档自己两处不一致", tag(200), tag(201), f.accumulate.unwrap());
+        assert_eq!(burst, sac, "{} 献祭开端得 {sac} 业力，{} 的「短期爆发：立即获得」却是 {burst} ⇒ 同一笔业力两个数", tag(204), tag(207));
+        assert_eq!(big_n * big, small_n * small, "{} 两个方案花的不是同一份业力：{big_n}×{big} ≠ {small_n}×{small}", tag(205));
+        assert_eq!(budget, big_n * big, "{} 写「用 {budget} 业力」，两个方案合计却花 {}", tag(205), big_n * big);
+        assert_eq!(place_cost, 0, "{} 写着「不消耗业力」，读出来的费用却是 {place_cost}", tag(198));
+        assert_eq!(start_karma - place_cost, karma_after_place, "{} 的开局业力 {start_karma} 减去 {place_cost} 费，落不到 {} 说的 {karma_after_place}", tag(193), tag(199));
+        assert!(cap > 0 && gain > 0 && draw > 0, "{}／{} 的上限与收益读成 cap={cap}／gain={gain}／draw={draw}，非正数推不出积累序列与手牌张数", tag(200), tag(191));
+
+        // ① 开局三条（191／192／193）——充足与不足各开一局。
+        // 注意 191 说的是**战斗开始那一刻**的手牌；引擎 `new` 末尾会走 §十二:426 的"我方回合开始抽牌"，
+        // 所以这里按**前缀**复现：手牌开头必须恰是「开端＋继承堆堆顶 draw 张（按序）」，
+        // 后面多出来的那一张归 §十二 那把尺管（本测不替它作证，也不把它算进 191 的张数）。
+        let mk_inherit = |n: usize| -> Vec<CardInst> {
+            faction_cards(Faction::Ember)
+                .iter()
+                .skip(1)
+                .enumerate()
+                .take(n)
+                .map(|(i, d)| CardInst::new(500 + i as u64, *d))
+                .collect()
+        };
+        let field_count = |b: &Battle| b.p_front.iter().filter(|s| s.is_some()).count();
+        let draw_n = draw as usize;
+        let opening = 1 + draw_n;
+        assert_eq!(topup, draw, "{} 里「抽 {draw} 张」与「不足 {topup} 张」不是同一个数 ⇒ 补齐的触发线读不出来", tag(191));
+        for have in [topup as usize, topup as usize - 1] {
+            let why = if have >= draw_n { "继承堆充足" } else { "继承堆不足→从基础牌堆补齐" };
+            let pile = mk_inherit(have);
+            let pile_names: Vec<&str> = pile.iter().map(|c| c.def.name).collect();
+            let take_top: Vec<&str> = pile_names.iter().copied().take(draw_n).collect();
+            let b = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, pile, 2);
+            let hand_names: Vec<&str> = b.hand.iter().map(|c| c.def.name).collect();
+            assert!(b.hand.len() >= opening, "{why}：{} 说开局手牌是开端＋{draw} 张，引擎只发到 {} 张", tag(191), b.hand.len());
+            assert!(b.hand[0].is_starter(), "{why}：{} 把开端写在手牌第一位（「手牌：开端 + …」），引擎手牌第一位是 {}", tag(191), hand_names[0]);
+            assert_eq!(b.hand.iter().filter(|c| c.is_starter()).count(), 1, "{why}：{} 说开端固定发放 1 张，引擎手牌里有 {} 张开端", tag(191), b.hand.iter().filter(|c| c.is_starter()).count());
+            if have >= draw_n {
+                assert_eq!(&hand_names[1..opening], take_top.as_slice(), "{why}：{} 说那 {draw} 张「从继承堆抽」（裁定11＝按堆顶顺序），引擎前 {draw} 张是 {:?}", tag(191), &hand_names[1..opening]);
+            } else {
+                assert_eq!(&hand_names[1..1 + have], take_top.as_slice(), "{why}：{} 说不足时先把手头那 {have} 张发来，引擎却是 {:?}", tag(191), &hand_names[1..1 + have]);
+                let base: Vec<&str> = faction_cards(Faction::Ember).iter().skip(1).map(|d| d.name).collect();
+                for nm in &hand_names[1 + have..opening] {
+                    assert!(base.contains(nm), "{why}：{} 说差额「从基础牌堆补齐」，引擎补的「{nm}」却不在阵营基础牌表里", tag(191));
+                    assert!(!pile_names.contains(nm), "{why}：补进来的「{nm}」是继承堆里本来就有的牌 ⇒ 那不是补齐，是重复发放");
+                }
+                assert_eq!(hand_names[1 + have..opening].len(), draw_n - have, "{why}：差额该补 {} 张", draw_n - have);
+            }
+            assert_eq!(field_count(&b), 0, "{why}：{} 说「场上：空」，引擎开局场上已有 {} 张", tag(192), field_count(&b));
+            assert_eq!(b.p_karma, start_karma, "{why}：{} 说开局业力 {start_karma}，引擎是 {}", tag(193), b.p_karma);
+        }
+
+        // ② 选择A（198／199）：0 费放置不扣业力，场上多出那一张。
+        let mut b = Battle::new(11, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 2), 2);
+        let sidx = b.hand.iter().position(|c| c.is_starter()).expect("开局手牌里必须有开端（md:191）");
+        b.player_place(sidx, (place_col - 1) as usize).unwrap_or_else(|e| panic!("{} 说开端放到 P{place_col} 且不消耗业力，引擎拒绝：{e}", tag(198)));
+        assert_eq!(b.p_karma, karma_after_place, "{} 说放置后业力仍为 {karma_after_place}，引擎是 {}", tag(199), b.p_karma);
+        assert_eq!(field_count(&b), cards_after_place as usize, "{} 说放置后场上 {cards_after_place} 张，引擎是 {} 张", tag(199), field_count(&b));
+
+        // ③ 选择A 的长期收益（200／201）：前 cap 次每次 +gain，之后**一次都不许再给**。
+        let mut seq: Vec<i32> = Vec::new();
+        for _ in 0..cap + 2 {
+            b.starter_turn_end(SideK::Player);
+            seq.push(b.p_karma);
+        }
+        let want: Vec<i32> = (1..=cap + 2).map(|i| karma_after_place + gain * i.min(cap)).collect();
+        assert_eq!(seq, want, "开端在场时回合末的业力序列对不上文档：{} 说每次 +{gain}、{} 说每关最多 {cap} 次（期望 {want:?}）", tag(200), tag(201));
+
+        // ④ 选择B（204／206／207）：手牌献祭开端得 sac 业力、场上仍是 sac 行说的那 0 张、且那份长期收益从此不再给。
+        let mut b = Battle::new(13, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 2), 2);
+        let sidx = b.hand.iter().position(|c| c.is_starter()).expect("开局手牌里必须有开端（md:191）");
+        b.player_sacrifice_hand(sidx).unwrap_or_else(|e| panic!("{} 说献祭手牌里的开端，引擎拒绝：{e}", tag(204)));
+        assert_eq!(b.p_karma, sac, "{} 说献祭开端获得 {sac} 业力，引擎给了 {}", tag(204), b.p_karma);
+        assert_eq!(field_count(&b), cards_after_sac as usize, "{} 说献祭后场上 {cards_after_sac} 张，引擎是 {} 张", tag(206), field_count(&b));
+        b.starter_turn_end(SideK::Player);
+        assert_eq!(b.p_karma, sac, "{} 说献祭后「失去长期收益」，可开端不在场时引擎回合末还是给了 {}", tag(207), b.p_karma - sac);
+        assert!(loses_long_term, "{} 里读不到「失去长期收益」⇒ 上一行那条断言失去了文档依据，请同步文档措辞", tag(207));
+
+        // ⑤ 选择B 的那份预算（205）：两个方案都要真买得起，而且花完。
+        let card_of_cost = |c: i32| -> CardDef {
+            *faction_cards(Faction::Ember)
+                .iter()
+                .find(|d| d.cost == c && d.name != "开端")
+                .unwrap_or_else(|| panic!("{} 要一张 {c} 费卡来复现，烬火教团卡牌表里没有 ⇒ 换文档给的费数或扩本测的取卡面", tag(205)))
+        };
+        for (n, each, plan) in [(big_n, big, "一张大费"), (small_n, small, "多张小费")] {
+            let mut b = Battle::new(17, Faction::Ember, Faction::Frost, Difficulty::Normal, mk_inherit(topup as usize + 2), 2);
+            let mut sidx = b.hand.iter().position(|c| c.is_starter()).expect("开局手牌里必须有开端（md:191）");
+            b.player_sacrifice_hand(sidx).unwrap();
+            b.p_karma = budget; // 直接从文档那份预算起算——上面④已经验过献祭确实给到 budget
+            for i in 0..n {
+                b.hand.push(CardInst::new(700 + i as u64, card_of_cost(each)));
+                sidx = b.hand.len() - 1;
+                b.player_place(sidx, i as usize)
+                    .unwrap_or_else(|e| panic!("{} 说「用 {budget} 业力」可以走{plan}（{n} 张 {each} 费），第 {} 张放不下：{e}", tag(205), i + 1));
+            }
+            assert_eq!(b.p_karma, budget - n * each, "{}：{plan}＝{n} 张 {each} 费该花掉 {} 业力，引擎余额 {}", tag(205), n * each, b.p_karma);
+            assert_eq!(field_count(&b), n as usize, "{}：{plan}放下后场上应 {n} 张，实测 {} 张", tag(205), field_count(&b));
         }
     }
 
