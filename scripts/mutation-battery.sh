@@ -575,7 +575,7 @@ assert s.count(a)==1
 open(p,'w',encoding='utf8').write(s.replace(a,'v.retain(|c| c.hp >= 0);'))"
 run
 echo "### M68 摘掉 s5_classify 回合末分支的数字个数守卫（expect(2)→expect(nums.len())，文档不动）⇒ 实测全绿：这条是盲区登记"
-# 记录形状本身：守卫单独降级、不打文档配合，四把尺量不到——它的牙只在"文档那一行多写了第四个数"时才出。
+# 记录形状本身：守卫单独降级、不打文档配合，四把尺量不到——它的牙只在"文档那一行多写第三数"时才出（M69／M70 就是那一对）。
 # 与 M33 同一类（抹除被别的层吸收），差别是这条**根本不红**，所以必须留字，别等到哪天把它当成有牙的尺。
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
@@ -583,23 +583,23 @@ a='        expect(2, \"回合末行（每次多少＋上限几次）\");'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        expect(nums.len(), \"回合末行（每次多少＋上限几次）\");'))"
 run
-echo "### M69 M68 那层守卫降级 ＋ 文档 md:200 写成「每2回合结束获得1业力」⇒ 实测红在解析器的**形态 panic**（battle.rs:1931，复现测与推导器同一条）：落点没有漂到数值层，原先那句「会误导人去查引擎」被实测否掉——守卫降级丢的只是「第几个数不对」这半句人话"
+echo "### M69 M68 那层守卫降级 ＋ 文档 md:200 在同一行**追加第三个数**（前缀「每回合结束获得」不动）⇒ 实测全绿 155：第三个数被无声吞掉，fold 仍读 gain=nums[0]／cap=nums[1]——盲区由此从「一句推断」变成「一对读数」"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='        expect(2, \"回合末行（每次多少＋上限几次）\");'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        expect(nums.len(), \"回合末行（每次多少＋上限几次）\");'))
 q='$D/doc.md'; d=open(q,encoding='utf8').read()
-b='但开端在场时，每回合结束获得1业力'
+b='每回合结束获得1业力（每关最多2次）'
 assert d.count(b)==1, d.count(b)
-open(q,'w',encoding='utf8').write(d.replace(b,'但开端在场时，每2回合结束获得1业力'))"
+open(q,'w',encoding='utf8').write(d.replace(b,'每回合结束获得1业力（每关最多2次，每次1点）'))"
 DOC="$D/doc.md" run
-echo "### M70 M69 的那处文档改动、守卫**不**降级 ⇒ 应红在解析器当场 panic（正证那条 expect 买到的就是这一句人话落点）"
+echo "### M70 M69 的那处文档改动、守卫**不**降级 ⇒ 实测红 2 条（复现测＋§五 推导器），落点就是 expect(2) 那句人话「解析出 3 个数字（[1, 2, 1]），回合末行该有 2 个」：与 M69 对照才读出那道守卫的价格——同一处文档改动，有守卫红、没守卫全绿"
 restore; py "
 q='$D/doc.md'; d=open(q,encoding='utf8').read()
-b='但开端在场时，每回合结束获得1业力'
+b='每回合结束获得1业力（每关最多2次）'
 assert d.count(b)==1, d.count(b)
-open(q,'w',encoding='utf8').write(d.replace(b,'但开端在场时，每2回合结束获得1业力'))"
+open(q,'w',encoding='utf8').write(d.replace(b,'每回合结束获得1业力（每关最多2次，每次1点）'))"
 DOC="$D/doc.md" run
 echo "### M71 §五 那台推导器的围栏内不判标签（M57 的姊妹条）⇒ 实测红在哪一层是量出来的：rows 与标签名单一起长，围栏那 15 行不再只由解析器给"
 restore; py "
