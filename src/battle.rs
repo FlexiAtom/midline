@@ -511,42 +511,42 @@ impl Battle {
 
     // ---------- 献祭 ----------
 
-    /// 场上献祭（P 格 0..3）：每回合1次、在场≥1回合、全额不递减、禁同名牌回置。§十二:431 献祭己方 P1-P4、在场 1 回合以上、全额不递减。
+    /// 场上献祭（P 格 0..3）：每回合1次、在场≥1回合、全额不递减、禁同名牌回置。§十二:431 献祭己方 P1-P4、在场 1 回合以上、全额不递减。§四:141「玩家可在行动阶段主动献祭己方卡牌」＝这两个入口本身（`player_sacrifice_field`／`player_sacrifice_hand`，己方一侧唯一的路；「行动阶段」那一环由 §十二:430 的调用侧保证，落点见 `session.rs` 上同一枚锚）。
     /// §廿二:964 的"阵营限制"（§四:160 不能献祭敌方阵营的卡）由 API 形状保证：只有我方 `p_front`
     /// 与 `hand` 可寻址，敌方卡传不进来，故无需运行期检查。
     pub fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {
         if col >= 4 {
             return Err("格位为 P1-P4".into());
         }
-        if self.pf.sacrifice_used {
+        if self.pf.sacrifice_used {  // §四:162 表「次数限制 每回合最多献祭1次」场上这一侧的闸（与手牌那一侧共用 `pf.sacrifice_used` 那一个位）
             return Err("本回合献祭次数已用完（每回合最多1次）".into());
         }
-        let c = self.p_front[col].take().ok_or("该格没有卡牌")?;
-        if self.turn - c.placed_turn < 1 {  // §十二:431 在场不足 1 回合不可献祭
+        let c = self.p_front[col].take().ok_or("该格没有卡牌")?;  // §四:170「腾出空位 → 为放置新卡做准备」＝take() 当场把那一格交回来，本行之后 P{col} 是 None
+        if self.turn - c.placed_turn < 1 {  // §十二:431 在场不足 1 回合不可献祭；§四:161 表「在场限制」那一格的正面分支（后半句「手牌献祭不受此限制」在下面那个入口，两条闸不是同一处代码）
             self.p_front[col] = Some(c);
             return Err("在场不足1回合，不可献祭".into());
         }
         self.pf.sacrifice_used = true;
         self.pf.sacrificed_names.push(c.def.name);
         self.log.push(format!("献祭（场上）{}", c.def.name));
-        self.on_death(c, SideK::Player, Some(col), DeathCause::Sacrifice);  // §三:108 围栏3 第2条「献祭获得全额费用」的兑现入口：死因记成献祭，收益那一支因此不走递减（同 §三:99）
+        self.on_death(c, SideK::Player, Some(col), DeathCause::Sacrifice);  // §三:108 围栏3 第2条「献祭获得全额费用」的兑现入口：死因记成献祭，收益那一支因此不走递减（同 §三:99）；§四:144「卡牌直接死亡 → 获得业力 = 卡牌费用（全额）」那一条链的最后一环
         Ok(())
     }
 
     /// 手牌献祭：不受在场限制；次数豁免**只适用开端**（裁定10，人裁定 2026-09-28）——
-    /// 普通手牌献祭仍占每回合1次额度。
+    /// 普通手牌献祭仍占每回合1次额度。§四:153「手牌献祭不受“在场1回合以上”限制」＝这个入口里**没有**任何 `turn - placed_turn` 那道闸（否定式落点，与场上入口对照着读）
     pub fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {
         if idx >= self.hand.len() {
             return Err("手牌下标越界".into());
         }
         let is_starter = self.hand[idx].is_starter();  // §廿三:991 手牌献开端不占每回合献祭额度（裁定10）
-        if !is_starter {
+        if !is_starter {  // §四:154「不消耗每回合献祭次数」的适用范围＝只有开端走进这个 `if` 的假侧；真侧（普通手牌）仍吃下面那道闸与下面那一次置位
             if self.pf.sacrifice_used {
                 return Err("本回合献祭次数已用完（每回合最多1次，开端手牌献祭除外）".into());
             }
             self.pf.sacrifice_used = true;
         }
-        let c = self.hand.remove(idx);  // §五:206 手牌献祭只动这只手，场上仍是 0 张卡（这条路的节奏快在这里）
+        let c = self.hand.remove(idx);  // §五:206 手牌献祭只动这只手，场上仍是 0 张卡（这条路的节奏快在这里）；§四:151「开端在手牌中，不在场上」＝这条路的取牌来源是 `hand`，`p_front` 四格一个都不碰
         self.pf.sacrificed_names.push(c.def.name);
         self.log.push(format!("献祭（手牌）{}", c.def.name));
         self.on_death(c, SideK::Player, None, DeathCause::Sacrifice);
@@ -573,7 +573,7 @@ impl Battle {
         Ok(())
     }
 
-    /// 敌方手牌献祭（供 AI 开局决策：业力0 且手牌有开端 → 献祭开端）。
+    /// 敌方手牌献祭（供 AI 开局决策：业力0 且手牌有开端 → 献祭开端）。§四:167「开局献祭开端 → 获得第一笔业力」＝这一句括号里的 AI 开局分支，它是我方 §四:152 那条那侧的镜像（同一入口，两边各自的第一笔业力都从这儿出）
     pub fn enemy_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {
         if idx >= self.enemy_hand.len() {
             return Err("敌方手牌越界".into());
@@ -661,7 +661,7 @@ impl Battle {
         }
         let starter = self.hand[hand_idx].is_starter();
         let cost = if starter { 0 } else { self.hand[hand_idx].def.cost };
-        if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {  // §三:107 围栏3 第1条「本回合不能再放置同名牌」的闸；那份名单在回合开始清空＝只管本回合，跨回合自动解禁（与 §廿二 那条"献祭过的牌下关照常回归"不是一回事）
+        if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {  // §三:107 围栏3 第1条「本回合不能再放置同名牌」的闸；§四:163 表「同名牌限制」那一格＝同一个闸。那份名单在回合开始清空＝只管本回合，跨回合自动解禁（与 §廿二 那条"献祭过的牌下关照常回归"不是一回事）
             return Err(format!("本回合献祭过同名牌「{}」，不能再放置", self.hand[hand_idx].def.name));
         }
         if self.p_karma < cost {  // §十二:433 业力不足即拒绝；§五:205 「2 业力放一张 2 费或两张 1 费」的余额闸就是这一行
@@ -1113,7 +1113,7 @@ impl Battle {
         let gain = match cause {  // §廿三:983 死亡/献祭的业力收益只在这一处算，基数＝卡牌费用；§三:66 表1「获取方式 己方卡牌死亡 或 主动献祭」＝这个 match 的**全部**分支（没有第三种收益来源）；§三:67 表1「获取量 卡牌费用（非数值）」＝这里只读卡定义里的费用，一次都不读那张牌的血量/伤害
             DeathCause::Sacrifice => {  // §廿三:986 开端献祭定额 2 业力，不走递减（裁定1）；§五:204 献祭开端 → 获得 2 业力（来源：特性）；§三:99 围栏2 第一行「主动献祭…不触发死亡返还递减」＝这一整支里都不推进死亡计数
                 if c.is_starter() {
-                    2  // §三:122 围栏5 那一长串里的「获得2业力」＝开端献祭的定额，与它的 0 费无关（同 §五:182 特性第三子句）
+                    2  // §三:122 围栏5 那一长串里的「获得2业力」＝开端献祭的定额，与它的 0 费无关（同 §五:182 特性第三子句）；§四:152 围栏「2. 献祭手牌中的开端 → 获得2业力」那个 2 就是这个裸字面量（开端在场与开端在手牌共用这一支，不分两条路）
                 } else if devour {
                     // 终影「吞名」：我方主动献祭改按**当前**死亡返还档位计。
                     // 不推进 deaths——速查:985「主动献祭…不触发死亡返还递减」；推进档位会让单场惩罚
@@ -1121,7 +1121,7 @@ impl Battle {
                     let pct = refund_pct(c.deaths);
                     c.def.cost * pct / 100
                 } else {
-                    c.def.cost  // §三:75 围栏1 第二行「主动献祭 → 获得业力 = 该卡牌费用（全额，不递减）」＝这一支拿的是裸费用，上面那一支才乘档位
+                    c.def.cost  // §三:75 围栏1 第二行「主动献祭 → 获得业力 = 该卡牌费用（全额，不递减）」＝这一支拿的是裸费用，上面那一支才乘档位；§四:144 围栏「卡牌直接死亡 → 获得业力 = 卡牌费用（全额）」那个全额＝这一行的裸 `cost`，一次都没乘 `refund_pct`
                 }
             }
             DeathCause::Battle | DeathCause::Cross => {  // §三:74 围栏1 第一行「己方卡牌死亡 → …（按死亡返还递减）」＝被击杀这一支；§三:100 后半句说的"自然死亡"两种死因都在这里合流（越线那处另有自己的锚）
@@ -1144,7 +1144,7 @@ impl Battle {
             short_card(&c),
             if side == SideK::Player { "我方" } else { "敌方" }
         ));
-        if let Some(col) = col {  // §十二:494 触发亡语（若有）
+        if let Some(col) = col {  // §十二:494 触发亡语（若有）；§四:169「触发亡语 → 主动献祭触发亡语效果」＝场上献祭传进来的正是 `Some(col)`，这一环照走（手牌献祭传 `None`，那条路没有"哪一列"可给，亡语因此不适用——文档只在 §四:169 给场上这一条许了亡语）
             if c.def.tr == TraitKind::DeathRattleSameColFlame3 {
                 self.add_flame_col(side, col, 3, None);
             }
@@ -3056,6 +3056,403 @@ pub(crate) fn s3_fold(rows: &S3Rows) -> S3Rules {
     f
 }
 
+// ---------- §四 献祭机制：文档结构 → 条款 ----------
+
+/// §四 一行读成的断言。这章三种外壳：围栏外的**授权句**（md:141，整章唯一一条 prose 规则行）、
+/// 两道围栏（链那一条＋开局四条编号行）、一张**键名封闭**的四行限制表，外加四条「· 」时机行。
+/// 与 §三 同一纪律：形状只够分派到哪一路，条款内容一律按**措辞**认领，认不出就 panic，不静默放行。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S4Claim {
+    /// 围栏外那四条小节标题＋围栏B 那句抬头「开局献祭开端：」
+    Label,
+    /// md:141「玩家可在行动阶段主动献祭己方卡牌：」
+    ActionPhase { own_side: bool, permitted: bool, active: bool },
+    /// md:144 那条链：`arrows` 数的是「→」的个数（四段链恰三个）
+    FullChain { direct_death: bool, by_cost: bool, full: bool, arrows: usize },
+    /// md:151「开端在手牌中，不在场上」
+    StarterInHand { not_on_field: bool },
+    /// md:152「献祭手牌中的开端 → 获得2业力（来源：特性“死亡获2业力”）」——那两个 2 必须相等
+    HandStarterGain { karma: i32, both_agree: bool, from_trait: bool },
+    /// md:153「手牌献祭不受“在场1回合以上”限制」，`min_turns` 是被豁免掉的那个数
+    HandExemptGate { min_turns: i32 },
+    /// md:154「不消耗每回合献祭次数」
+    HandNotCounted,
+    // ---- 表「限制 说明」四行，键名走封闭名单 ----
+    /// md:160「阵营限制 不能献祭敌方阵营的卡牌」
+    LimitFaction { cannot_enemy: bool },
+    /// md:161「在场限制 场上卡牌需在场1回合以上才可被献祭；手牌献祭不受此限制」
+    LimitOnField { min_turns: i32, hand_exempt: bool },
+    /// md:162「次数限制 每回合最多献祭1次」
+    LimitPerTurn { max: i32 },
+    /// md:163「同名牌限制 献祭后，本回合不能再放置同名牌」
+    LimitSameName { this_turn: bool, cannot: bool },
+    // ---- 「献祭时机」四条「· 」行，各按自己那句独有问题认领 ----
+    /// md:167「开局献祭开端 → 获得第一笔业力」
+    TimingOpening { first_gain: bool },
+    /// md:168「中期献祭弱卡 → 获取业力放强卡」
+    TimingSwap { weak_to_strong: bool },
+    /// md:169「触发亡语 → 主动献祭触发亡语效果」
+    TimingDeathrattle { fires: bool },
+    /// md:170「腾出空位 → 为放置新卡做准备」
+    TimingFreeSlot { makes_room: bool },
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct S4Line {
+    pub line: usize,
+    pub claim: S4Claim,
+}
+
+/// §四 的行集。`fences` 按文档出现顺序存两道围栏（主动献祭链／开局手牌献祭）。
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct S4Rows {
+    pub labels: Vec<usize>,
+    pub headers: Vec<usize>,
+    pub prose: Vec<S4Line>,
+    pub table: Vec<S4Line>,
+    pub fences: Vec<Vec<S4Line>>,
+    pub dots: Vec<S4Line>,
+    pub fence_ticks: usize,
+}
+
+#[cfg(test)]
+fn s4_bad(tag: &str, why: &str) -> ! {
+    panic!("{tag} 读不出 §四 的任何一条已登记规则（围栏里的行按**内容**分派，表体行按**键名**分派）：{why}。\
+            请先扩本解析器与它对应的实测断言，别让那一行从尺子外面漏过去（挂锚对规则行不算实测）");
+}
+
+/// 围栏内的行。标签判据与 §三 同一条：**以「：」收尾且不带数字**。
+/// md:150「开局献祭开端：」是围栏B 那四条编号的抬头，吞掉它才对；围栏B 里没有带数字的抬头，
+/// 而围栏A 那一条链以「））」收尾、也不带数字（「全额」是措辞不是数）——所以它走内容分派。
+#[cfg(test)]
+fn s4_classify(t: &str, line: usize) -> S4Claim {
+    let tag = format!("md:{line}「{t}」");
+    if t.ends_with('：') && s15_digits(t).is_empty() {
+        return S4Claim::Label;
+    }
+    let body = if let Some((num, rest)) = t.split_once(". ") {
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+            s4_bad(&tag, "看着像编号行，但「. 」前面不是纯数字");
+        }
+        rest
+    } else {
+        t
+    };
+    let nums = s15_digits(body);
+    let expect = |k: usize, what: &str| {
+        if nums.len() != k {
+            s4_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()));
+        }
+    };
+    // 判据用的措辞都**只在那一行里出现**（四条编号行两两不撞词，撞了的话下面第一条分支会吞掉后面那条）。
+    if body.contains("卡牌直接死亡") {
+        expect(0, "那条「选择己方卡牌 → …」的链（全额是措辞，不是数）");
+        return S4Claim::FullChain {
+            direct_death: true,
+            by_cost: body.contains("获得业力 = 卡牌费用"),
+            full: body.contains("全额"),
+            arrows: body.matches('→').count(),
+        };
+    }
+    if body.contains("开端在手牌中") {
+        expect(0, "「开端在手牌中，不在场上」那行");
+        return S4Claim::StarterInHand { not_on_field: body.contains("不在场上") };
+    }
+    if body.contains("献祭手牌中的开端") {
+        expect(2, "「获得N业力（来源：特性“死亡获N业力”）」那行——行首那个数与括号里那个数是同一件事");
+        return S4Claim::HandStarterGain {
+            karma: nums[0],
+            both_agree: nums[0] == nums[1],
+            from_trait: body.contains("来源：特性"),
+        };
+    }
+    if body.contains("不受") && body.contains("在场") {
+        expect(1, "「不受“在场N回合以上”限制」那行（被豁免掉的那一个数）");
+        return S4Claim::HandExemptGate { min_turns: nums[0] };
+    }
+    if body.contains("不消耗") {
+        expect(0, "「不消耗每回合献祭次数」那行");
+        return S4Claim::HandNotCounted;
+    }
+    s4_bad(&tag, "它不像围栏A 的那条链，也不像围栏B 登记过的那四条编号行");
+}
+
+/// 表体行按键名分派，键名是封闭名单。与 §三 的表1 同一条纪律：**先切列、再按列内容认领**，
+/// 键名换了脸（哪怕只多一个字）就 panic，而不是让 fold 拿到一条挂错的条款。
+#[cfg(test)]
+fn s4_table_row(t: &str, line: usize) -> S4Claim {
+    let tag = format!("md:{line}「{t}」");
+    let cols: Vec<&str> = t.split_whitespace().collect();
+    if cols.len() < 2 {
+        s4_bad(&tag, &format!("限制表的一行至少要有「键 说明」两段，实测只有 {cols:?}"));
+    }
+    let (key, val) = (cols[0], cols[1..].join(" "));
+    let nums = s15_digits(&val);
+    let expect = |k: usize, what: &str| -> ! {
+        s4_bad(&tag, &format!("说明列解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()))
+    };
+    match key {
+        "阵营限制" => {
+            if !nums.is_empty() {
+                expect(0, "阵营限制那格");
+            }
+            S4Claim::LimitFaction { cannot_enemy: val.contains("不能献祭敌方阵营") }
+        }
+        "在场限制" => {
+            if nums.len() != 1 {
+                expect(1, "在场限制那格（「需在场N回合以上」那一个数）");
+            }
+            S4Claim::LimitOnField { min_turns: nums[0], hand_exempt: val.contains("手牌献祭不受此限制") }
+        }
+        "次数限制" => {
+            if nums.len() != 1 {
+                expect(1, "次数限制那格（「每回合最多献祭N次」那一个数）");
+            }
+            S4Claim::LimitPerTurn { max: nums[0] }
+        }
+        "同名牌限制" => {
+            if !nums.is_empty() {
+                expect(0, "同名牌限制那格");
+            }
+            S4Claim::LimitSameName { this_turn: val.contains("本回合"), cannot: val.contains("不能再放置同名牌") }
+        }
+        k => s4_bad(&tag, &format!("限制表的键名是封闭名单（阵营限制／在场限制／次数限制／同名牌限制），实测键名「{k}」")),
+    }
+}
+
+/// 「献祭时机」那四条「· 」行。它们是**动机**不是新规则，但每一条都指着一件引擎能当场跑出来的事
+/// （第一笔业力／换得起更贵的牌／亡语结算／那一格变空），所以照 §三 示例区与 §七 词表的规矩逐行走实测。
+#[cfg(test)]
+fn s4_dot(t: &str, line: usize) -> S4Claim {
+    let tag = format!("md:{line}「{t}」");
+    let Some(body) = t.strip_prefix("· ") else {
+        s4_bad(&tag, "时机区那四行每一行都带「· 」圆点外壳，这一行没有");
+    };
+    let nums = s15_digits(body);
+    if !nums.is_empty() {
+        s4_bad(&tag, &format!("时机那四行都是**不带数字**的动机句，实测 {nums:?} ⇒ 有人往里塞了一条带数的规则，那它就不该只走时机这一路"));
+    }
+    if body.contains("开局献祭开端") {
+        return S4Claim::TimingOpening { first_gain: body.contains("获得第一笔业力") };
+    }
+    if body.contains("中期献祭弱卡") {
+        return S4Claim::TimingSwap { weak_to_strong: body.contains("获取业力放强卡") };
+    }
+    if body.contains("触发亡语") {
+        return S4Claim::TimingDeathrattle { fires: body.contains("主动献祭触发亡语效果") };
+    }
+    if body.contains("腾出空位") {
+        return S4Claim::TimingFreeSlot { makes_room: body.contains("为放置新卡做准备") };
+    }
+    s4_bad(&tag, "它不像那四条时机里的任何一条（开局／中期／亡语／腾位）")
+}
+
+/// 围栏外唯一的 prose 规则行。整章只有 md:141 一条，认不出形状就 panic——文档在围栏外加一块新东西时，
+/// 这把尺要当场喊，而不是把那一行当成"没有形状" quietly 吞掉。
+#[cfg(test)]
+fn s4_prose(t: &str, line: usize) -> S4Claim {
+    let tag = format!("md:{line}「{t}」");
+    if t.contains("主动献祭己方卡牌") {
+        return S4Claim::ActionPhase {
+            own_side: t.contains("己方卡牌"),
+            permitted: t.contains("玩家可"),
+            active: t.contains("行动阶段"),
+        };
+    }
+    s4_bad(&tag, "围栏外多了一条既不是标题、也不是表体、也不是圆点的行——本章的 prose 只登记过 md:141 那一条授权句")
+}
+
+/// §四 的章界与外壳判据全在这里：标题行「四、献祭机制」→ 章末 `---`；``` 成对；
+/// 标签判据＝**单 token 且不以「：」「。」收尾**（md:141 那句以「：」收尾，所以它不是标签——
+/// 这条比 §三 的标签判据多一道「不以冒号收尾」，因为本章的授权句恰好以冒号收尾）。
+#[cfg(test)]
+pub(crate) fn parse_section4_sacrifice(lines: &[String]) -> S4Rows {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "四、献祭机制")
+        .expect("文档里没有「四、献祭机制」那一行标题 ⇒ §四 这把尺没有落脚点，章标题改了要同步这里");
+    const S4_HEADS: [&str; 1] = ["限制 说明"];
+    let mut rows = S4Rows::default();
+    let mut in_table = false;
+    let mut fence: Option<Vec<S4Line>> = None;
+    for n in (head + 2)..=lines.len() {
+        let t = at(n).trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "```" {
+            rows.fence_ticks += 1;
+            match fence.take() {
+                None => fence = Some(Vec::new()),
+                Some(blk) => rows.fences.push(blk),
+            }
+            in_table = false;
+            continue;
+        }
+        if fence.is_none() && t == "---" {
+            break;
+        }
+        if let Some(blk) = fence.as_mut() {
+            blk.push(S4Line { line: n, claim: s4_classify(t, n) });
+            continue;
+        }
+        if S4_HEADS.contains(&t) {
+            rows.headers.push(n);
+            in_table = true;
+            continue;
+        }
+        if t.split_whitespace().count() == 1 && !t.ends_with('：') && !t.ends_with('。') {
+            rows.labels.push(n);
+            in_table = false;
+            continue;
+        }
+        if in_table {
+            rows.table.push(S4Line { line: n, claim: s4_table_row(t, n) });
+            continue;
+        }
+        if t.starts_with("· ") {
+            rows.dots.push(S4Line { line: n, claim: s4_dot(t, n) });
+            continue;
+        }
+        rows.prose.push(S4Line { line: n, claim: s4_prose(t, n) });
+    }
+    if fence.is_some() {
+        s4_bad(&format!("「{}」之后", at(head + 1)), "章界 `---` 没找到，或它落在一道没闭合的围栏里 ⇒ 本走法会把下一章的表读成 §四 的");
+    }
+    rows
+}
+
+/// §四 折叠出的条款集。每一个 `Option` 都对应文档里**一行**，缺任一行由 `s4_fold` 末尾那份 `need` 清单当场 panic；
+/// 数字（业力定额、在场回合数、每回合次数）不是常量，是**从文档读进来的**——那是本帧复现测的全部意义。
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct S4Rules {
+    pub labels: Vec<usize>,
+    pub headers: Vec<usize>,
+    pub action_phase: Option<(bool, bool, bool)>,
+    pub full_chain: Option<(bool, bool, usize)>,
+    pub starter_in_hand: Option<bool>,
+    pub hand_starter_gain: Option<(i32, bool, bool)>,
+    pub hand_exempt_gate: Option<i32>,
+    pub hand_not_counted: Option<bool>,
+    pub faction: Option<bool>,
+    pub on_field: Option<(i32, bool)>,
+    pub per_turn: Option<i32>,
+    pub same_name: Option<(bool, bool)>,
+    pub timing: Option<(bool, bool, bool, bool)>,
+}
+
+#[cfg(test)]
+pub(crate) fn s4_fold(rows: &S4Rows) -> S4Rules {
+    let mut f = S4Rules { labels: rows.labels.clone(), headers: rows.headers.clone(), ..Default::default() };
+    // 每条 claim 命中就填对应槽，重复命中当场 panic（同一行被两条判据认领＝分派表撞词了）。
+    for l in rows.prose.iter().chain(rows.table.iter()).chain(rows.dots.iter()).chain(rows.fences.iter().flatten()) {
+        match l.claim {
+            S4Claim::Label => {}
+            S4Claim::ActionPhase { own_side, permitted, active } => {
+                if f.action_phase.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "授权句被认领两次");
+                }
+                f.action_phase = Some((own_side, permitted, active));
+            }
+            S4Claim::FullChain { by_cost, full, arrows, .. } => {
+                if f.full_chain.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "那条链被认领两次");
+                }
+                f.full_chain = Some((by_cost, full, arrows));
+            }
+            S4Claim::StarterInHand { not_on_field } => {
+                if f.starter_in_hand.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "「开端在手牌中」被认领两次");
+                }
+                f.starter_in_hand = Some(not_on_field);
+            }
+            S4Claim::HandStarterGain { karma, both_agree, from_trait } => {
+                if f.hand_starter_gain.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "开端献祭那个业力数被认领两次");
+                }
+                f.hand_starter_gain = Some((karma, both_agree, from_trait));
+            }
+            S4Claim::HandExemptGate { min_turns } => {
+                if f.hand_exempt_gate.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "手牌豁免那个回合数被认领两次");
+                }
+                f.hand_exempt_gate = Some(min_turns);
+            }
+            S4Claim::HandNotCounted => {
+                if f.hand_not_counted.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "「不消耗次数」被认领两次");
+                }
+                f.hand_not_counted = Some(true);
+            }
+            S4Claim::LimitFaction { cannot_enemy } => {
+                if f.faction.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "阵营限制那格被认领两次");
+                }
+                f.faction = Some(cannot_enemy);
+            }
+            S4Claim::LimitOnField { min_turns, hand_exempt } => {
+                if f.on_field.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "在场限制那格被认领两次");
+                }
+                f.on_field = Some((min_turns, hand_exempt));
+            }
+            S4Claim::LimitPerTurn { max } => {
+                if f.per_turn.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "次数限制那格被认领两次");
+                }
+                f.per_turn = Some(max);
+            }
+            S4Claim::LimitSameName { this_turn, cannot } => {
+                if f.same_name.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "同名牌限制那格被认领两次");
+                }
+                f.same_name = Some((this_turn, cannot));
+            }
+            S4Claim::TimingOpening { first_gain } => {
+                if f.timing.is_some() {
+                    s4_bad(&format!("md:{}", l.line), "时机那四条被认领两次（第一条）");
+                }
+                f.timing = Some((first_gain, false, false, false));
+            }
+            S4Claim::TimingSwap { weak_to_strong } => {
+                let t = f.timing.take().unwrap_or_else(|| s4_bad(&format!("md:{}", l.line), "时机行顺序错了：第二条在第一条之前到了"));
+                f.timing = Some((t.0, weak_to_strong, t.2, t.3));
+            }
+            S4Claim::TimingDeathrattle { fires } => {
+                let t = f.timing.take().unwrap_or_else(|| s4_bad(&format!("md:{}", l.line), "时机行顺序错了：第三条在前两条之前到了"));
+                f.timing = Some((t.0, t.1, fires, t.3));
+            }
+            S4Claim::TimingFreeSlot { makes_room } => {
+                let t = f.timing.take().unwrap_or_else(|| s4_bad(&format!("md:{}", l.line), "时机行顺序错了：第四条在前三条之前到了"));
+                f.timing = Some((t.0, t.1, t.2, makes_room));
+            }
+        }
+    }
+    let need = |what: &str| -> ! {
+        panic!("§四 折叠缺条款「{what}」⇒ 文档把那一行删了／改了形状，而本帧的复现测与推导器都还按十四行取数。请同步解析器与那两把尺");
+    };
+    f.action_phase.unwrap_or_else(|| need("玩家可在行动阶段主动献祭己方卡牌"));
+    f.full_chain.unwrap_or_else(|| need("卡牌直接死亡 → 获得业力 = 卡牌费用（全额）"));
+    f.starter_in_hand.unwrap_or_else(|| need("开端在手牌中，不在场上"));
+    f.hand_starter_gain.unwrap_or_else(|| need("献祭手牌中的开端 → 获得N业力"));
+    f.hand_exempt_gate.unwrap_or_else(|| need("手牌献祭不受在场N回合以上限制"));
+    f.hand_not_counted.unwrap_or_else(|| need("不消耗每回合献祭次数"));
+    f.faction.unwrap_or_else(|| need("不能献祭敌方阵营的卡牌"));
+    f.on_field.unwrap_or_else(|| need("场上卡牌需在场N回合以上才可被献祭"));
+    f.per_turn.unwrap_or_else(|| need("每回合最多献祭N次"));
+    f.same_name.unwrap_or_else(|| need("献祭后本回合不能再放置同名牌"));
+    let t = f.timing.unwrap_or_else(|| need("献祭时机那四条（开局／中期／亡语／腾位）"));
+    if !(t.0 && t.1 && t.2 && t.3) {
+        panic!("§四 时机那四条里有措辞没读全（{t:?}）⇒ 那四行是本章唯一的『为什么』，读不全就等于动机整块从实测里消失");
+    }
+    f
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -3836,6 +4233,183 @@ mod rule_tests {
         b.p_front[2] = Some(CardInst::new(791, fire));
         b.player_turn_start();
         assert_eq!(b.hand.len(), 0, "{} 的后半个子句：场上有卡时同样不该补，引擎给了 {} 张", tag(rows.fences[5][0].line), b.hand.len());
+    }
+
+    /// §四「献祭机制」的 14 条规则行（授权句 1＋主动链 1＋开局四条编号行＋限制表 4＋时机 4）用**文档自己写的
+    /// 数字与措辞**驱动引擎跑一遍：那个「2 业力」、那个「在场 1 回合」、那个「每回合最多 1 次」全部由
+    /// `parse_section4_sacrifice` ＋ `s4_fold` 从文档读进来，本测一个都不写在代码里。
+    /// 为什么本章 14 行全走实测：与 §三／§五／§六 同一条口径——锚点证不了"算出的数＝写的数"，
+    /// 而本章每一行要么给一个数（定额／回合数／次数），要么给一个"不"字（不受此限／不消耗次数／不能再放置）；
+    /// 时机那四条写的是**为什么献祭**，本测把它们各自那句后果跑成一次可观察的引擎事件。
+    #[test]
+    fn section4_sacrifice_rules_reproduce_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let rows = parse_section4_sacrifice(&lines);
+        let tag = |n: usize| format!("md:{n}「{}」", lines[n - 1].trim());
+        let got = |v: &[S4Line]| v.iter().map(|r| r.line).collect::<Vec<_>>();
+
+        // ⓪ 章界与外壳先对账：两道围栏、一张表、四条圆点、一条 prose，行集与本测下面按块取数的那份一一对上。
+        assert_eq!(rows.fence_ticks, 4, "§四 应恰有两道 ``` 围栏＝4 个围栏符（主动链／开局手牌献祭），实测 {} ⇒ 文档加了第三道围栏，而解析器与本测都只登记两道，那里的新行会一起漏过去", rows.fence_ticks);
+        assert_eq!(got(&rows.prose), vec![141], "§四 围栏外的 prose 规则行应恰是 md:141 那一条授权句，实测 {:?} ⇒ 标签判据（单 token ＋ 不以「：」收尾）漂了，有真规则行被当成标题吞掉", got(&rows.prose));
+        assert_eq!(rows.labels, vec![139, 147, 157, 165], "§四 围栏外的标题应恰好是那四条（主动献祭／手牌献祭／献祭限制／献祭时机），实测 {:?} ⇒ 同上", rows.labels);
+        assert_eq!(rows.headers, vec![159], "§四 应只有一张「限制 说明」表，表头行是 159，实测 {:?}", rows.headers);
+        assert_eq!(got(&rows.table), vec![160, 161, 162, 163], "限制表的表体应是 160–163 那四行，实测 {:?} ⇒ 表加了行，键名封闭名单那边会先 panic，本测却会挂到别的条款上", got(&rows.table));
+        assert_eq!(got(&rows.fences[0]), vec![144], "围栏A 应恰是那一条链（md:144），实测 {:?} ⇒ 那条链拆行了或多了一行", got(&rows.fences[0]));
+        assert_eq!(got(&rows.fences[1]), vec![150, 151, 152, 153, 154], "围栏B 应是那句抬头＋四条编号行，实测 {:?} ⇒ 开局手牌献祭那块加了行", got(&rows.fences[1]));
+        assert_eq!(rows.fences[1][0].claim, S4Claim::Label, "md:150「开局献祭开端：」应读成标签（它是那四条的抬头，不是第五条），实测 {:?} ⇒ 标签判据在围栏内失效", rows.fences[1][0].claim);
+        assert_eq!(got(&rows.dots), vec![167, 168, 169, 170], "「献祭时机」应是 167–170 那四条「· 」行，实测 {:?} ⇒ 动机块加了第五条", got(&rows.dots));
+        let f = s4_fold(&rows);
+
+        let (own_side, permitted, active) = f.action_phase.unwrap();
+        let (by_cost, full, arrows) = f.full_chain.unwrap();
+        let in_hand_not_field = f.starter_in_hand.unwrap();
+        let (gain, agree, from_trait) = f.hand_starter_gain.unwrap();
+        let exempt_turns = f.hand_exempt_gate.unwrap();
+        let not_counted = f.hand_not_counted.unwrap();
+        let cannot_enemy = f.faction.unwrap();
+        let (min_turns, hand_exempt) = f.on_field.unwrap();
+        let per_turn = f.per_turn.unwrap();
+        let (this_turn, cannot_redeploy) = f.same_name.unwrap();
+        let (t_open, t_swap, t_dr, t_slot) = f.timing.unwrap();
+
+        // ① 文档先跟自己自洽（不自洽就轮不到引擎出场）：豁免掉的那个数就是表里那个数；链的段数；两处 2 相等。
+        assert!(own_side && permitted && active, "{} 的三个子句读不全（己方 {own_side}／玩家可 {permitted}／行动阶段 {active}）⇒ 本测②③④ 拿它当「这是玩家的主动动作」的前提没了", tag(141));
+        assert!(by_cost && full && arrows == 3, "{} 读不出「= 卡牌费用」（{by_cost}）或「全额」（{full}），或那条链的「→」不是 3 个（实测 {arrows}）⇒ 本测③ 那句「拿的是裸费用」失去依据", tag(144));
+        assert!(agree && from_trait && gain > 0, "{} 行首那个 {gain} 与括号里「死亡获N业力」那个数不一致（{agree}）或读不到「来源：特性」（{from_trait}）⇒ 本测⑤ 拿 {gain} 撞引擎时，不知道文档自己有没有说同一笔钱", tag(152));
+        assert_eq!(exempt_turns, min_turns, "{} 说手牌献祭不受「在场 {exempt_turns} 回合以上」限制，{} 表里那条在场闸写的却是 {min_turns} ⇒ 文档两处说的不是同一个数，本测没法用一条边界扫两侧", tag(153), tag(161));
+        assert!(in_hand_not_field && hand_exempt && not_counted && cannot_enemy && this_turn && cannot_redeploy, "否定式那几条读不全（手牌来源 {in_hand_not_field}／表后半句 {hand_exempt}／不占额度 {not_counted}／阵营 {cannot_enemy}／本回合 {this_turn}／不能再放置 {cannot_redeploy}）⇒ 本章一半的牙都长在「不」字上，读不到就是那几条一起掉");
+        assert!(t_open && t_swap && t_dr && t_slot, "时机那四条的措辞读不全 {t_open}/{t_swap}/{t_dr}/{t_slot} ⇒ 本测⑥⑦⑧ 那三段「为什么」没有文档依据");
+        assert!(min_turns >= 1 && per_turn >= 1, "在场闸那个数读成 {min_turns}、次数闸那个数读成 {per_turn} ⇒ 非正数会让下面那两次边界扫描退化成本测证不了任何东西的循环");
+        let min_turns = min_turns as i64; // 文档那个数是「回合」计数（i32），本测要拿它跟 `b.turn` 相减，先统一到码面那侧的宽度
+
+        let ember = faction_cards(Faction::Ember);
+        let fire = ember[1]; // 火苗：本章所有「按费用给钱」的场景用它（费用最低的非开端牌）
+        let strong = ember[2]; // 引燃者：费用高于 fire，专门用来兑现「放强卡」那一层
+        assert!(strong.cost > fire.cost && fire.cost > 0, "本测把 Ember 的第 2／3 张当作「弱卡／强卡」那一对，实测费用 {}／{} ⇒ 卡表换了顺序或改了费用，⑤⑦ 两段的对照关系不成立", fire.cost, strong.cost);
+        let drattle: CardDef = *ember.iter().find(|d| d.tr == TraitKind::DeathRattleSameColFlame3).expect("Ember 卡表里该有一张亡语同列+3焰（回燃），本测⑧ 用它跑 §四:169");
+        let put = |b: &mut Battle, col: usize, id: u64, def: CardDef, age: i64| {
+            let mut c = CardInst::new(id, def);
+            c.placed_turn = b.turn - age;
+            b.p_front[col] = Some(c);
+        };
+
+        // ② 阵营限制（160）的机器形式＝玩家那两个入口只寻址 `p_front`／`hand`：
+        // 把一张牌放在 e_front[0]，对**同一个列号** 0 做玩家献祭，既被拒、那张牌也毫发无损。
+        let mut b = Battle::new(4101, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        let mut e0 = CardInst::new(960, fire);
+        e0.placed_turn = b.turn - min_turns;
+        b.e_front[0] = Some(e0);
+        b.p_front[0] = None;
+        let err = b.player_sacrifice_field(0).expect_err(&format!("{} 说「不能献祭敌方阵营的卡牌」，可 P1 空着的时候引擎居然让这条调用过去了", tag(160)));
+        assert!(!err.contains("敌方"), "玩家侧入口的拒绝理由不该扯到敌方（实测「{err}」）⇒ 有人往这个入口加了跨阵营寻址");
+        assert!(b.e_front[0].is_some(), "{} 兑现的方式是「传不进来」：那次失败的献祭若把 e_front[0] 动掉了，就说明存在一条玩家可触及敌方格的真实路径", tag(160));
+
+        // ③ 在场闸（161）按文档那个数扫边界：age < min_turns 一律拒，age ≥ min_turns 一律过；过闸那支拿的是全额费用。
+        for age in 0..=(min_turns + 1) {
+            let mut b = Battle::new(4102, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+            put(&mut b, 0, 970, strong, age);
+            b.p_front[0].as_mut().expect("刚放进去的那张牌该在场上").deaths = 2; // 让递减档先脏着：献祭若乘档位，下面的等式就断了
+            let k0 = b.p_karma;
+            let outcome = b.player_sacrifice_field(0);
+            if age < min_turns {
+                let err = outcome.expect_err(&format!("{} 写「需在场 {min_turns} 回合以上」，实测入场才 {age} 回合就被允许献祭", tag(161)));
+                assert!(err.contains("在场不足"), "{} 的拒绝理由跑偏了（实测「{err}」）⇒ 那道闸不是在场闸", tag(161));
+                assert!(b.p_front[0].is_some(), "被拒的献祭把牌取走了却没死 ⇒ 那张牌既不归还场上、也没走 on_death，本测⑧ 那句「腾出空位」的读法失效");
+            } else {
+                outcome.unwrap_or_else(|e| panic!("{} 说在场 {min_turns} 回合以上才可献祭，入场 {age} 回合却被拒：{e}", tag(161)));
+                assert_eq!(b.p_karma, k0 + strong.cost, "{} 说「获得业力 = 卡牌费用（全额）」，实测 {k0} → {}（那张牌的费用 {cost}）", tag(144), b.p_karma, cost = strong.cost);
+                assert_ne!(b.p_karma - k0, strong.cost * refund_pct(2) / 100, "{} 那个「全额」如果其实走的是递减档，deaths=2 时该给 {}，实测 {} ⇒ 递减乘子被悄悄接进献祭那支", tag(144), strong.cost * refund_pct(2) / 100, b.p_karma - k0);
+            }
+        }
+
+        // ④ 手牌献祭（151／153／152）：开局那一刻开端在手牌、四格全空，所以它不受 ③ 那道闸管，拿的是文档那个定额。
+        let mut b = Battle::new(4103, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        assert!(b.hand.iter().any(|c| c.is_starter()), "{} 说「开端在手牌中」，实测开局手里一张开端都没有 ⇒ 本章第一条编号行的场景没法跑", tag(151));
+        assert!(b.p_front.iter().all(|s| s.is_none()), "{} 那半句「不在场上」：开局若已有牌在 P1-P4，本测下面那次手牌献祭就分不清动的是哪一侧", tag(151));
+        let starter_idx = b.hand.iter().position(|c| c.is_starter()).expect("上面已断言手里有开端");
+        let k0 = b.p_karma;
+        b.player_sacrifice_hand(starter_idx)
+            .unwrap_or_else(|e| panic!("{} 说手牌献祭不受「在场 {min_turns} 回合以上」限制，本局那张开端从未入场（{}），引擎却拒了：{e}", tag(153), tag(151)));
+        assert_eq!(b.p_karma, k0 + gain, "{} 写「献祭手牌中的开端 → 获得{gain}业力」，实测 {k0} → {}", tag(152), b.p_karma);
+
+        // ⑤ 不消耗额度（154）：上面那次手牌献祭之后，同一回合仍该能用掉表里那 {per_turn} 次场上额度。
+        assert!(!b.pf.sacrifice_used, "{} 说开端的手牌献祭「不消耗每回合献祭次数」，实测那位已被置上 ⇒ 与 {} 那半句豁免分家（裁定10 把豁免只给开端，这里献的正是开端）", tag(154), tag(162));
+        assert_eq!(b.p_front.iter().filter(|s| s.is_none()).count(), 4, "{} 那半句「不在场上」还要反过来成立：手牌献祭不能动场上任何一格", tag(151));
+        put(&mut b, 1, 981, fire, min_turns);
+        b.player_sacrifice_field(1)
+            .unwrap_or_else(|e| panic!("{} 的豁免没兑现：开端在手牌献过之后，同一回合的场上献祭被拒：{e}", tag(154)));
+
+        // ⑥ 每回合最多 {per_turn} 次（162）：同一回合连试四格，成功次数恰等于文档写的那个数。
+        let mut b = Battle::new(4104, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        for col in 0..4 {
+            put(&mut b, col, 990 + col as u64, fire, min_turns);
+        }
+        let mut ok = 0usize;
+        let mut why = String::from("四格全成功，没撞闸");
+        for col in 0..4 {
+            match b.player_sacrifice_field(col) {
+                Ok(()) => ok += 1,
+                Err(e) => {
+                    why = e;
+                    break;
+                }
+            }
+        }
+        assert_eq!(ok, per_turn as usize, "{} 写「每回合最多献祭 {per_turn} 次」，实测同一回合成功了 {ok} 次（第一次被拒的理由：{why}）", tag(162));
+        assert!(why.contains("每回合最多"), "{why} 不含「每回合最多」⇒ 闸是撞上了，但拒绝理由是别处来的，本测分不清它与 {} 那句", tag(162));
+
+        // ⑦ 时机·开局与换强卡（167／168）：第一笔业力（此前是 0）；补差价的恰是弱卡费用，缺它放不起、有它放得起。
+        let mut b = Battle::new(4105, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        assert_eq!(b.p_karma, 0, "本测⑦ 前半段靠「第一笔」这个说法成立：开局业力不是 0（实测 {}），那句「获得第一笔业力」就没法撞", b.p_karma);
+        let starter_idx = b.hand.iter().position(|c| c.is_starter()).expect("开局手里有开端（上面已断言）");
+        b.player_sacrifice_hand(starter_idx).expect("④ 已跑过同一入口，这里只换一局");
+        assert_eq!(b.p_karma, gain, "{} 说开局献祭开端 → 获得第一笔业力，实测那一笔是 {}（文档在 {} 写的定额是 {gain}）", tag(167), b.p_karma, tag(152));
+        let mut b = Battle::new(4106, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        b.p_karma = strong.cost - fire.cost;
+        assert!(b.p_karma >= 0, "{} 那句「中期献祭弱卡 → 获取业力放强卡」在本测被写成「差一笔弱卡费用」：强卡费用 {} 减弱卡费用 {} 不该是负数", tag(168), strong.cost, fire.cost);
+        b.hand.push(CardInst::new(1010, strong));
+        let strong_idx = b.hand.len() - 1;
+        let err = b.player_place(strong_idx, 0).expect_err(&format!("{} 的对照段要先「放不起」：业力 {} 已够那张 {cost} 费的牌了", tag(168), b.p_karma, cost = strong.cost));
+        assert!(err.contains("业力不足"), "{err} ⇒ 那次放置是被别的闸拒的（同名？越界？），本测⑦ 后半段的对照不成立");
+        put(&mut b, 2, 1011, fire, min_turns);
+        b.player_sacrifice_field(2).expect("③ 已跑过同一入口");
+        assert_eq!(b.p_karma, strong.cost, "{} 那笔「获取业力」应当**恰好**补上差价：献祭所得 {} 加原有 {}，实测 {}", tag(168), fire.cost, strong.cost - fire.cost, b.p_karma);
+        let strong_idx = b.hand.iter().position(|c| c.id == 1010).unwrap_or(strong_idx);
+        b.player_place(strong_idx, 0)
+            .unwrap_or_else(|e| panic!("{} 说献弱卡是为了放强卡，业力已够 {cost} 却仍放不下去：{e}", tag(168), cost = strong.cost));
+        assert!(b.p_front[0].as_ref().is_some_and(|c| c.id == 1010), "放下去的那张不是强卡 ⇒ 本测⑦ 后半段的「放强卡」落到了别的牌上");
+
+        // ⑧ 时机·亡语与腾位（169／170）：场上献祭带着列号进来，亡语照结算、那一格当场空出来并可再放置。
+        let mut b = Battle::new(4107, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        put(&mut b, 3, 1020, drattle, min_turns);
+        let mut ally = CardInst::new(1021, fire);
+        ally.placed_turn = b.turn - min_turns;
+        b.e_front[3] = Some(ally);
+        assert_eq!(b.e_front[3].as_ref().expect("刚放的牌").flame, 0, "本测⑧ 用同列那张牌的业火当亡语的可观察出口，它必须从零起");
+        b.player_sacrifice_field(3)
+            .unwrap_or_else(|e| panic!("{} 说主动献祭触发亡语，场上献祭却被拒：{e}", tag(169)));
+        assert_eq!(b.e_front[3].as_ref().expect("同列那张还在").flame, 3, "{} 说「触发亡语 → 主动献祭触发亡语效果」，那张牌的亡语是同列 +3 焰，实测 {}", tag(169), b.e_front[3].as_ref().unwrap().flame);
+        assert!(b.p_front[3].is_none(), "{} 说献祭是为了「腾出空位」，献祭后那一格却还占着", tag(170));
+        b.hand.push(CardInst::new(1022, fire));
+        b.p_karma = fire.cost;
+        let idx = b.hand.iter().position(|c| c.id == 1022).expect("刚推进手牌");
+        b.player_place(idx, 3)
+            .unwrap_or_else(|e| panic!("{} 那句「为放置新卡做准备」：空出来的 P4 放不进去：{e}", tag(170)));
+
+        // ⑨ 同名牌限制（163）：献祭过的名字本回合不能再放置，那份名单在回合开始清空＝跨回合自动解禁。
+        let mut b = Battle::new(4108, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        put(&mut b, 0, 1030, fire, min_turns);
+        b.hand.push(CardInst::new(1031, fire));
+        b.p_karma = fire.cost;
+        b.player_sacrifice_field(0).expect("③ 已跑过同一入口");
+        let idx = b.hand.iter().position(|c| c.id == 1031).expect("同名那张还在手里");
+        let err = b.player_place(idx, 1).expect_err(&format!("{} 说「献祭后，本回合不能再放置同名牌」，实测放置成功了（业力 {}、费用 {}）", tag(163), b.p_karma, fire.cost));
+        assert!(err.contains("本回合献祭过同名牌"), "拒绝理由不是同名闸（实测「{err}」）⇒ 那句禁令换成了别的东西在拦");
+        b.player_turn_start();
+        let idx = b.hand.iter().position(|c| c.id == 1031).expect("回合开始不该把手里那张同名牌变没");
+        b.p_karma = b.p_karma.max(fire.cost);
+        b.player_place(idx, 1)
+            .unwrap_or_else(|e| panic!("{} 写的是「本回合」不能放置：跨到下一回合仍未解禁（{e}）⇒ 那道闸做成了永久的", tag(163)));
     }
 
     /// §十六「触发示例」三行（687/688/689）用**文档自己写的数字**驱动引擎跑一遍：每行给一个阈值与一个

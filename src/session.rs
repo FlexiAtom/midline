@@ -86,7 +86,7 @@ pub fn run_level<H: Host>(host: &mut H, cfg: &LevelCfg, inherit: &mut Vec<CardIn
         let Some(line) = host.read() else {
             return Terminus::Quit { msg: Some("输入结束，退出。".to_string()) };
         };
-        if let Some(t) = battle_line(host, &mut b, &line) {  // §十二:430 行动阶段不限时；§十二:436 重复 a/b 直至业力用完或无操作（献祭另受 §四:162 每回合1次约束）
+        if let Some(t) = battle_line(host, &mut b, &line) {  // §十二:430 行动阶段不限时；§十二:436 重复 a/b 直至业力用完或无操作（献祭另受 §四:162 每回合1次约束）；§四:141「玩家可在行动阶段主动献祭己方卡牌」的那个「行动阶段」＝这一行反复把输入喂给 `battle_line` 的这一环（献祭指令没有自己的阶段）
             return t;
         }
     }

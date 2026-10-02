@@ -3861,6 +3861,367 @@ mod anchor_tests {
         engine_repro_test_exists("section3_karma_fence_reproduces_on_the_engine");
     }
 
+    /// 献祭状态写点的形状判据：`sacrifice_used` 被赋值（`= `），`sacrificed_names` 被增删（`.push(`／`.clear()`），
+    /// 再加上两笔声明。读点一律不收——`if self.pf.sacrifice_used`、`.contains(..)`、HUD 那两行打印都不算"动过状态"。
+    /// 为什么收成名单而不是数出现几次（同 `s3_is_write` 的理由）：md:162 那句「每回合最多献祭1次」在码面**没有"1"这个数**，
+    /// 兑现它的是"四支入口只共一个位、每回合清一次"这件事；混进读点，名单就退化成"谁提到了这个位"。
+    fn s4_is_sac_write(t: &str) -> bool {
+        ["sacrifice_used", "sacrificed_names"].iter().any(|k| {
+            t.match_indices(k).any(|(i, _)| {
+                let s = t[i + k.len()..].trim_start();
+                s.starts_with("= ")
+                    || s.starts_with(".push(")
+                    || s.starts_with(".clear()")
+                    || s.starts_with(": bool")
+                    || s.starts_with(": Vec")
+            })
+        })
+    }
+
+    /// §四:162／163 两句限制在码面的同一份机器形式＝**谁会动献祭状态**。逐字收集、排序。
+    fn s4_sac_state_writes() -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for raw in production_face(&src) {
+                let t = raw.split("//").next().unwrap_or("").trim().to_string();
+                if s4_is_sac_write(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// 收齐若干支献祭入口的函数体（`s3_fn_body` 那条带缩进定界的读法），按判据筛行。
+    /// 签名写死在这里是刻意的：入口改名、拆函数或挪出，本尺当场红，不会静默少读一支。
+    fn s4_entry_lines(sigs: &[&str], keep: &dyn Fn(&str) -> bool) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for sig in sigs {
+                if !src.lines().any(|l| l.trim_start().starts_with(sig)) {
+                    continue;
+                }
+                out.extend(s3_fn_body(&src, sig).into_iter().filter(|l| keep(l)));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// §四:153「手牌献祭不受“在场1回合以上”限制」的机器形式＝两支**手牌**入口的体内，
+    /// 那份在场闸的字面一处都不出现（它的落点是 md:161 那两处）。纯否定式，能兑现它的只有点名。
+    fn s4_hand_gate_lines() -> Vec<String> {
+        s4_entry_lines(
+            &[
+                "fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
+                "fn enemy_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
+            ],
+            &|l| l.contains("placed_turn"),
+        )
+    }
+
+    /// §四:160「不能献祭敌方阵营的卡牌」的机器形式＝两支**玩家**入口的体内不出现任何敌方可寻址量
+    /// （`e_front`／`e_back`／`enemy_hand`／`self.ef.`）。文档写的是"不能"，码面兑现它是"传不进来"，
+    /// 所以这把尺盯越界引用而不是某条拒绝分支（复现测② 管行为，这里管形状）。
+    fn s4_player_enemy_refs() -> Vec<String> {
+        s4_entry_lines(
+            &[
+                "fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {",
+                "fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
+            ],
+            &|l| l.contains("e_front") || l.contains("e_back") || l.contains("enemy_hand") || l.contains("self.ef."),
+        )
+    }
+
+    /// §四 献祭机制：本章 14 行**全**走「文档数字驱动引擎」那条实测路，并逐行指回（双记账，与 §三／§五／§六 同纪律）。
+    /// 这章的数不是表里的配比，而是三道闸——在场 1 回合、每回合 1 次、开端献祭 2 业力——外加一句「= 卡牌费用（全额）」，
+    /// 所以 ③ 撞的是闸的**码面形状**、④ 收的是献祭状态的**写点名单**，两处都不是计数。
+    /// 已知共读（如实登记，不替哪一侧圆场）：md:144 那支全额与 §三:75/99/108 合流到同一个 match 臂；
+    /// md:152 那个 2 与 §三:122 撞的是 `on_death` 里同一个裸字面量；md:163 那道闸与 §三:107 是同一行代码。
+    #[test]
+    fn every_row_of_section4_sacrifice_is_anchored_back_and_reproduced_on_the_engine() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "四、献祭机制")
+            .expect("§四 标题必须存在（文档结构变了就要同步改本检查）");
+        const S4_HEADS: [&str; 1] = ["限制 说明"];
+
+        // ① 形状路独立再走一遍（不借解析器），再与解析器的行集逐块对账——两把尺各数一遍，漂了才露得出来。
+        let mut labels: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut prose: Vec<usize> = Vec::new();
+        let mut table: Vec<usize> = Vec::new();
+        let mut dots: Vec<usize> = Vec::new();
+        let mut fence_rows: Vec<Vec<usize>> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence: Option<Vec<usize>> = None;
+        let mut in_table = false;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if t.is_empty() {
+                continue;
+            }
+            if t == "```" {
+                fence_ticks += 1;
+                match fence.take() {
+                    None => fence = Some(Vec::new()),
+                    Some(blk) => fence_rows.push(blk),
+                }
+                in_table = false;
+                continue;
+            }
+            if fence.is_none() && t == "---" {
+                break;
+            }
+            if let Some(blk) = fence.as_mut() {
+                blk.push(n);
+                continue;
+            }
+            if S4_HEADS.contains(&t) {
+                headers.push(n);
+                in_table = true;
+                continue;
+            }
+            if t.split_whitespace().count() == 1 && !t.ends_with('：') && !t.ends_with('。') {
+                labels.push(n);
+                in_table = false;
+                continue;
+            }
+            if in_table {
+                table.push(n);
+                continue;
+            }
+            if t.starts_with("· ") {
+                dots.push(n);
+                continue;
+            }
+            prose.push(n);
+        }
+        assert_eq!(fence_ticks, 4, "§四 应恰有两道 ``` 围栏＝4 个围栏符（主动献祭链／开局手牌献祭），实测 {fence_ticks} ⇒ 文档加了第三道，而解析器与本章两把尺都只登记两道，那里的新行会一起漏过去");
+        assert!(fence.is_none(), "§四 的围栏没有闭合（数到奇数个 ```）⇒ 章界 `---` 落在围栏里，本走法会把下一章的表读成 §四 的");
+        assert_eq!(labels, vec![139, 147, 157, 165], "§四 围栏外的小节标题应恰好是那四条（主动献祭／手牌献祭／献祭限制／献祭时机），实测 {labels:?} ⇒ 标签判据（单 token＋不以「：」「。」收尾）漂了；那条判据比 §三 多一道「不以冒号收尾」，为的就是 md:141 那句授权句");
+        assert_eq!(headers, vec![159], "§四 的表头应恰是「限制 说明」一行，实测 {headers:?} ⇒ 那张表多了列头，或与 §三 的表头撞了词");
+        assert_eq!(prose, vec![141], "§四 围栏外的 prose 规则行应恰是 md:141 那一条授权句，实测 {prose:?} ⇒ 整章唯一的『玩家可以』被当成标题吞了，或文档在围栏外加了第二条 prose 规则");
+        assert_eq!(table, vec![160, 161, 162, 163], "限制表应恰是那四行，实测 {table:?} ⇒ 表加了行，而键名是封闭名单，第五行会当场 panic");
+        assert_eq!(dots, vec![167, 168, 169, 170], "「献祭时机」应恰是那四条「· 」，实测 {dots:?} ⇒ 动机块加了第五条");
+        assert_eq!(fence_rows, vec![vec![144], vec![150, 151, 152, 153, 154]], "两道围栏的行集应为 链那一条／开局献祭那五条（含抬头），实测 {fence_rows:?} ⇒ 有围栏加了行，而复现测是按块取数的");
+
+        let parsed = crate::battle::parse_section4_sacrifice(&lines);
+        let claimed = |v: &[crate::battle::S4Line]| -> Vec<usize> {
+            v.iter().filter(|r| r.claim != crate::battle::S4Claim::Label).map(|r| r.line).collect()
+        };
+        assert_eq!(parsed.fence_ticks, fence_ticks, "解析器数到的围栏符与本尺不同（解析器 {}／本尺 {fence_ticks}）⇒ 两处必有一处漂", parsed.fence_ticks);
+        assert_eq!(parsed.labels, labels, "解析器与本尺对「小节标题」读法不同（解析器 {:?}／本尺 {labels:?}）⇒ 两处必有一处漂", parsed.labels);
+        assert_eq!(parsed.headers, headers, "解析器与本尺对「表头行」读法不同（解析器 {:?}／本尺 {headers:?}）⇒ 同上", parsed.headers);
+        assert_eq!(parsed.prose.iter().map(|r| r.line).collect::<Vec<_>>(), prose, "解析器给授权句的行集与本尺不符 ⇒ prose 那一路在两个口径下长短不一");
+        assert_eq!(claimed(&parsed.table), table, "解析器给限制表的行集与本尺那份四行不符 ⇒ 键名名单与形状路分家，`s4_fold` 会把某条限制挂到别的闸上");
+        assert_eq!(claimed(&parsed.dots), dots, "解析器给时机区的行集应与本尺那份「· 」四行一致 ⇒ 两处读法不齐，复现测⑥⑦⑧ 那三段『为什么』不知道落在哪几行");
+        let fence_claims: Vec<Vec<usize>> = parsed.fences.iter().map(|b| claimed(b)).collect();
+        assert_eq!(
+            fence_claims,
+            vec![vec![144], vec![151, 152, 153, 154]],
+            "两道围栏的**必检**行集应为 链一条／开局四条（md:150 那句抬头由标签判据吞掉），实测 {fence_claims:?} ⇒ 与上面那份行数比，多出来的那一行就是被判成 Label 的那一行，两处不齐即有一处在漂"
+        );
+        assert_eq!(parsed.fences[1][0].claim, crate::battle::S4Claim::Label, "md:150「开局献祭开端：」没被判成 Label ⇒ 那条抬头会当成规则行去折叠，围栏B 的四条编号规则一起挂错条款");
+        assert_ne!(parsed.fences[0][0].claim, crate::battle::S4Claim::Label, "md:144 那条链被判成 Label ⇒ 本章唯一一句『怎么算业力』从实测里消失了，而它恰好以「）」收尾、不带数字");
+
+        // ①′ **独立**数字普查＋键名顺序：口径由本尺自己登记（不与解析器共享那份 `expect`）。
+        // 这是 M78／M79 那对读数换来的纪律——解析器那道 arity 守卫单独降级时，四把尺里必须还剩一处在数同一件事。
+        let census = |n: usize| -> usize {
+            let t = at(n).trim();
+            crate::battle::s15_digits(t.split_once(". ").map(|(_, r)| r).unwrap_or(t)).len()
+        };
+        for (n, want) in [
+            (141usize, 0),
+            (144, 0),
+            (151, 0),
+            (152, 2),
+            (153, 1),
+            (154, 0),
+            (160, 0),
+            (161, 1),
+            (162, 1),
+            (163, 0),
+            (167, 0),
+            (168, 0),
+            (169, 0),
+            (170, 0),
+        ] {
+            assert_eq!(
+                census(n),
+                want,
+                "md:{} 在本尺的独立数字普查里该有 {} 个数字（行首那个「N. 」编号不计），实测 {} 个 ⇒ 少了＝那一行的数被换成措辞或整行没了，多了＝同一行又写了一个数；这两种都不是解析器那道 expect 独力分得开的（它只知道自己那一路该有几个）",
+                n,
+                want,
+                census(n)
+            );
+        }
+        for (n, key) in [(160usize, "阵营限制"), (161, "在场限制"), (162, "次数限制"), (163, "同名牌限制")] {
+            assert_eq!(
+                at(n).trim().split_whitespace().next().unwrap_or(""),
+                key,
+                "md:{} 的键名不是「{}」（实测「{}」）⇒ 那张表换了顺序或换了名字，本尺按行号取数与解析器按键名取数就会挂到别的限制上",
+                n,
+                key,
+                at(n).trim().split_whitespace().next().unwrap_or("")
+            );
+        }
+
+        let mut verified: Vec<usize> = Vec::new();
+        verified.extend(claimed(&parsed.prose));
+        verified.extend(claimed(&parsed.table));
+        verified.extend(claimed(&parsed.dots));
+        for blk in &parsed.fences {
+            verified.extend(claimed(blk));
+        }
+        verified.sort_unstable();
+        let rows = verified.clone();
+        assert_eq!(
+            rows,
+            vec![141, 144, 151, 152, 153, 154, 160, 161, 162, 163, 167, 168, 169, 170],
+            "§四 必检集应为 授权句1＋链1＋开局4＋限制表4＋时机4＝14 行，实测 {rows:?} ⇒ 文档加了规则行，或某种外壳的判据失效"
+        );
+        for n in [141usize, 144, 152, 161, 162, 163, 167, 170] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §四 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [137usize, 139, 147, 150, 157, 159, 165] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／小节标题／围栏抬头／表头判据失效", at(n));
+        }
+        for (n, why) in NOT_A_RULE {
+            assert!(!rows.contains(n), "md:{n} 落在 §四 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}");
+        }
+
+        // ② 三条认领路＋配比＋双记账。
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§四 有 {} 行既无锚点指回、也不在债表里、又不是被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (0, 0, 14),
+            "§四 三条认领路应为 锚点0／挂债0／实测14——本章 14 行**全**走实测（含那张四行限制表，它是 `s4_table_row` 按键名折叠后打进引擎的），实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从实测路悄悄挪走"
+        );
+        for &n in &rows {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）没有锚点指回 ⇒ §四 的纪律与 §三／§五／§六 相同：14 行**全**指回，走了实测路也不豁免锚点", at(n));
+        }
+        assert!(
+            rows.iter().all(|n| !debited.contains(n)),
+            "§四 不该有挂债行：本章 14 行全部已实现并已指回，任何一行躺进债表都说明实现被撤"
+        );
+
+        let f = crate::battle::s4_fold(&parsed);
+        assert_eq!(f.labels, labels, "`s4_fold` 搬出来的标签名单与形状路不符（折叠 {:?}／本尺 {labels:?}）⇒ 折叠器读的已不是这把尺验过的那一章", f.labels);
+        assert_eq!(f.headers, headers, "`s4_fold` 搬出来的表头名单与形状路不符（折叠 {:?}／本尺 {headers:?}）⇒ 同上", f.headers);
+        let gain = f.hand_starter_gain.unwrap().0;
+        let (min_turns, hand_exempt) = f.on_field.unwrap();
+        let per_turn = f.per_turn.unwrap();
+        let exempt_turns = f.hand_exempt_gate.unwrap();
+        assert_eq!(exempt_turns, min_turns, "md:153 豁免掉的那个回合数与 md:161 表里那个不一致（{exempt_turns}／{min_turns}）⇒ 文档两处说的不是同一道闸，下面那句「闸只有两处」对不上任何一行");
+        assert!(hand_exempt, "md:161 那格的右半句「手牌献祭不受此限制」读不到（{hand_exempt}）⇒ 表与 md:153 那一条的呼应断了，本章那条豁免只剩围栏一侧作证");
+
+        // ③ 文档数字送进码面 grep：本章撞的不是配比，是三道闸的**形状**。
+        assert_eq!(
+            code_occurrences("if self.turn - c.placed_turn < 1 {"),
+            2,
+            "md:161 那道在场闸在码面恰有 2 处：玩家场上献祭＋敌方场上献祭（镜像同一条闸，文档只写了我方那侧）。实测 {} 处 ⇒ 0 处＝闸被摘（md:161 与 §十二:431 一起落空）；≥3 处＝有人第三处也在卡入场年龄，而那两处之外文档没许过",
+            code_occurrences("if self.turn - c.placed_turn < 1 {")
+        );
+        assert_eq!(
+            code_occurrences("if !is_starter {"),
+            2,
+            "md:154「不消耗每回合献祭次数」的**适用范围**（裁定10：只豁免开端）在码面恰有 2 处：玩家与敌方手牌献祭入口各一支。实测 {} 处 ⇒ 0 处＝豁免扩到所有手牌（md:162 那句「每回合最多献祭1次」被悄悄放宽）；≥3 处＝另有一处按开端分派献祭豁免，而文档只登记了手牌献祭这一种",
+            code_occurrences("if !is_starter {")
+        );
+        assert_eq!(
+            code_occurrences("self.pf.sacrifice_used = true;"),
+            2,
+            "md:162 那个「1 次」在玩家侧由**一个位**兑现：场上入口与手牌入口共置它，恰有 2 处。实测 {} 处 ⇒ 1 处＝两侧不再共一个位（会有第二条『本回合已祭』的账）；≥3 处＝又一处消耗这个额度，而 §四:162 只算主动献祭",
+            code_occurrences("self.pf.sacrifice_used = true;")
+        );
+        assert_eq!(
+            code_occurrences("self.ef.sacrifice_used = true;"),
+            2,
+            "敌方侧与玩家侧同形（AI 那两支入口共一个位），恰有 2 处，实测 {} 处 ⇒ 两边的『每回合1次』分家了：文档只有一条 §四:162，没写敌方可以例外",
+            code_occurrences("self.ef.sacrifice_used = true;")
+        );
+        assert_eq!(
+            code_occurrences("DeathCause::Sacrifice);"),
+            4,
+            "md:144 那条链的最后一环＝四支献祭入口各自直接调 `on_death(.., DeathCause::Sacrifice)`，恰有 4 处（我方场上／我方手牌／敌方场上／敌方手牌）。实测 {} 处 ⇒ 少于 4＝某支入口不再走同一条死亡结算（『卡牌直接死亡 → 获得业力』那两环断在半路）；多于 4＝有人从献祭之外造了第三个『算献祭』的地方，而 §三:66 那份获取方式名单只有两支",
+            code_occurrences("DeathCause::Sacrifice);")
+        );
+
+        // 那几个数是文档给的，码面是**裸字面量**——没有第二处字面可撞，本条就是那道门的登记处。
+        assert_eq!(
+            (min_turns, per_turn),
+            (1, 1),
+            "md:161 的「在场 {min_turns} 回合以上」与 md:162 的「每回合最多献祭 {per_turn} 次」，在码面分别写成 `< 1` 那道比较与**一个 bool**（上面三条 grep 钉的就是这两处形状）⇒ 文档要改成 2，得先给那两处加字面，本条是那道门的登记处"
+        );
+        assert_eq!(
+            gain, 2,
+            "md:152 那个「获得 {gain} 业力」＝`on_death` 开端支里的裸字面量，与 §三:122 撞的是**同一个** `2`（开端在场死与开端在手牌献，共用那一支）⇒ 文档改成别的数时，本章只有复现测④ 撞得到，本条是它的门"
+        );
+
+        // ④ 献祭状态的写点封闭名单＋两条否定式的点名。
+        let mut want_writes: Vec<String> = vec![
+            "pub sacrifice_used: bool,".to_string(),
+            "pub sacrificed_names: Vec<&'static str>,".to_string(),
+            "self.pf.sacrifice_used = false;".to_string(),
+            "self.ef.sacrifice_used = false;".to_string(),
+            "self.pf.sacrificed_names.clear();".to_string(),
+            "self.ef.sacrificed_names.clear();".to_string(),
+            "self.pf.sacrifice_used = true;".to_string(),
+            "self.pf.sacrifice_used = true;".to_string(),
+            "self.ef.sacrifice_used = true;".to_string(),
+            "self.ef.sacrifice_used = true;".to_string(),
+            "self.pf.sacrificed_names.push(c.def.name);".to_string(),
+            "self.pf.sacrificed_names.push(c.def.name);".to_string(),
+            "self.ef.sacrificed_names.push(c.def.name);".to_string(),
+            "self.ef.sacrificed_names.push(c.def.name);".to_string(),
+        ];
+        want_writes.sort();
+        assert_eq!(
+            s4_sac_state_writes(),
+            want_writes,
+            "md:162／163 合起来在码面的形式＝这份**封闭的献祭状态写点名单**：两笔声明、两笔每回合清位、四笔置位（每侧场上＋手牌各一）、四笔记名。实测多一条＝有人新起了一条消耗献祭额度或登记献祭同名的路，而 §四 只登记了『主动献祭』这一种触发；少一条＝那条闸被摘（连 md:154 那个开端豁免一起被摘时，md:162 就没人兑现了）。名单里出现读点是刻意的不可能：判据只认赋值／push／clear／声明。"
+        );
+        assert_eq!(
+            s4_hand_gate_lines(),
+            Vec::<String>::new(),
+            "md:153「手牌献祭不受“在场 {min_turns} 回合以上”限制」在码面的形式＝两支手牌入口的体内一份都不碰 `placed_turn`。实测非空＝手牌献祭开始吃在场闸，md:153 与 md:161 那半句「手牌献祭不受此限制」一起落空（开局献祭开端那条路会当场走不通）"
+        );
+        assert_eq!(
+            s4_player_enemy_refs(),
+            Vec::<String>::new(),
+            "md:160「不能献祭敌方阵营的卡牌」在码面的形式＝两支玩家入口的体内一个敌方可寻址量都不出现（`e_front`／`e_back`／`enemy_hand`／`self.ef.`）。实测非空＝玩家那侧真能碰到敌方那侧的状态，那句『不能』就不再是 API 形状保证的了"
+        );
+
+        // ⑤ 那些数字真的被引擎跑过、而且那条测还挂在 `#[test]` 上。
+        engine_repro_test_exists("section4_sacrifice_rules_reproduce_on_the_engine");
+    }
+
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），
     /// 规则层欠的是校验（引擎收了它不该收的走法）。后者会让同一局打出不同结果，前者不会。
     /// 第三档 `Mode` 是本帧被 §廿一 逼出来的：整块模式没做（Roguelike／金币／每日固定卡组）既不是

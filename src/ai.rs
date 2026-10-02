@@ -295,7 +295,7 @@ pub fn sacrifice_value(b: &Battle, row: Row, col: usize) -> (f64, SacFlags) {
     let sc = gain as f64 * 1.5 + deathrattle_value(c) * 2.0 - lost;
 
     let mut flags: SacFlags = 0;
-    let unlocks = b.enemy_hand.iter().any(|h| {
+    let unlocks = b.enemy_hand.iter().any(|h| {  // §四:168「中期献祭弱卡 → 获取业力放强卡」的机器形式＝那个「付不起 → 献祭后付得起」的区间（下面四行合起来正是这句：非开端、未同名禁置、当前买不起、加上 gain 就买得起且价值更高）
         !h.is_starter()
             && !b.ef.sacrificed_names.contains(&h.def.name)
             && hand_cost(h) > b.e_karma
