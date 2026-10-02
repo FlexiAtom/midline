@@ -21,7 +21,7 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 111 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 117 条记录的补丁有没有真打上；
 # 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
 # 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
 # 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
@@ -938,4 +938,52 @@ k=[m for m,l in enumerate(ls) if l.strip()==('t.ends_with('+q+'：'+q+') && s15_
 assert len(k)==1, k
 ls[k[0]]='    t.ends_with('+q+'：'+q+')'
 open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+run
+
+# ===== §十一 卡牌升级（第十三步·其八）：上限「3」的多侧对账（章封顶／玩家当场拒／存档越界各一枚牙，正证三侧不是同一处重复）／三支效果 match 臂／「限1张」那枚只置一次 true 的 bool／405 那枚新锚的牙 =====
+echo "### M111 把敌方章强化封顶 CHAPTER_STRENGTH_CAP 从 3 改成 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1269「上限 3 ≠ CHAPTER_STRENGTH_CAP 4」＋既有章强化斜坡测 @battle.rs:6041（阶梯 (1,2,3,4,4) 撞平台 (1,2,3,3,3)）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='pub const CHAPTER_STRENGTH_CAP: u32 = 3;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'pub const CHAPTER_STRENGTH_CAP: u32 = 4;'))"
+run
+echo "### M112 把玩家侧 upgrade_card 的当场拒闸 upgrades >= 3 写成 >= 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1277「玩家侧当场拒闸 upgrades >= 3 没了」＋既有 `upgrade_three_kind_and_cap` @progress.rs:634（第4次不再被拒 ⇒ 期望 Err 处 unwrap None）"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+a='    if c.upgrades >= 3 {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    if c.upgrades >= 4 {'))"
+run
+echo "### M113 把存档越界闸 upgrades > 3 写成 > 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1279「存档越界闸 upgrades > 3 没了」＋既有 `each_corruption_is_refused_not_guessed` @save.rs:645（「升级数越界 §十一:404」样本被当合法档读过）——M111/M112/M113 三条各撞一侧上限、又各牵一条不同的既有测，正证 ③ 那层「多侧」不是抄三遍同一处"
+restore; py "
+p='$D/src/save.rs'; s=open(p,encoding='utf8').read()
+a='    if upgrades > 3 {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    if upgrades > 4 {'))"
+run
+echo "### M114 只把玩家 thr 臂的 (c.def.threshold - 1) 改成 - 2（battle.rs:362 敌方那处同款一字不碰）⇒ 实测 **1 红**、与预测同数：只红在 §十一 推导器 ④ @model.rs:1284「阈值-1 那支没了」；复现层本章没有（§十一 不开实测路），battle.rs 那处同款一字不碰 ⇒ 正证这颗牙只咬玩家侧那支"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+a='\"thr\" => c.def.threshold = (c.def.threshold - 1).max(1),'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'\"thr\" => c.def.threshold = (c.def.threshold - 2).max(1),'))"
+run
+echo "### M115 把 *up_used = true 写成 = false（真行为回归：通关限1张那道闸永远置不回，第二次 up 不再被拒）⇒ 实测 **2 红**：既有 `the_upgrade_gate_is_the_phase_not_the_index` @command.rs:509（第二次 up 没被拒）＋§十一 推导器 ⑤ @model.rs:1289「写 *up_used = true 的行实测 0 处」"
+restore; py "
+p='$D/src/command.rs'; s=open(p,encoding='utf8').read()
+a='*up_used = true;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'*up_used = false;'))"
+run
+echo "### M116 抹掉 progress.rs collect_survivors 行尾本帧新写的那段 §十一:405（只抠这段，同一行还挂着 §十二:503／§廿三:1003）⇒ 实测 **1 红**、与预测同数：只红在 §十一 推导器 ① @model.rs:1260「md:405 没有任何锚点指回」——405 全仓唯一生产锚就是这条（save.rs:20 那条在 //! 模块头、不计入 referenced）。M99 换章各量一遍的姊妹条"
+restore; py "
+import re,glob
+hits=0
+for p in glob.glob('$D/src/*.rs'):
+    s=open(p,encoding='utf8').read()
+    s2,n=re.subn(r'；§十一:405[^；\n]*','',s)
+    hits+=n
+    if n: open(p,'w',encoding='utf8').write(s2)
+assert hits==1, hits"
 run
