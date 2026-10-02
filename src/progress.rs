@@ -63,7 +63,7 @@ pub fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str) -> Result<
     if c.upgrades >= 3 {
         return Err("该牌已达升级上限3次".into());
     }
-    match kind {
+    match kind { // §十一:403 三支效果：power→数值+1／thr→阈值-1／skill→技能强化（玩家侧实现体，敌方侧另见 battle.rs:337 的复用）
         "power" => {
             c.def.power += 1;
             c.hp = c.def.power; // 升级即时可见（每关本就重置满格）
@@ -82,7 +82,7 @@ pub fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str) -> Result<
 /// §廿二:947 继承堆上限 10 张，超出弃最早入堆的牌（永久消失）。
 /// 幸存者回继承堆（手牌+堆底+场上），上限10，超出弃最早。
 /// 返回那些"被上限挤出去"的牌该显示的文案——本层不打印，打印归调用方。
-pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<String> {  // §十二:503 存活牌收进继承堆＝带入下一关；§廿三:1003 跨关继承（阵亡永久消失见 battle.rs:1134）
+pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<String> {  // §十二:503 存活牌收进继承堆＝带入下一关；§廿三:1003 跨关继承（阵亡永久消失见 battle.rs:1134）；§十一:405 升级跨关保留＝幸存牌连同 upgrades 原样 append 进 inherit，本函数一处都不清 upgrades
     let mut out = Vec::new();
     let mut survivors = b.battle_survivors();
     survivors.sort_by_key(|c| c.id);

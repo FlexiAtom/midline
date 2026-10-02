@@ -242,7 +242,7 @@ pub fn execute_settle(
         SettleCommand::Quit => SettleStep::Quit,
         SettleCommand::Blank => SettleStep::Stay(Vec::new()),
         SettleCommand::Unknown(w) => SettleStep::Stay(one(format!("✖ 未知命令：{w}"))),
-        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）；§九:317 §九:319 §九 时机表那两行的 ✅ 就落在这一条上
+        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）；§九:317 §九:319 §九 时机表那两行的 ✅ 就落在这一条上；§十一:406 融合与升级是两条并列命令（见下方 Up 臂），玩家自选先后、闸门互不引用⇒无强制顺序
             Ok(msg) => SettleStep::Stay(one(format!("✓ {msg}"))),
             Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
         },

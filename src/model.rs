@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十六张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十八张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -210,7 +210,7 @@
 //!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
 //!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
 //!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
-//!       §一/§二/§十/§十一/§十三/§十九/§廿 那七章的散文行——那里"整条规则没落地"仍查不出；
+//!       §一/§二/§十/§十九/§廿 那五章的散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       以及本帧的 §十四 持业者·蜡烛（**第一条同章并用两条路、且九行双记账的章**：12 行＝围栏外表体 3
 //!       （走锚点）＋围栏内 9（走"文档数字驱动引擎复现"，**同时**一行都不许缺锚点）。配比钉死 锚点3／挂债0／实测9，
@@ -306,6 +306,23 @@
 //!       盲区照登：M83（把同名牌那道闸的条件写成 false）§四 推导器**没喊**，只红两章的复现测——③ 钉的是三道闸的**形状**，
 //!       不钉「文案还在而闸不执行」（与待办 (e)「字面串可绕」同族，本帧接受并登记）；M96 只摘 arity 守卫、文档不动 ⇒
 //!       四把尺全绿（M78／M79 那对读数在 §四 的重做，另一条腿由 M97 补：守卫降级＋文档多写一个数，只剩 ①′ 那份**独立**普查在喊）。
+//!     - 以及 第十三步·其七 的 §十三 攻击与伤害结算（**第四条整章全走实测的章**：27 行＝总闸 1＋圆点 2＋六道围栏 24，配比钉死
+//!       锚点0／挂债0／实测27，见 `every_row_of_section13_attack_is_anchored_back_and_reproduced_on_the_engine`）。
+//!       **本帧补登**：其七 落了推导器与电池牙，却没把这一章写进本 bullet 26 的章序叙事，也没同步模块头的计数——两处因此停在 §四
+//!       时代的读数（「十六张表／章」「§一/§二/§十/§十一/§十三/§十九/§廿 那七章」）。本帧按 coverage-probe 现量把计数修到
+//!       **十八张／那五章**（推导器章集与无推导器章集各数一遍），并把 §十三 的叙事一并补上——改的是**注释**，不动任何判据；
+//!       这正是反向覆盖要防的失真之一种：**模块头对"进度本身"说谎**（它承诺的章数与码面实际带推导器的章数分家）。
+//!     - 以及本帧（第十三步·其八）的 §十一 卡牌升级（**§八 同源的第二张纯锚表**：5 行＝升级时机／效果／上限／保留／与融合优先级，
+//!       全走锚点指回＋逐字段等值、零挂债；本章**无示例围栏 ⇒ 第三条实测路开不出来**，与 §十七 同此形状）。它复用 `table_body`、
+//!       逐字段比死，比的**不是表格列而是函数体的码面形状**——这是比 §八 新出的一条腿：① 404 那个「3」不做单点，用文档的数
+//!       **反过来撞三处各自的上限**（玩家 `upgrade_card` 的当场拒 `upgrades >= 3`、存档 `parse_card` 的越界 `upgrades > 3` 与
+//!       数值 `power > def.power + 3`、敌方 `CHAPTER_STRENGTH_CAP`）——三处任一改数即红，电池据此配 M111／M112／M113 三颗**独立**牙；
+//!       ② 403 的「数值+1／阈值-1／技能强化」三支 ↔ `upgrade_card` 三个 match 臂的字面；③ 402 的「限1张」在码面**不是计数而是 bool**，
+//!       做成写点封闭名单 `*up_used = true`＝1、声明 `up_used: &mut bool`＝1——多一条＝有人另起一处扣额度，少一条＝那条路被摘；
+//!       ④ 406「先升级或先融合」＝ `execute_settle` 里 fuse 臂与 up 臂**并列共存**，两闸互不引用 ⇒「无强制顺序」有了机器形式。
+//!       盲区照登：无实测路 ⇒ skill 臂 `c.skills.push(pool[upgrades % len])` 钉的是**字面在不在**，选哪支技能、叠加是否正确都不由本章
+//!       兑现（与待办「字面串可绕」同族，本帧接受并登记）；403 的「+1」若被写成 `+= 2` 会红在字面，但「一次调用只加一次」这条幂等性
+//!       本章不钉（章强化的幂等由 §三／裁定 ③ 那半另行看守）。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -1112,7 +1129,7 @@ mod anchor_tests {
     /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）；
     /// §十四 由 `every_row_of_section14_…` 覆盖（也是按形态推，但它开了**双记账**：围栏里那 9 行既走
     /// 文档数字驱动引擎的实测，也一行都不许缺锚点，见该测试注释）。
-    /// **其余各章**（§一/§二/§十/§十一/§十三/§十九/§廿）那七章仍未反向纳入。
+    /// **其余各章**（§一/§二/§十/§十九/§廿）那五章仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -1205,6 +1222,87 @@ mod anchor_tests {
             }
         }
         assert!(bad.is_empty(), "{} 处 §十八 卡表与文档不符：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    /// §十一 卡牌升级——纯规则表（无示例围栏 ⇒ 开不出「文档数字驱动引擎」那第三条实测路），五行**全走
+    /// 锚点指回＋逐字段等值**、零挂债。形状与 §八 同源（复用 `table_body`、逐字段比死），差别只在比的对象
+    /// 不是表格列而是**函数体的码面形状**：404 的「3」用文档那个数反过来撞三处上限（玩家 `upgrade_card`
+    /// 的当场拒、存档 `parse_card` 的越界与数值两道闸、敌方 `CHAPTER_STRENGTH_CAP`），403 的三支效果撞
+    /// `upgrade_card` 的三个 match 臂，402 的「限1张」撞 `up_used` 那枚只被置一次 `true` 的 bool 的写点封闭名单，
+    /// 406 的「自选先后」撞 `execute_settle` 里 fuse 与 up 两条并列命令臂。
+    /// 已知共读（照 §十三 的口径点名，不替哪侧圆场）：md:402／404 与 §廿二:965 撞同一道「上限3次」闸
+    /// （progress.rs 与 command.rs 各写一次文案），md:405 与 §十二:503／§廿三:1003 撞的是 `collect_survivors`
+    /// 那一行——同一段码面替多章作证，改动会同时惊动多章的推导器与电池。
+    #[test]
+    fn every_row_of_section11_upgrade_is_anchored_back_and_its_caps_cross_check_the_doc() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let rows = table_body(&lines, "十一、卡牌升级", "项目 说明");
+        assert_eq!(
+            rows,
+            vec![402, 403, 404, 405, 406],
+            "§十一 表体按结构推导应得 5 行（升级时机／效果／上限／保留／与融合优先级），实测 {rows:?} ⇒ 文档加了／改了行，或列头「项目 说明」换了措辞让 table_body 认不下"
+        );
+
+        // ① 全走锚点、零挂债（本章没有示例围栏，第三条实测路开不出来）。
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(!rows.contains(n), "md:{n} 落在 §十一 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}");
+        }
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if !referenced.contains(&(n as u32)) {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+            assert!(!debited.contains(&n), "md:{n}（「{}」）既有锚点指回又挂着债 ⇒ 同一行两头下注", at(n));
+        }
+        assert!(missing.is_empty(), "§十一 有 {} 行没有任何锚点指回（实现被删或锚被摘）：\n{}", missing.len(), missing.join("\n"));
+
+        // ② 逐字段等值先取文档自己写的两个 ASCII 数字——它们是多侧对账的唯一入口，掺进别的数就当场红。
+        let digits = |n: usize| -> String { at(n).chars().filter(char::is_ascii_digit).collect() };
+        assert_eq!(digits(404), "3", "§十一:404「{}」里的 ASCII 数字不是单一个 3 ⇒ 上限措辞变了，下面撞三处上限的入口就没了", at(404));
+        assert_eq!(digits(402), "1", "§十一:402「{}」里的 ASCII 数字不是单一个 1 ⇒ 「每通关限1张」这道闸没有唯一数字可对账", at(402));
+        let cap: u32 = digits(404).parse().unwrap();
+
+        // ③ 上限「3」的多侧交叉对账：文档那个 3，必须与三处代码上限同数，缺一即红（这是本章最硬的牙）。
+        assert_eq!(
+            crate::battle::CHAPTER_STRENGTH_CAP,
+            cap,
+            "§十一:404 上限 {cap} ≠ 敌方章强化封顶 `CHAPTER_STRENGTH_CAP` {} ⇒ 章强化借走这条上限又改了数",
+            crate::battle::CHAPTER_STRENGTH_CAP
+        );
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let up_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap(), "pub fn upgrade_card");
+        assert!(up_body.contains(&format!("upgrades >= {cap}")), "§十一:404 上限 {cap}：玩家侧 `upgrade_card` 的当场拒闸 `upgrades >= {cap}` 没了 ⇒ 升级不封顶");
+        let pc_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/save.rs")).unwrap(), "fn parse_card");
+        assert!(pc_body.contains(&format!("upgrades > {cap}")), "§十一:404 上限 {cap}：存档越界闸 `upgrades > {cap}` 没了 ⇒ 坏档能把升级数写超上限");
+        assert!(pc_body.contains(&format!("power > def.power + {cap}")), "§十一:402/404：数值上限闸 `power > def.power + {cap}`（基线 + 每次+1 × 最多{cap}次）没了 ⇒ 坏档能把 power 堆过上限");
+
+        // ④ 逐字段等值：403 的三支效果 ↔ `upgrade_card` 三个 match 臂（文档写了三支，代码就得给三支）。
+        assert!(up_body.contains("c.def.power += 1"), "§十一:403「数值+1」：power 臂的 `c.def.power += 1` 没了 ⇒ 文档写了 +1、代码不给");
+        assert!(up_body.contains("(c.def.threshold - 1).max(1)"), "§十一:403「阈值-1」：thr 臂的 `(c.def.threshold - 1).max(1)` 没了 ⇒ 阈值能降到 0 以下");
+        assert!(up_body.contains("c.skills.push("), "§十一:403「技能强化」：skill 臂的 `c.skills.push(` 没了 ⇒ 技能强化那支空转");
+
+        // ⑤ 「限1张」的机器形式＝`up_used` 是一枚只被置一次 `true` 的 bool，写点封闭名单钉死。
+        //   文档 402 的「1」在码面不是计数器：改成 `+= 1`／`< 1`／换类型就破了「每通关 1 张」，故点名两处写侧形状。
+        assert_eq!(
+            code_occurrences("*up_used = true"),
+            1,
+            "§十一:402「限1张」：写 `*up_used = true` 的行实测 {} 处（应为 1）⇒ 闸被拆成多段或换成计数",
+            code_occurrences("*up_used = true")
+        );
+        assert_eq!(
+            code_occurrences("up_used: &mut bool"),
+            1,
+            "§十一:402「限1张」的 bool 声明 `up_used: &mut bool` 实测 {} 处 ⇒ 类型一改（如换成计数）这个「1」就没人对账了",
+            code_occurrences("up_used: &mut bool")
+        );
+        let es_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/command.rs")).unwrap(), "pub fn execute_settle");
+        assert!(
+            es_body.contains("SettleCommand::Fuse") && es_body.contains("SettleCommand::Up"),
+            "§十一:406「先升级或先融合自由选择」：结算函数里 fuse 臂与 up 臂没同时在场 ⇒ 两条命令不再并列，「无强制顺序」这条读不出来了"
+        );
     }
 
     /// §八 技能池：13 行必检（1 行「12种」声明 + 12 条技能行）**全部**要有锚点指回，并与代码逐字段比死。
@@ -4907,9 +5005,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四 十六张表／章现在各自带推导器
-    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十六章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§十/§十一/§十三/§十九/§廿）那七章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一 十八张表／章现在各自带推导器
+    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十八章的完整性由推导器负责**；
+    /// 其余各章（§一/§二/§十/§十九/§廿）那五章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {
