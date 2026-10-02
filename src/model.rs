@@ -634,7 +634,7 @@ impl CardInst {
             id,
             def,
             skills: Vec::new(),
-            hp: def.power,  // §廿三:988 三位一体：数值落地即血量，出招时再当伤害读；§七:266 血量＝卡牌的生命值＝数值（这个初始化就是那个等号）
+            hp: def.power,  // §廿三:988 三位一体：数值落地即血量，出招时再当伤害读；§七:266 血量＝卡牌的生命值＝数值（这个初始化就是那个等号）；§十三:571 我方卡牌 HP＝数值；§十三:573 敌方卡牌 HP＝数值（两侧共用这一个构造，"独立"于持业者那条 20）
             flame: 0,
             deaths: 0,
             upgrades: 0,
@@ -4236,6 +4236,408 @@ mod anchor_tests {
 
         // ⑤ 那些数字真的被引擎跑过、而且那条测还挂在 `#[test]` 上。
         engine_repro_test_exists("section4_sacrifice_rules_reproduce_on_the_engine");
+    }
+
+    /// §十三 那六道围栏里「业火」这一项在码面的形式＝**谁会动它**。判据只认写：增量 `+= `、减量 `-= `、
+    /// 赋值 `= `、字段声明 `: i32`。读点一律不收——`if snap.flame < thr`、`c.flame == 0` 那些都不算动过业火。
+    /// 结构体字面量里的初值（`flame: 0,`／视图层那份 `flame: c.flame,`）也不收：把初值算成写点，
+    /// 每个构造点都能冒充「有人给这张牌加了业火」，名单就失去意义。
+    fn s13_is_flame_write(t: &str) -> bool {
+        t.match_indices("flame").any(|(i, _)| {
+            let s = t[i + "flame".len()..].trim_start();
+            s.starts_with("+= ") || s.starts_with("-= ") || s.starts_with("= ") || s.starts_with(": i32")
+        })
+    }
+
+    /// md:546／555／564／563 合起来在码面的同一份机器形式＝**谁会动业火**，逐字收集、排序。
+    fn s13_flame_writes() -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for raw in production_face(&src) {
+                let t = raw.split("//").next().unwrap_or("").trim().to_string();
+                if s13_is_flame_write(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// 攻击路径那三段（我方攻击阶段／敌方攻击阶段／目标选择）的函数体。签名写死在这里是刻意的：
+    /// 每个签名要求在**全部** src 里恰好命中一次，改名、拆函数、复制一份都会当场红，不会静默少读一段
+    /// （`s4_entry_lines` 那种「文件里没有就跳过」的读法在这里不够——否定式断言最怕的就是读空了还算绿）。
+    fn s13_attack_path_bodies() -> Vec<(String, Vec<String>)> {
+        let mut out = Vec::new();
+        for sig in [
+            "fn player_attack_phase(&mut self) {",
+            "fn enemy_attack_phase(&mut self) {",
+            "pub(crate) fn pick_target(&self, side: SideK, col: usize, tr: TraitKind) -> Option<usize> {",
+        ] {
+            let mut found = 0usize;
+            let mut body = Vec::new();
+            for fp in src_rs_files() {
+                let src = std::fs::read_to_string(&fp).unwrap();
+                if src.lines().any(|l| l.trim_start().starts_with(sig)) {
+                    found += 1;
+                    body = s3_fn_body(&src, sig);
+                }
+            }
+            assert_eq!(found, 1, "§十三 攻击路径要读 `{sig}` 的函数体，实测在全部 src 里命中 {found} 处（应为 1）⇒ 那段改名、拆函数或被复制，本尺读到的已不是打中线的那一段");
+            assert!(!body.is_empty(), "`{sig}` 函数体为空 ⇒ 否定式判据无从下手");
+            out.push((sig.to_string(), body));
+        }
+        out
+    }
+
+    /// §十三 攻击与伤害结算：本章 27 行**全**走「文档数字驱动引擎」那条实测路，并逐行指回（双记账，与 §三／§四／§五／§六 同纪律）。
+    /// 这章的数是那两个 20、那个自损的 1、那两个 `≤ 0`，外加三段格号（P1-P4／E5-E8／E1-E4），
+    /// 所以 ③ 撞的是那几处的**码面形状**、④ 收的是业火写点与攻击路径的**点名**，两处都不是计数。
+    /// 已知共读（如实登记，不替哪一侧圆场）：md:545／546 与 §十二:444／445、md:551／553 与 §十二:465／467、
+    /// md:555 与 §十二:477、md:547 与 §十二:446／§十六:678-679 撞的都是同一批行——同一段码面替两章作证，
+    /// 改动会同时惊动两章的推导器与电池，这正是双记账要的。
+    /// md:564 那句「业火只由攻击造成的伤害触发」按字面读在全仓**不成立**（特性、技能、亡语、Boss 炉温都发焰），
+    /// 本尺按局部读法钉它：自损不发焰（复现测⑨）＋无攻击则无业火（复现测⑩），其余发焰点在 ④ 那份名单里点名。
+    #[test]
+    fn every_row_of_section13_attack_is_anchored_back_and_reproduced_on_the_engine() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十三、攻击与伤害结算")
+            .expect("§十三 标题必须存在（文档结构变了就要同步改本检查）");
+
+        // ① 形状路独立再走一遍（不借解析器），再与解析器的行集逐块对账——两把尺各数一遍，漂了才露得出来。
+        // 本章没有表、没有列头，所以这份走法比 §四 少两档：标签／prose／圆点／围栏。
+        let mut labels: Vec<usize> = Vec::new();
+        let mut prose: Vec<usize> = Vec::new();
+        let mut dots: Vec<usize> = Vec::new();
+        let mut fence_rows: Vec<Vec<usize>> = Vec::new();
+        let mut fence_ticks = 0usize;
+        let mut fence: Option<Vec<usize>> = None;
+        for n in (head + 2)..=lines.len() {
+            let t = at(n).trim();
+            if t.is_empty() {
+                continue;
+            }
+            if t == "```" {
+                fence_ticks += 1;
+                match fence.take() {
+                    None => fence = Some(Vec::new()),
+                    Some(blk) => fence_rows.push(blk),
+                }
+                continue;
+            }
+            if fence.is_none() && t == "---" {
+                break;
+            }
+            if let Some(blk) = fence.as_mut() {
+                blk.push(n);
+                continue;
+            }
+            if t.split_whitespace().count() == 1 && !t.ends_with('：') && !t.ends_with('。') {
+                labels.push(n);
+                continue;
+            }
+            if t.starts_with("· ") {
+                dots.push(n);
+                continue;
+            }
+            prose.push(n);
+        }
+        assert_eq!(fence_ticks, 12, "§十三 应恰有六道 ``` 围栏＝12 个围栏符（范围／优先级／顺序／结算／自损／血量），实测 {fence_ticks} ⇒ 文档加了第七道，而解析器与本章两把尺都只登记六道，那里的新行会一起漏过去");
+        assert!(fence.is_none(), "§十三 的围栏没有闭合（数到奇数个 ```）⇒ 章界 `---` 落在围栏里，本走法会把下一章的内容读成 §十三 的");
+        assert_eq!(labels, vec![512, 519, 526, 533, 541, 559, 567], "§十三 围栏外的小节标题应恰好是那七条（攻击条件／攻击范围／攻击优先级／攻击顺序／伤害结算规则／自损规则／血量体系），实测 {labels:?} ⇒ 标签判据（单 token＋不以「：」「。」收尾）漂了；本章第一次要靠那条判据把 md:567「血量体系（独立）」也认成标题");
+        assert_eq!(prose, vec![514], "§十三 围栏外的 prose 规则行应恰是 md:514 那一句「只有中线前卡牌可攻击：」，实测 {prose:?} ⇒ 整章唯一的可攻击面总闸被当成标题吞了，或文档在围栏外加了第二条 prose 规则");
+        assert_eq!(dots, vec![516, 517], "「攻击条件」那两条圆点应是 516／517，实测 {dots:?} ⇒ 可攻击面加了第三条（例如「后排也可攻击」），那是与本整章相反的新规则");
+        assert_eq!(fence_rows, vec![vec![522, 523], vec![529, 530], vec![536, 537, 538], vec![544, 545, 546, 547, 548, 550, 551, 552, 553, 554, 555, 556], vec![562, 563, 564], vec![570, 571, 572, 573]], "六道围栏的行集应为上面那份（结算那道含两句半区抬头共 12 行），实测 {fence_rows:?} ⇒ 有围栏加了行，而复现测是按块取数的");
+
+        let parsed = crate::battle::parse_section13_attack(&lines);
+        let claimed = |v: &[crate::battle::S13Line]| -> Vec<usize> {
+            v.iter().filter(|r| r.claim != crate::battle::S13Claim::Label).map(|r| r.line).collect()
+        };
+        assert_eq!(parsed.fence_ticks, fence_ticks, "解析器数到的围栏符与本尺不同（解析器 {}／本尺 {fence_ticks}）⇒ 两处必有一处漂", parsed.fence_ticks);
+        assert_eq!(parsed.labels, labels, "解析器与本尺对「小节标题」读法不同（解析器 {:?}／本尺 {labels:?}）⇒ 两处必有一处漂", parsed.labels);
+        assert_eq!(parsed.prose.iter().map(|r| r.line).collect::<Vec<_>>(), prose, "解析器给总闸那句的行集与本尺不符 ⇒ prose 那一路在两个口径下长短不一");
+        assert_eq!(parsed.dots.iter().map(|r| r.line).collect::<Vec<_>>(), dots, "解析器给圆点区的行集与本尺那份两行不符 ⇒ 三段格号在两把尺里不是同一批行，复现测③ 翻译成下标时会拿错");
+        let fence_claims: Vec<Vec<usize>> = parsed.fences.iter().map(|b| claimed(b)).collect();
+        assert_eq!(
+            fence_claims,
+            vec![vec![522, 523], vec![529, 530], vec![536, 537, 538], vec![545, 546, 547, 548, 551, 552, 553, 554, 555, 556], vec![562, 563, 564], vec![570, 571, 572, 573]],
+            "六道围栏的**必检**行集应为 2／2／3／10／3／4＝24 行（md:544／550 那两句半区抬头由标签判据吞掉），实测 {fence_claims:?} ⇒ 与上面那份行数比，多出来的那一行就是被判成 Label 的那一行，两处不齐即有一处在漂"
+        );
+        for (blk, idx, n) in [(3usize, 0usize, 544usize), (3, 5, 550)] {
+            assert_eq!(parsed.fences[blk][idx].claim, crate::battle::S13Claim::Label, "md:{n} 那两句半区抬头没被判成 Label ⇒ 它会当成一步去折叠，结算围栏的「我方四步／敌方六步」当场错位，本章唯一那道半区分派就白立了");
+        }
+        assert_ne!(parsed.fences[4][0].claim, crate::battle::S13Claim::Label, "md:562「攻击后自身-1（自损）：」被吞成 Label ⇒ 那个 1 从两个口径里一起消失，再没有第二把尺数得着它");
+
+        // ①′ **独立**数字普查：口径由本尺自己登记（不与解析器共享那条分派表）。
+        // 本章的数字集中在两处——三段格号（516／517）与血量体系（570／572），步数行里只有那两个 `≤ 0`。
+        let census = |n: usize| -> usize {
+            let t = at(n).trim();
+            crate::battle::s15_digits(t.split_once(". ").map(|(_, r)| r).unwrap_or(t)).len()
+        };
+        for (n, want) in [
+            (514usize, 0),
+            (516, 2),
+            (517, 4),
+            (522, 0),
+            (523, 0),
+            (529, 0),
+            (530, 0),
+            (536, 0),
+            (537, 0),
+            (538, 0),
+            (544, 0),
+            (545, 0),
+            (546, 0),
+            (547, 0),
+            (548, 1),
+            (550, 0),
+            (551, 0),
+            (552, 0),
+            (553, 0),
+            (554, 0),
+            (555, 0),
+            (556, 1),
+            (562, 1),
+            (563, 0),
+            (564, 0),
+            (570, 1),
+            (571, 0),
+            (572, 1),
+            (573, 0),
+        ] {
+            assert_eq!(
+                census(n),
+                want,
+                "md:{} 在本尺的独立数字普查里该有 {} 个数字（行首那个「N. 」编号不计），实测 {} 个 ⇒ 少了＝那一行的数被换成措辞或整行没了，多了＝同一行又写了一个数；这两种都不是解析器那张分派表独力分得开的（它只认自己那一路的措辞键）",
+                n,
+                want,
+                census(n)
+            );
+        }
+        // 章号本身也在普查里：结算围栏里那十步的「N. 」编号是本尺半区分派的第二个键，编号写歪一位，四步／六步就挂到别的行上。
+        for (n, num) in [(545usize, "1"), (546, "2"), (547, "3"), (548, "4"), (551, "1"), (552, "2"), (553, "3"), (554, "4"), (555, "5"), (556, "6")] {
+            assert_eq!(
+                at(n).trim().split_once(". ").map(|(l, _)| l).unwrap_or(""),
+                num,
+                "md:{n} 的行首编号不是「{num}.」（实测「{}」）⇒ 结算围栏那十步的编号被改，本尺与解析器各自按编号对齐半区，一起挂错条款",
+                at(n).trim().split_once(". ").map(|(l, _)| l).unwrap_or("")
+            );
+        }
+
+        let mut verified: Vec<usize> = Vec::new();
+        verified.extend(claimed(&parsed.prose));
+        verified.extend(claimed(&parsed.dots));
+        for blk in &parsed.fences {
+            verified.extend(claimed(blk));
+        }
+        verified.sort_unstable();
+        let rows = verified.clone();
+        assert_eq!(
+            rows,
+            vec![514, 516, 517, 522, 523, 529, 530, 536, 537, 538, 545, 546, 547, 548, 551, 552, 553, 554, 555, 556, 562, 563, 564, 570, 571, 572, 573],
+            "§十三 必检集应为 总闸1＋圆点2＋围栏24＝27 行，实测 {rows:?} ⇒ 文档加了规则行，或某种外壳的判据失效"
+        );
+        for n in [514usize, 517, 523, 538, 548, 552, 556, 562, 571] {
+            assert!(rows.contains(&n), "md:{n} 被剔出 §十三 必检集 ⇒ 推导器漏了这种形态（「{}」）", at(n));
+        }
+        for n in [510usize, 512, 519, 526, 533, 541, 544, 550, 559, 567] {
+            assert!(!rows.contains(&n), "md:{n}（「{}」）进了必检集 ⇒ 章标题／小节标题／半区抬头判据失效", at(n));
+        }
+        for (n, why) in NOT_A_RULE {
+            assert!(!rows.contains(n), "md:{n} 落在 §十三 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}");
+        }
+
+        // ② 三条认领路＋配比＋双记账。
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        let (mut anchored, mut on_debt, mut reproduced) = (0usize, 0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &n in &rows {
+            if verified.contains(&n) {
+                reproduced += 1;
+            } else if referenced.contains(&(n as u32)) {
+                anchored += 1;
+            } else if debited.contains(&n) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{n} ← {}", at(n)));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "§十三 有 {} 行既无锚点指回、也不在债表里、又不是被引擎实测复现的行（漏登记）：\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+        assert_eq!(
+            (anchored, on_debt, reproduced),
+            (0, 0, 27),
+            "§十三 三条认领路应为 锚点0／挂债0／实测27——本章 27 行**全**走实测（含血量体系那四行，它撞的是那两个 20 与 `hp: def.power,` 那个等式），实测 ({anchored},{on_debt},{reproduced}) ⇒ 有行从实测路悄悄挪走"
+        );
+        for &n in &rows {
+            assert!(referenced.contains(&(n as u32)), "md:{n}（「{}」）没有锚点指回 ⇒ §十三 的纪律与 §三／§四／§五／§六 相同：27 行**全**指回，走了实测路也不豁免锚点", at(n));
+        }
+        assert!(
+            rows.iter().all(|n| !debited.contains(n)),
+            "§十三 不该有挂债行：本章 27 行全部已实现并已指回，任何一行躺进债表都说明实现被撤"
+        );
+
+        let f = crate::battle::s13_fold(&parsed);
+        assert_eq!(f.labels, labels, "`s13_fold` 搬出来的标签名单与形状路不符（折叠 {:?}／本尺 {labels:?}）⇒ 折叠器读的已不是这把尺验过的那一章", f.labels);
+        assert_eq!((f.own_steps.unwrap(), f.foe_steps.unwrap()), (4, 6), "折叠出来的两侧步数不是 4／6 ⇒ 半区归属与编号对齐失效，复现测⑦⑧ 按第几步取数会拿到别的行");
+        let (hp_own_holder, _, _) = f.hp_own_holder.unwrap();
+        let (hp_foe_holder, _, _) = f.hp_foe_holder.unwrap();
+        let self_dmg = f.self_dmg.unwrap();
+        let (own_le, _, _, _) = f.own4.unwrap();
+        let (foe_le, _, _, _) = f.foe6.unwrap();
+
+        // ③ 文档数字送进码面 grep：本章撞的不是配比，是那三个数与那三段格号的**形状**。
+        assert_eq!(
+            code_occurrences("CANDLE_HP: i32 = 20"),
+            1,
+            "md:570 与 md:572 写的是**同一个** 20（两句逐字节同形，只有「我方／敌方」两字不同），码面收成一处常量声明。实测 {} 处 ⇒ 0 处＝那个 20 从码面消失（改成别处硬写、或两侧各写一份，「独立」那句就没人兑现了）；≥2 处＝两侧分家，文档那两个 20 就不再是同一个数",
+            code_occurrences("CANDLE_HP: i32 = 20")
+        );
+        assert_eq!(
+            (hp_own_holder, hp_foe_holder),
+            (20, 20),
+            "md:570／572 从文档读出来的两个持业者 HP 应为 20／20，实测 ({hp_own_holder},{hp_foe_holder}) ⇒ 文档那两个数被改，而上面那条 grep 钉的还是码面那个 20——两者不一致时本条是唯一的出口"
+        );
+        assert_eq!(
+            code_occurrences("hp: def.power,"),
+            1,
+            "md:571／573 那两个「HP = 数值」在码面是**一处**构造初值（两侧共用同一个 `CardInst::new`）⇒ 文档写的是两套数各归各，码面兑现它的是「卡牌血量只从 def.power 来，与那个 20 无关」。实测 {} 处 ⇒ 0 处＝初值改从别处来（那个 20 会顺着别的路混进卡牌血量）；≥2 处＝另有一处也拿 def.power 当血量，而文档只登记了构造这一处",
+            code_occurrences("hp: def.power,")
+        );
+        assert_eq!(
+            code_occurrences("def.hp -= dmg;"),
+            2,
+            "md:545（我方当场降）与 md:555（结算时降）在码面是**同一句**减血、两个地方：我方攻击阶段与敌方统一结算。实测 {} 处 ⇒ 1 处＝两侧不再同形（有一侧的「数值降低」换成了别的路径）；≥3 处＝第三处也在减目标血量，而文档只许了这两步",
+            code_occurrences("def.hp -= dmg;")
+        );
+        assert_eq!(
+            (code_occurrences("if d.hp <= 0 {"), code_occurrences("if c.hp <= 0 {")),
+            (1, 1),
+            "md:548 与 md:556 在文档里逐字节同一句，码面却是两个不同的地方（`d` 是我方打出去的那张目标、`c` 是结算后排到的那张）——本章「两侧同规则」的形状就是这一对。实测 {:?} ⇒ 少一处＝那一侧的死亡出口被摘（『≤0 → 死亡 → 亡语 → 业力』整条断在半路）；多一处＝有人从这两个出口之外判死",
+            (code_occurrences("if d.hp <= 0 {"), code_occurrences("if c.hp <= 0 {"))
+        );
+        assert_eq!(
+            (code_occurrences("def.flame += dmg + eb;"), code_occurrences("def.flame += dmg + pb;")),
+            (1, 1),
+            "md:546（我方第2步）与 md:555 后半（敌方第5步）各一处发焰，增益分别取敌方／我方那份（`eb`／`pb`）——两侧同形但不共写点。实测 {:?} ⇒ 少一处＝那一侧「业火值 += 伤害」落空；写成同一个 needle（两处都用 `eb`）会让这条当场红，那正是增益分侧被抹平的样子",
+            (code_occurrences("def.flame += dmg + eb;"), code_occurrences("def.flame += dmg + pb;"))
+        );
+        assert_eq!(
+            code_occurrences("card_d.push((dcol, dmg));"),
+            1,
+            "md:551 那句「伤害累积（不立即结算）」在码面的形式＝一发进账本，恰有 1 处。实测 {} 处 ⇒ 0 处＝累积没了（敌方攻击也当场落地，md:551 与 md:553 一起落空）；≥2 处＝有第二条账本，而 md:554 只许「阶段结束→统一结算」那一个出口",
+            code_occurrences("card_d.push((dcol, dmg));")
+        );
+        assert_eq!(
+            code_occurrences("self.pending_card_d = card_d;"),
+            1,
+            "md:554 那句「敌方攻击阶段结束 → 统一结算」的入账口恰有 1 处：整个攻击阶段跑完才把账本交给结算。实测 {} 处 ⇒ 0 处＝账本没人接（那三步「暂不」永远不落地）；≥2 处＝结算之外还有地方重写这份账",
+            code_occurrences("self.pending_card_d = card_d;")
+        );
+        assert_eq!(
+            code_occurrences("self.enemy_settle();"),
+            1,
+            "md:554 那个「结束」在码面只有**一个**调用点（`enemy_resolve_turn_end` 里紧跟攻击阶段之后）。实测 {} 处 ⇒ 0 处＝结算不再由阶段结束触发（延迟与结算的界就没了）；≥2 处＝另有一处在阶段之外结算，文档没许过",
+            code_occurrences("self.enemy_settle();")
+        );
+        assert_eq!(
+            code_occurrences("v.sort();"),
+            1,
+            "md:537「先放置到棋盘上的先攻击」在码面＝入场号数组那一处升序排。实测 {} 处 ⇒ 0 处＝出手次序改由列位或哈希决定；≥2 处＝另有一处也按号排，而文档只登记了攻击序列这一处",
+            code_occurrences("v.sort();")
+        );
+        assert_eq!(
+            code_occurrences("c.seq = self.seq;"),
+            1,
+            "md:536「按卡牌入场顺序（放置到棋盘上的顺序）」的发号处恰有 1 处：所有放置都从这一个计数器取号（含 md:538 挤压后那张取**新号**，不复用旧号）。实测 {} 处 ⇒ 0 处＝发号旁路全断；≥2 处＝有人另起一个计数器，两侧「入场顺序」就不再是同一个序",
+            code_occurrences("c.seq = self.seq;")
+        );
+        assert_eq!(
+            code_occurrences("if tr == TraitKind::AttackAdjacent {"),
+            1,
+            "md:523 那句「例外：若特性/技能允许（如『可攻击相邻列』），则可跨列攻击」在码面只有**这一道**闸。实测 {} 处 ⇒ 0 处＝跨列全断（md:522 那句「只能攻击同列」成了无条件）；≥2 处＝另有一处放行跨列，而 §十三:523 只登记了「可攻击相邻列」这一个例外（技能那半句要放行，请先在此登记是哪一支）",
+            code_occurrences("if tr == TraitKind::AttackAdjacent {")
+        );
+        assert_eq!(
+            code_occurrences("return Some(col);"),
+            1,
+            "md:529「同列对面有卡牌 → 攻击该卡牌」在码面是目标选择里**唯一**一处直接返回同列。实测 {} 处 ⇒ 0 处＝优先级第1条落空；≥2 处＝另有一处抢先决定目标，文档那两条之间就多了一处兜底",
+            code_occurrences("return Some(col);")
+        );
+        assert_eq!(
+            code_occurrences("atk.hp -= 1;"),
+            1,
+            "md:562 那个「攻击后自身-1」在码面是**裸字面量 1**、一处。实测 {} 处 ⇒ 0 处＝自损没了（md:563 那句「自损不触发业火」随之无人兑现）；≥2 处＝另有一处也让攻击者掉 1，而 §十三 只登记了自损特性这一支",
+            code_occurrences("atk.hp -= 1;")
+        );
+        assert_eq!(
+            (self_dmg, own_le, foe_le),
+            (1, 0, 0),
+            "md:562 的 {self_dmg}、md:548 的 ≤{own_le}、md:556 的 ≤{foe_le} 三个数从文档读出来应为 (1,0,0)，码面对应的字面量是上面那两条 grep 与那两处死亡出口 ⇒ 文档改数时，本尺只有这两处出口，改码面不改文档会撞在这里"
+        );
+        assert_eq!(
+            code_occurrences("row_seq_order(SideK::Player, Row::Front)"),
+            1,
+            "md:514 那句「只有中线前卡牌可攻击」在我方攻击序列里的机器形式＝只取 `Row::Front` 一次。实测 {} 处 ⇒ 0 处＝我方攻击序列不再由 row_seq_order 给（那道闸换了地方）；≥2 处＝另有一处也为玩家取攻击序列，而文档只登记了攻击阶段这一处",
+            code_occurrences("row_seq_order(SideK::Player, Row::Front)")
+        );
+        assert_eq!(
+            code_occurrences("row_seq_order(SideK::Enemy, Row::Front)"),
+            1,
+            "md:517 那句「E5-E8可攻击，E1-E4不可攻击」在敌方攻击序列里的机器形式＝同样只取 `Row::Front` 一次（后排根本进不了这个序）。实测 {} 处 ⇒ 同上，两侧这条闸必须各数一遍——合成一个 needle 就看不出哪一侧先失守",
+            code_occurrences("row_seq_order(SideK::Enemy, Row::Front)")
+        );
+        assert_eq!(
+            code_occurrences("p_back"),
+            0,
+            "md:516 那半句「P1-P4**全部**可攻击」在码面的形式＝玩家根本没有后排那一档（`Battle` 只有 p_front／e_front／e_back 三排）。实测 {} 处 ⇒ 非 0＝有人给玩家加了后排，那么「全部可攻击」立刻不再自明，§十三 整章的目标面与攻击面都要重读",
+            code_occurrences("p_back")
+        );
+
+        // ④ 业火写点封闭名单＋攻击路径的否定式点名。
+        let mut want_writes: Vec<String> = vec![
+            "Skill::AtkSelfFlame1 => atk.flame += 1 + bo,".to_string(),
+            "TraitKind::SelfFlameOnAttack1 => atk.flame += 1 + bo,".to_string(),
+            "a.flame += 2 + bo;".to_string(),
+            "c.flame += (amt + bo).max(0);".to_string(),
+            "c.flame += 1;".to_string(),
+            "c.flame -= thr;".to_string(),
+            "c.flame = 0;".to_string(),
+            "c.flame = 0;".to_string(),
+            "card.flame += 3 + sb;".to_string(),
+            "def.flame += dmg + eb;".to_string(),
+            "def.flame += dmg + pb;".to_string(),
+            "def.flame += give + eb;".to_string(),
+            "pub flame: i32,".to_string(),
+            "pub flame: i32,".to_string(),
+        ];
+        want_writes.sort();
+        assert_eq!(
+            s13_flame_writes(),
+            want_writes,
+            "md:546／555／563／564 合起来在码面的形式＝这份**封闭的业火写点名单**，共 14 笔：两笔字段声明（实例＋呈现快照）、两处攻击落地发焰（`dmg + eb`／`dmg + pb`＝md:546 与 md:555 后半）、一处超额分配发焰（`give + eb`，§十五:628 那条超额链，仍是攻击造成的伤害）、一处 `add_flame_col`（特性与亡语共用的那只手，md:547／548 那两个「触发」的落点）、两处攻击时自加（`SelfFlameOnAttack1`／`AtkSelfFlame1`，§七／§八 自己许的）、一处同列+2 特性释放、一处山火（扣血与发焰同处，伤害即业火）、一处阈值扣减（md:547 后半）、两处清零（死亡与每关重置）、一处 Boss「炉温」。**点名登记、不洗白**：md:564 那句「业火只由攻击造成的伤害触发」按字面在全仓**不成立**——特性、技能、亡语与 Boss 炉温那笔 `c.flame += 1`（boss.rs，非伤害来源发焰）都在这份名单里；本尺按局部读法钉它（自损不发焰＝复现测⑨、无攻击则全场业火不动＝复现测⑩），反面样本留在这里指名，不在测里圆场。多一条＝新起了一处发焰／扣焰／清零的地方，请先在此登记它的出处；少一条＝那条路被摘了。"
+        );
+        let mut back_lines: Vec<String> = Vec::new();
+        for (_, body) in s13_attack_path_bodies() {
+            back_lines.extend(body.into_iter().filter(|l| l.contains("Row::Back") || l.contains("e_back")));
+        }
+        assert_eq!(
+            back_lines,
+            Vec::<String>::new(),
+            "md:514「只有中线前卡牌可攻击」＋ md:517「E1-E4不可攻击」在码面的形式＝攻击路径那三段（我方攻击阶段／敌方攻击阶段／目标选择）的体内一个后排量都不出现（`Row::Back`／`e_back`）。实测非空＝攻击开始读后排，那句「不可攻击」当场失守（本尺与复现测③ 是两条独立的路：那里看行为，这里看形状）"
+        );
+
+        // ⑤ 那些数字真的被引擎跑过、而且那条测还挂在 `#[test]` 上。
+        engine_repro_test_exists("section13_attack_rules_reproduce_on_the_engine");
     }
 
     /// 债的**分档**——混档就是改写缺口的性质：呈现层欠的是设施（画不出颜色、没有音频），

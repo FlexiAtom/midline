@@ -20,7 +20,7 @@
 use crate::model::{CardDef, CardInst, Faction, Skill, TraitKind, faction_cards, short_card};
 use crate::rng::Rng;
 
-pub const CANDLE_HP: i32 = 20;  // §廿三:1012 持业者 HP 20（Boss 用 profile 覆写，见 boss.rs）；§十四:591 我方持业者初始长度 20 单位；§十四:596 敌方持业者初始长度 20 单位——两侧读同一常量，这就是"对称"的数值面
+pub const CANDLE_HP: i32 = 20;  // §廿三:1012 持业者 HP 20（Boss 用 profile 覆写，见 boss.rs）；§十四:591 我方持业者初始长度 20 单位；§十四:596 敌方持业者初始长度 20 单位——两侧读同一常量，这就是"对称"的数值面；§十三:570 我方持业者 HP 20（蜡烛长度，独立）；§十三:572 敌方持业者 HP 20（同一常量，文档两处各写一遍）
 pub const HAND_LIMIT: usize = 8;
 pub const TURN_LIMIT: i64 = 30;
 /// 章强化的封顶档数 = §十一:404「每张卡牌最多升级3次」。
@@ -604,11 +604,11 @@ impl Battle {
             SideK::Enemy => self.e_karma -= cost,
         }
         let mut c = card;
-        c.seq = self.seq;
+        c.seq = self.seq;  // §十三:536 入场顺序＝放置到棋盘上的顺序（这个号就是文档说的"入场顺序"本身）；§十三:538 挤压死亡后新卡放入拿到的是**新号**，不复用死掉那张的旧号
         self.seq += 1;
         c.placed_turn = self.turn;
         let slot: &mut Option<CardInst> = match (side, row) {  // §十七:765 挤只挤在同一侧的格子里，两套数组无任何交叉赋值
-            (SideK::Player, _) => &mut self.p_front[col],
+            (SideK::Player, _) => &mut self.p_front[col],  // §十三:516 我方 P1-P4 全部可攻击的机器形式：玩家**没有后排那一档**，任何放置都落到 p_front
             (SideK::Enemy, Row::Front) => &mut self.e_front[col],
             (SideK::Enemy, Row::Back) => &mut self.e_back[col],
         };
@@ -776,7 +776,7 @@ impl Battle {
         let mut v: Vec<u64> = (0..4)  // §十二:448 hp≤0 的卡不进序列＝攻击前已死亡则跳过
             .filter_map(|c| self.slot(side, row, c).as_ref().filter(|x| x.hp > 0).map(|x| x.seq))
             .collect();
-        v.sort();
+        v.sort();  // §十三:537 先放置到棋盘上的先攻击＝对这个入场号升序排；文档那句"即：先放置…先攻击"在这一行兑现
         v
     }
 
@@ -792,7 +792,7 @@ impl Battle {
     }
 
     fn player_attack_phase(&mut self) {
-        let order = self.row_seq_order(SideK::Player, Row::Front);
+        let order = self.row_seq_order(SideK::Player, Row::Front);  // §十三:514 我方攻击序列只取中线之前那一排（Row::Front 是这里唯一传得进去的行）
         self.attack_order = order.clone();
         self.in_player_attack_phase = true;
         for sq in order {
@@ -816,21 +816,21 @@ impl Battle {
             if let Some(dcol) = target {  // §十二:443 我方攻击阶段伤害立即结算；§廿三:1023 我方立即结算，敌方累积到回合末统一结算（battle.rs:889）
                 let eb = self.boost_for(SideK::Enemy);
                 if let Some(def) = self.e_front[dcol].as_mut() {
-                    def.hp -= dmg;  // §十二:444 目标数值降低；§十五:622 "A已结算（敌方数值已降低）"就是这一句——回滚只是把它当额度，不再打第二遍
-                    def.flame += dmg + eb;  // §十二:445 目标业火值 += 伤害；§十六:677 业火条的作用就是累积伤害
+                    def.hp -= dmg;  // §十二:444 目标数值降低；§十五:622 "A已结算（敌方数值已降低）"就是这一句——回滚只是把它当额度，不再打第二遍；§十三:545 我方阶段第1步：造成伤害→目标数值降低（**立即**，就在攻击时点）
+                    def.flame += dmg + eb;  // §十二:445 目标业火值 += 伤害；§十六:677 业火条的作用就是累积伤害；§十三:546 我方阶段第2步（同样立即）；§十三:564 业火的来源就是"攻击造成的伤害"这一句
                 }
                 self.dealt_this_turn += dmg;  // §十五:619 口径 A 的入账处：本回合攻击阶段**所有卡牌攻击时**造成的伤害总和
                 self.log.push(format!("  → 敌第{}列受{dmg}", dcol + 1));
             } else {
                 self.dealt_this_turn += dmg;  // §十五:620 直击持业者的那发攻击同样进口径 A（"基础攻击伤害"的一部分，不是外添项）
-                self.damage_enemy_holder(dmg, Some(col), HolderHit::Direct);  // §十二:442 直击中线→敌方持业者掉血
+                self.damage_enemy_holder(dmg, Some(col), HolderHit::Direct);  // §十二:442 直击中线→敌方持业者掉血；§十三:530 优先级第2条：同列对面**无**卡→攻击中线
             }
             self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Player);  // §十二:447 攻击时自动触发特性+技能
             let atk_dead = atk.hp <= 0;
             self.p_front[col] = Some(atk);
             if let Some(dcol) = target {
                 if let Some(d) = self.e_front[dcol].take() {
-                    if d.hp <= 0 {
+                    if d.hp <= 0 {  // §十三:548 我方阶段第4步：目标数值≤0 → 死亡 → 触发亡语 → 获得业力（这三件事全在 on_death 那一支里）
                         self.on_death(d, SideK::Enemy, Some(dcol), DeathCause::Battle);
                     } else {
                         self.e_front[dcol] = Some(d);
@@ -867,13 +867,13 @@ impl Battle {
     /// 路径内不消耗 rng（除抽牌外的 rng 消费点为零），因此克隆推进是 rng 中性的。
     pub fn enemy_resolve_turn_end(&mut self) {
         self.enemy_attack_phase();
-        self.enemy_settle();
+        self.enemy_settle();  // §十三:554 敌方阶段第4步：攻击阶段**结束**才统一结算——这一行就是文档那句"结束"的码面时刻
         self.enemy_advance();  // §十二:459 推进阶段；§十二:488 前排被击杀后由下一次推进补上；§十七:746 前排被击杀→下回合后排推进（本帧没有"死格立即补位"的旁路，补位只有这一处时机）
         self.starter_turn_end(SideK::Enemy);
     }
 
     fn enemy_attack_phase(&mut self) {
-        let order = self.row_seq_order(SideK::Enemy, Row::Front);  // §十二:458 所有可攻击卡依次攻击；§十二:462 E5-E8 每张
+        let order = self.row_seq_order(SideK::Enemy, Row::Front);  // §十二:458 所有可攻击卡依次攻击；§十二:462 E5-E8 每张；§十三:514 同样只取前排；§十三:517 E5-E8＝前排可攻击、E1-E4＝后排根本进不了这个序列
         let mut card_d: Vec<(usize, i32)> = Vec::new();
         let mut candle_d: i32 = 0;
         for sq in order {
@@ -889,16 +889,16 @@ impl Battle {
             self.log.push(format!("⚔ 敌方 {} 攻击", short_card(&atk)));
             match target {
                 Some(dcol) => {
-                    // 伤害累积（攻击时点即时计算攻击+受伤修正，不立即扣血/业火）§十二:465 伤害累积不立即结算；§十二:467 业火值此时暂不增加。
+                    // 伤害累积（攻击时点即时计算攻击+受伤修正，不立即扣血/业火）§十二:465 伤害累积不立即结算；§十二:467 业火值此时暂不增加；§十三:551 敌方阶段第1步（累积，不立即结算）；§十三:553 敌方阶段第3步（业火值暂不增加）——这一支整个 for 循环里没有一处 `flame +=`
                     let dmg = self.card_hit_damage(SideK::Enemy, id, col, dcol, base, atk.is_starter());
-                    card_d.push((dcol, dmg));
+                    card_d.push((dcol, dmg));  // §十三:551 累积的形式＝只把这一发记进账本，目标数值一分未动
                 }
                 None => {
                     let dmg = self.holder_hit_damage(SideK::Enemy, id, col, base);
                     candle_d += dmg;  // §十二:464 同列无卡→打中线，累积到我方持业者
                 }
             }
-            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Enemy);  // §十二:466 攻击时触发的特性/技能立即生效
+            self.attacker_aftermath(&mut atk, target.unwrap_or(col), SideK::Enemy);  // §十二:466 攻击时触发的特性/技能立即生效；§十三:552 敌方阶段第2步：这一支**不**进那本延迟账
             let atk_dead = atk.hp <= 0;
             self.e_front[col] = Some(atk);
             if atk_dead {
@@ -948,19 +948,19 @@ impl Battle {
         let card_d = std::mem::take(&mut self.pending_card_d);
         for (col, dmg) in &card_d {
             if let Some(def) = self.p_front[*col].as_mut() {
-                def.hp -= dmg;  // §十二:477 数值降低
+                def.hp -= dmg;  // §十二:477 数值降低；§十三:555 敌方阶段第5步·前半（结算时目标数值降低）
                 self.log.push(format!("  结算：{} 受{dmg} → hp {}", def.def.name, def.hp));
             }
         }
         let pb = self.boost_for(SideK::Player);
         for (col, dmg) in &card_d {
             if let Some(def) = self.p_front[*col].as_mut() {
-                def.flame += dmg + pb;  // §十二:477 业火值增加
+                def.flame += dmg + pb;  // §十二:477 业火值增加；§十三:555 敌方阶段第5步·后半（同一发结算的业火那一半）；§十三:564 与 820 那处同形——业火只在"攻击造成的伤害"落地时增加
             }
         }
         for col in 0..4 {
             if let Some(c) = self.p_front[col].take() {
-                if c.hp <= 0 {
+                if c.hp <= 0 {  // §十三:556 敌方阶段第6步：延迟死亡的出口——数值在结算里才降到 ≤0，亡语与业力也就晚到这一步
                     self.on_death(c, SideK::Player, Some(col), DeathCause::Battle);
                 } else {
                     self.p_front[col] = Some(c);
@@ -1174,15 +1174,15 @@ impl Battle {
 
     // ---------- 目标/伤害计算 ----------
 
-    pub(crate) fn pick_target(&self, side: SideK, col: usize, tr: TraitKind) -> Option<usize> {  // §廿三:1008 默认只打同列
+    pub(crate) fn pick_target(&self, side: SideK, col: usize, tr: TraitKind) -> Option<usize> {  // §廿三:1008 默认只打同列；§十三:522 基础范围＝只能攻击同列卡牌
         let def_front_empty = |c: usize| match side {
-            SideK::Player => self.e_front[c].is_none(),
+            SideK::Player => self.e_front[c].is_none(),  // §十三:517 敌方后排 E1-E4 不在目标面上：这里只读 e_front，玩家永远打不到那一排
             SideK::Enemy => self.p_front[c].is_none(),
         };
         if !def_front_empty(col) {
-            return Some(col);
+            return Some(col);  // §十三:529 优先级第1条：同列对面有卡→攻击那张卡（这一行就是"优先级"唯一被读出来的地方，没有候选列表、没有排序）
         }
-        if tr == TraitKind::AttackAdjacent {  // §廿三:1009 全仓唯一的跨列攻击路，且只在特性允许时
+        if tr == TraitKind::AttackAdjacent {  // §廿三:1009 全仓唯一的跨列攻击路，且只在特性允许时；§十三:523 跨列是**例外**，其形式是一个特性枚举值，不是一条通用规则
             for c in adj_cols(col) {
                 if !def_front_empty(c) {
                     return Some(c);
@@ -1268,7 +1268,7 @@ impl Battle {
         match atk.def.tr {  // §七:278 特性的作用＝定义卡牌定位（这个 match 就是"定位"的落点）；同处的 `atk.flame += …` 是技能的"额外效果"半边
             TraitKind::SelfFlameOnAttack1 => atk.flame += 1 + bo,
             TraitKind::SelfDmgOnAttack => {
-                atk.hp -= 1; // §廿三:1024 自损不触发业火
+                atk.hp -= 1; // §廿三:1024 自损不触发业火；§十三:562 攻击后自身-1（文档那个 1 就是这个裸字面量）；§十三:563 自损不触发业火——这一支从头到尾没有一处 `flame +=`
                 if atk.hp <= 0 {
                     self.log.push(format!("  {} 自损而亡", atk.def.name));
                 }
@@ -1353,12 +1353,12 @@ impl Battle {
                 continue;
             }
             let thr = self.effective_threshold(side, col, &snap);  // §十二:446 业火 ≥ 阈值才触发特性；§七:268 阈值＝触发特性所需业火值（这里取的是该格生效阈值）
-            if snap.flame < thr {
+            if snap.flame < thr {  // §十三:547 我方阶段第3步的前半：业火 ≥ 阈值才触发特性（这道比较就是那个"≥"，两侧共用同一个检查点）
                 continue; // §十六:678 未达阈值不触发（达阈值即在本检查点触发）
             }
             {
                 let c = self.slot_mut(side, row, col).as_mut().unwrap();
-                c.flame -= thr;  // §十二:446 触发后业火值 -= 阈值；§十六:679 溢出保留在同一句里；§十六:720 爆发步骤第6动作；§廿三:1021 业火条（跨回合保留见下一行动作）
+                c.flame -= thr;  // §十二:446 触发后业火值 -= 阈值；§十六:679 溢出保留在同一句里；§十六:720 爆发步骤第6动作；§廿三:1021 业火条（跨回合保留见下一行动作）；§十三:547 我方阶段第3步的后半：触发后扣掉阈值
                 c.triggered_turn = turn;
             }
             let tr = snap.def.tr;
@@ -3453,6 +3453,665 @@ pub(crate) fn s4_fold(rows: &S4Rows) -> S4Rules {
     f
 }
 
+/// §十三 一行读成的断言。本章三种外壳：围栏外的**授权句**（md:514）、两条「· 」可攻击面（516/517）、
+/// 六道围栏（范围／优先级／入场顺序／伤害结算／自损／血量），**没有表**——所以它是 §四 那套形状判据
+/// 去掉「表」这一档、再加上「半区」这一档之后的样子。
+///
+/// `S13Owner` 为什么必须存在：结算那道围栏里 md:548 与 md:556 **逐字节相同**
+/// （都是「若目标数值 ≤ 0 → 死亡 → 触发亡语 → 获得业力」），只按措辞分派会把两行读成同一条款、
+/// 于是必检集从 27 行悄悄缩成 26 行，而形状路数出来仍是 27——两处不齐才算得出来，靠一把尺看不见。
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum S13Owner {
+    /// 结算围栏之外（或那两句抬头还没读到）
+    Other,
+    /// 「我方攻击阶段：」之后的四步
+    Own,
+    /// 「敌方攻击阶段：」之后的六步
+    Foe,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum S13Claim {
+    /// 七条围栏外小节标题，加上围栏内那两句半区抬头（md:544／md:550）——本章第一次有**两条**这种抬头
+    Label,
+    // ---- 围栏外 ----
+    /// md:514「只有中线前卡牌可攻击：」
+    OnlyFrontRow { before_midline: bool },
+    /// md:516「· 我方：P1-P4全部可攻击」——那两个数就是可攻击的格号区间
+    AttackableOwn { from: i32, to: i32 },
+    /// md:517「· 敌方：E5-E8可攻击，E1-E4不可攻击」四个数＝可攻击区间与不可攻击区间
+    AttackableFoe { hot: (i32, i32), cold: (i32, i32), denied: bool },
+    // ---- 围栏1 攻击范围 ----
+    /// md:522「基础：只能攻击同列卡牌」
+    RangeSameColumn { only: bool },
+    /// md:523「例外：若特性/技能允许（如"可攻击相邻列"），则可跨列攻击」
+    RangeCrossException { permitted_by: bool, example: bool },
+    // ---- 围栏2 攻击优先级 ----
+    /// md:529「1. 中线对面同列有卡牌 → 攻击该卡牌」
+    PriorityCard { arrows: usize },
+    /// md:530「2. 中线对面同列无卡牌 → 攻击中线（敌方持业者）」
+    PriorityMidline { holder: bool },
+    // ---- 围栏3 攻击顺序 ----
+    /// md:536「按卡牌入场顺序（放置到棋盘上的顺序）依次攻击」
+    OrderByPlacement { defines_entry: bool },
+    /// md:537「即：先放置到棋盘上的卡牌先攻击」
+    OrderEarliestFirst { first: bool },
+    /// md:538「若卡牌被挤压死亡后新卡放入，新卡按新入场顺序」
+    OrderFreshSeqOnReplace { fresh: bool },
+    // ---- 围栏4 我方攻击阶段（半区 A，四步）----
+    /// md:545 第1步：造成伤害 → 目标数值降低（立即）
+    OwnStep1DamageNow { target_drops: bool, now: bool },
+    /// md:546 第2步：目标业火值 += 伤害（立即）
+    OwnStep2FlameNow { accrues: bool, now: bool },
+    /// md:547 第3步：业火 ≥ 阈值 → 触发特性 → 业火 -= 阈值
+    OwnStep3Threshold { fires: bool, subtracts: bool },
+    /// md:548 第4步：数值 ≤ 0 → 死亡 → 亡语 → 获得业力（`le` 是文档写的那个死亡阈值 0）
+    OwnStep4Death { le: i32, deathrattle: bool, karma: bool, arrows: usize },
+    // ---- 围栏4 敌方攻击阶段（半区 B，六步）----
+    /// md:551 第1步：造成伤害 → 伤害累积（不立即结算）
+    FoeStep1Accumulate { deferred: bool },
+    /// md:552 第2步：攻击时触发的特性/技能 → 立即生效
+    FoeStep2Immediate { immediate: bool },
+    /// md:553 第3步：业火值暂不增加
+    FoeStep3FlameDeferred { deferred: bool },
+    /// md:554 第4步：敌方攻击阶段结束 → 统一结算
+    FoeStep4SettleAtEnd { at_end: bool },
+    /// md:555 第5步：结算时目标数值降低 + 目标业火值增加
+    FoeStep5SettleBoth { hp: bool, flame: bool },
+    /// md:556 第6步：与 md:548 同一句措辞，所以它只能由半区＋编号认领
+    FoeStep6Death { le: i32, deathrattle: bool, karma: bool, arrows: usize },
+    // ---- 围栏5 自损规则 ----
+    /// md:562「攻击后自身-1（自损）：」（带一个 1，所以它不是抬头）
+    SelfDamageAfterAttack { amount: i32 },
+    /// md:563「- 自损不触发业火」
+    SelfDamageNoFlame { no_flame: bool },
+    /// md:564「- 业火只由攻击造成的伤害触发」
+    FlameOnlyFromDamage { only_damage: bool },
+    // ---- 围栏6 血量体系 ----
+    /// md:570「我方持业者 HP：20（蜡烛长度，独立）」
+    HolderHpOwn { hp: i32, candle: bool, independent: bool },
+    /// md:571「我方卡牌 HP = 数值（独立）」
+    CardHpOwn { equals_power: bool, independent: bool },
+    /// md:572「敌方持业者 HP：20（蜡烛长度，独立）」
+    HolderHpFoe { hp: i32, candle: bool, independent: bool },
+    /// md:573「敌方卡牌 HP = 数值（独立）」
+    CardHpFoe { equals_power: bool, independent: bool },
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct S13Line {
+    pub line: usize,
+    pub claim: S13Claim,
+}
+
+/// §十三 的行集。`fences` 按文档出现顺序存**六道**围栏；结算那道里的两句半区抬头留在第 4 块的行集中，
+/// 由推导器与复现测各自数一遍（它们不参与必检集）。
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct S13Rows {
+    pub labels: Vec<usize>,
+    pub prose: Vec<S13Line>,
+    pub dots: Vec<S13Line>,
+    pub fences: Vec<Vec<S13Line>>,
+    pub fence_ticks: usize,
+}
+
+#[cfg(test)]
+fn s13_bad(tag: &str, why: &str) -> ! {
+    panic!("{tag} 读不出 §十三 的任何一条已登记规则（围栏里的行按**内容**分派，结算围栏里那十步按**半区＋编号**分派）：{why}。\
+            请先扩本解析器与它对应的实测断言，别让那一行从尺子外面漏过去（挂锚对规则行不算实测）");
+}
+
+/// 抬头判据与 §四 同一条：**以「：」收尾且不带数字**。本章第一次要连吞两句抬头
+/// （md:544「我方攻击阶段：」／md:550「敌方攻击阶段：」），它们是半区分界，不是第七步。
+/// 反例仍由同一条判据守住：md:562「攻击后自身-1（自损）：」也以「：」收尾，但它带一个 1 ⇒ 规则行。
+#[cfg(test)]
+fn s13_is_label(t: &str) -> bool {
+    t.ends_with('：') && s15_digits(t).is_empty()
+}
+
+/// 结算围栏里的一步。`pos` 是**到达顺序**（1 起），`num` 是文档行首那个编号——两者必须相等，
+/// 否则文档自己把步骤编号改了序，而本帧的复现测是按编号取数的。
+#[cfg(test)]
+fn s13_step(t: &str, line: usize, owner: S13Owner, num: &str, body: &str, pos: usize) -> S13Claim {
+    let tag = format!("md:{line}「{t}」");
+    let want = num.parse::<usize>().unwrap_or_else(|_| s13_bad(&tag, "编号位不是纯数字"));
+    if want != pos {
+        s13_bad(
+            &tag,
+            &format!("它是「{owner:?}」半区的第 {pos} 步到达的，行首编号却写着 {want} ⇒ 文档给这一半加了步或删了步，\
+                     复现测那句『我方四步／敌方六步』与半区抬头都要挂到别的行上"),
+        );
+    }
+    let nums = s15_digits(body);
+    let expect = |k: usize, what: &str| {
+        if nums.len() != k {
+            s13_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()));
+        }
+    };
+    match (owner, pos) {
+        (S13Owner::Own, 1) => {
+            expect(0, "第1步「造成伤害 → 目标数值降低（立即）」（立即是措辞，不是数）");
+            S13Claim::OwnStep1DamageNow { target_drops: body.contains("目标数值降低"), now: body.contains("立即") }
+        }
+        (S13Owner::Own, 2) => {
+            expect(0, "第2步「目标业火值 += 伤害（立即）」");
+            S13Claim::OwnStep2FlameNow { accrues: body.contains("目标业火值") && body.contains("伤害"), now: body.contains("立即") }
+        }
+        (S13Owner::Own, 3) => {
+            expect(0, "第3步「若目标业火值 ≥ 阈值 → 触发特性 → 业火值 -= 阈值」（阈值是措辞）");
+            S13Claim::OwnStep3Threshold { fires: body.contains("触发特性"), subtracts: body.contains("-= 阈值") }
+        }
+        (S13Owner::Own, 4) => {
+            expect(1, "第4步那个死亡阈值（「数值 ≤ 0」里那一个）");
+            S13Claim::OwnStep4Death {
+                le: nums[0],
+                deathrattle: body.contains("触发亡语"),
+                karma: body.contains("获得业力"),
+                arrows: body.matches('→').count(),
+            }
+        }
+        (S13Owner::Foe, 1) => {
+            expect(0, "第1步「造成伤害 → 伤害累积（不立即结算）」");
+            S13Claim::FoeStep1Accumulate { deferred: body.contains("伤害累积") && body.contains("不立即结算") }
+        }
+        (S13Owner::Foe, 2) => {
+            expect(0, "第2步「攻击时触发的特性/技能 → 立即生效」");
+            S13Claim::FoeStep2Immediate { immediate: body.contains("攻击时触发") && body.contains("立即生效") }
+        }
+        (S13Owner::Foe, 3) => {
+            expect(0, "第3步「业火值暂不增加」");
+            S13Claim::FoeStep3FlameDeferred { deferred: body.contains("业火值暂不增加") }
+        }
+        (S13Owner::Foe, 4) => {
+            expect(0, "第4步「敌方攻击阶段结束 → 统一结算」");
+            S13Claim::FoeStep4SettleAtEnd { at_end: body.contains("阶段结束") && body.contains("统一结算") }
+        }
+        (S13Owner::Foe, 5) => {
+            expect(0, "第5步「结算时：目标数值降低 + 目标业火值增加」");
+            S13Claim::FoeStep5SettleBoth { hp: body.contains("目标数值降低"), flame: body.contains("目标业火值增加") }
+        }
+        (S13Owner::Foe, 6) => {
+            expect(1, "第6步那个死亡阈值（与 md:548 同一句，所以只能靠半区＋编号把它认在敌方这一侧）");
+            S13Claim::FoeStep6Death {
+                le: nums[0],
+                deathrattle: body.contains("触发亡语"),
+                karma: body.contains("获得业力"),
+                arrows: body.matches('→').count(),
+            }
+        }
+        (o, p) => s13_bad(
+            &tag,
+            &format!("「{o:?}」半区只登记到第 {} 步，第 {p} 步是新增的——请同时扩 S13Claim、复现测与推导器", if o == S13Owner::Own { 4 } else { 6 }),
+        ),
+    }
+}
+
+/// 结算围栏之外的围栏行，按**措辞**分派。每一条判据用的词都只在那一行里出现；
+/// 认不出来就 panic，不静默放行。注意 562/563 都含「自损」，所以这里的键是「攻击后自身」／「不触发业火」。
+#[cfg(test)]
+fn s13_classify(t: &str, line: usize) -> S13Claim {
+    let tag = format!("md:{line}「{t}」");
+    if s13_is_label(t) {
+        return S13Claim::Label;
+    }
+    let body = if let Some((num, rest)) = t.split_once(". ") {
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+            s13_bad(&tag, "看着像编号行，但「. 」前面不是纯数字");
+        }
+        rest
+    } else {
+        t
+    };
+    let nums = s15_digits(body);
+    let expect = |k: usize, what: &str| {
+        if nums.len() != k {
+            s13_bad(&tag, &format!("解析出 {} 个数字（{nums:?}），{what}该有 {k} 个", nums.len()));
+        }
+    };
+    if body.contains("只能攻击同列") {
+        expect(0, "「基础：只能攻击同列卡牌」那行");
+        return S13Claim::RangeSameColumn { only: body.contains("基础") };
+    }
+    if body.contains("跨列攻击") {
+        expect(0, "「例外：…则可跨列攻击」那行");
+        return S13Claim::RangeCrossException {
+            permitted_by: body.contains("特性/技能允许"),
+            example: body.contains("可攻击相邻列"),
+        };
+    }
+    if body.contains("同列有卡牌") {
+        expect(0, "优先级第1条「同列有卡牌 → 攻击该卡牌」");
+        return S13Claim::PriorityCard { arrows: body.matches('→').count() };
+    }
+    if body.contains("同列无卡牌") {
+        expect(0, "优先级第2条「同列无卡牌 → 攻击中线（敌方持业者）」");
+        return S13Claim::PriorityMidline { holder: body.contains("攻击中线") && body.contains("持业者") };
+    }
+    if body.contains("依次攻击") {
+        expect(0, "「按卡牌入场顺序（放置到棋盘上的顺序）依次攻击」");
+        return S13Claim::OrderByPlacement { defines_entry: body.contains("放置到棋盘上的顺序") };
+    }
+    if body.contains("先放置") {
+        expect(0, "「即：先放置到棋盘上的卡牌先攻击」");
+        return S13Claim::OrderEarliestFirst { first: body.contains("先攻击") };
+    }
+    if body.contains("挤压死亡") {
+        expect(0, "「若卡牌被挤压死亡后新卡放入，新卡按新入场顺序」");
+        return S13Claim::OrderFreshSeqOnReplace { fresh: body.contains("新入场顺序") };
+    }
+    if body.contains("攻击后自身") {
+        expect(1, "「攻击后自身-1（自损）：」那行（它就是那个自损量）");
+        return S13Claim::SelfDamageAfterAttack { amount: nums[0] };
+    }
+    if body.contains("不触发业火") {
+        expect(0, "「自损不触发业火」那行");
+        return S13Claim::SelfDamageNoFlame { no_flame: true };
+    }
+    if body.contains("只由攻击") {
+        expect(0, "「业火只由攻击造成的伤害触发」那行");
+        return S13Claim::FlameOnlyFromDamage { only_damage: body.contains("伤害触发") };
+    }
+    for (pre, foe) in [("我方持业者", false), ("敌方持业者", true)] {
+        if body.starts_with(pre) {
+            expect(1, "那行持业者 HP（「HP：20」里那一个）");
+            let c = (nums[0], body.contains("蜡烛长度"), body.contains("独立"));
+            return if foe {
+                S13Claim::HolderHpFoe { hp: c.0, candle: c.1, independent: c.2 }
+            } else {
+                S13Claim::HolderHpOwn { hp: c.0, candle: c.1, independent: c.2 }
+            };
+        }
+    }
+    for (pre, foe) in [("我方卡牌", false), ("敌方卡牌", true)] {
+        if body.starts_with(pre) {
+            expect(0, "那行卡牌 HP（「HP = 数值」不给数字，只给等式）");
+            let c = (body.contains("HP = 数值"), body.contains("独立"));
+            return if foe {
+                S13Claim::CardHpFoe { equals_power: c.0, independent: c.1 }
+            } else {
+                S13Claim::CardHpOwn { equals_power: c.0, independent: c.1 }
+            };
+        }
+    }
+    s13_bad(&tag, "它既不是那六道围栏里登记过的任何一条，也不是一句抬头")
+}
+
+/// 围栏外那两条「· 」可攻击面。它们是本章**唯一**把格号写成数字的地方（P1-P4／E5-E8／E1-E4），
+/// 而那两个区间在码面上没有任何第二处字面可撞（引擎只有 p_front/e_front/e_back 三组下标，
+/// 文档那套 E1-E8 的编号在代码里根本不存在）——所以数字由本函数读进来，撞的动作留给复现测。
+#[cfg(test)]
+fn s13_dot(t: &str, line: usize) -> S13Claim {
+    let tag = format!("md:{line}「{t}」");
+    let Some(body) = t.strip_prefix("· ") else {
+        s13_bad(&tag, "可攻击面那两行都带「· 」圆点外壳，这一行没有");
+    };
+    let nums = s15_digits(body);
+    if body.starts_with("我方") {
+        if nums.len() != 2 {
+            s13_bad(&tag, &format!("「我方：Px-Py全部可攻击」该有两个数（区间两端），实测 {nums:?}"));
+        }
+        return S13Claim::AttackableOwn { from: nums[0], to: nums[1] };
+    }
+    if body.starts_with("敌方") {
+        if nums.len() != 4 {
+            s13_bad(&tag, &format!("「敌方：Ex-Ey可攻击，Ez-Ew不可攻击」该有四个数（两个区间各两端），实测 {nums:?}"));
+        }
+        return S13Claim::AttackableFoe {
+            hot: (nums[0], nums[1]),
+            cold: (nums[2], nums[3]),
+            denied: body.contains("不可攻击"),
+        };
+    }
+    s13_bad(&tag, "「攻击条件」那两条圆点只登记过「我方」「敌方」两个开头")
+}
+
+/// 围栏外唯一的 prose 规则行。本章只有 md:514 一句；整章的七条小节标题都以「：」收尾之外还有
+/// 一条不带冒号的（血量体系（独立）），那条走标签判据，不会到这里。
+#[cfg(test)]
+fn s13_prose(t: &str, line: usize) -> S13Claim {
+    let tag = format!("md:{line}「{t}」");
+    if t.contains("中线前卡牌可攻击") {
+        return S13Claim::OnlyFrontRow { before_midline: true };
+    }
+    s13_bad(&tag, "围栏外多了一条既不是标题、也不是圆点的行——本章的 prose 只登记过 md:514 那一句「只有中线前卡牌可攻击」")
+}
+
+/// §十三 的章界与外壳判据全在这里：标题行「十三、攻击与伤害结算」→ 章末 `---`；``` 成对（六道＝12 个符）；
+/// 围栏外标签判据同 §四（**单 token 且不以「：」「。」收尾**）；围栏内抬头判据同 §四（以「：」收尾且不带数字）。
+/// 半区状态 `owner` 只在读到那两句抬头时切换，读到围栏闭合就复位——这是本章与 §四 唯一的形式差别。
+#[cfg(test)]
+pub(crate) fn parse_section13_attack(lines: &[String]) -> S13Rows {
+    let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+    let head = lines
+        .iter()
+        .position(|l| l.trim() == "十三、攻击与伤害结算")
+        .expect("文档里没有「十三、攻击与伤害结算」那一行标题 ⇒ §十三 这把尺没有落脚点，章标题改了要同步这里");
+    let mut rows = S13Rows::default();
+    let mut fence: Option<Vec<S13Line>> = None;
+    let mut owner = S13Owner::Other;
+    let mut pos = 0usize;
+    for n in (head + 2)..=lines.len() {
+        let t = at(n).trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "```" {
+            rows.fence_ticks += 1;
+            match fence.take() {
+                None => fence = Some(Vec::new()),
+                Some(blk) => rows.fences.push(blk),
+            }
+            owner = S13Owner::Other;
+            pos = 0;
+            continue;
+        }
+        if fence.is_none() && t == "---" {
+            break;
+        }
+        if let Some(blk) = fence.as_mut() {
+            if s13_is_label(t) {
+                if t.starts_with("我方") {
+                    owner = S13Owner::Own;
+                    pos = 0;
+                } else if t.starts_with("敌方") {
+                    owner = S13Owner::Foe;
+                    pos = 0;
+                }
+                blk.push(S13Line { line: n, claim: S13Claim::Label });
+                continue;
+            }
+            if owner != S13Owner::Other {
+                let Some((num, rest)) = t.split_once(". ") else {
+                    s13_bad(&format!("md:{n}「{t}」"), "结算围栏里那十步每一行都带「N. 」编号，这一行没有");
+                };
+                pos += 1;
+                blk.push(S13Line { line: n, claim: s13_step(t, n, owner, num, rest, pos) });
+                continue;
+            }
+            blk.push(S13Line { line: n, claim: s13_classify(t, n) });
+            continue;
+        }
+        if t.split_whitespace().count() == 1 && !t.ends_with('：') && !t.ends_with('。') {
+            rows.labels.push(n);
+            continue;
+        }
+        if t.starts_with("· ") {
+            rows.dots.push(S13Line { line: n, claim: s13_dot(t, n) });
+            continue;
+        }
+        rows.prose.push(S13Line { line: n, claim: s13_prose(t, n) });
+    }
+    if fence.is_some() {
+        s13_bad(&format!("「{}」之后", at(head + 1)), "章界 `---` 没找到，或它落在一道没闭合的围栏里 ⇒ 本走法会把 §十四 的表读成 §十三 的");
+    }
+    rows
+}
+
+/// §十三 折叠出的条款集。每一个 `Option` 都对应文档里**一行**，缺任一行由 `s13_fold` 末尾那份 `need` 清单当场 panic。
+/// 三个数（持业者那两个 20、自损那个 1、死亡阈值那个 0）与四个区间（P1-P4／E5-E8／E1-E4）都不是常量，
+/// 是**从文档读进来的**——那是本帧复现测的全部意义。
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct S13Rules {
+    pub labels: Vec<usize>,
+    pub only_front: Option<bool>,
+    pub own_slots: Option<(i32, i32)>,
+    pub foe_hot_slots: Option<(i32, i32)>,
+    pub foe_cold_slots: Option<(i32, i32)>,
+    pub foe_denied: Option<bool>,
+    pub same_col: Option<bool>,
+    pub cross_by: Option<bool>,
+    pub cross_example: Option<bool>,
+    pub prio_card_arrows: Option<usize>,
+    pub prio_midline: Option<bool>,
+    pub entry_order: Option<(bool, bool, bool)>,
+    pub own1: Option<(bool, bool)>,
+    pub own2: Option<(bool, bool)>,
+    pub own3: Option<(bool, bool)>,
+    pub own4: Option<(i32, bool, bool, usize)>,
+    pub foe1: Option<bool>,
+    pub foe2: Option<bool>,
+    pub foe3: Option<bool>,
+    pub foe4: Option<bool>,
+    pub foe5: Option<(bool, bool)>,
+    pub foe6: Option<(i32, bool, bool, usize)>,
+    pub own_steps: Option<usize>,
+    pub foe_steps: Option<usize>,
+    pub self_dmg: Option<i32>,
+    pub self_no_flame: Option<bool>,
+    pub flame_only_damage: Option<bool>,
+    pub hp_own_holder: Option<(i32, bool, bool)>,
+    pub hp_foe_holder: Option<(i32, bool, bool)>,
+    pub hp_own_card: Option<(bool, bool)>,
+    pub hp_foe_card: Option<(bool, bool)>,
+}
+
+#[cfg(test)]
+pub(crate) fn s13_fold(rows: &S13Rows) -> S13Rules {
+    let mut f = S13Rules { labels: rows.labels.clone(), ..Default::default() };
+    let dup = |line: usize, what: &str| -> ! { s13_bad(&format!("md:{line}"), &format!("{what} 被认领两次（分派表撞词了）")) };
+    for l in rows.prose.iter().chain(rows.dots.iter()).chain(rows.fences.iter().flatten()) {
+        match l.claim {
+            S13Claim::Label => {}
+            S13Claim::OnlyFrontRow { before_midline } => {
+                if f.only_front.is_some() {
+                    dup(l.line, "「只有中线前卡牌可攻击」");
+                }
+                f.only_front = Some(before_midline);
+            }
+            S13Claim::AttackableOwn { from, to } => {
+                if f.own_slots.is_some() {
+                    dup(l.line, "我方那两条格号");
+                }
+                f.own_slots = Some((from, to));
+            }
+            S13Claim::AttackableFoe { hot, cold, denied } => {
+                if f.foe_hot_slots.is_some() {
+                    dup(l.line, "敌方那四个格号");
+                }
+                f.foe_hot_slots = Some(hot);
+                f.foe_cold_slots = Some(cold);
+                f.foe_denied = Some(denied);
+            }
+            S13Claim::RangeSameColumn { only } => {
+                if f.same_col.is_some() {
+                    dup(l.line, "「只能攻击同列」");
+                }
+                f.same_col = Some(only);
+            }
+            S13Claim::RangeCrossException { permitted_by, example } => {
+                if f.cross_by.is_some() {
+                    dup(l.line, "跨列那条例外");
+                }
+                f.cross_by = Some(permitted_by);
+                f.cross_example = Some(example);
+            }
+            S13Claim::PriorityCard { arrows } => {
+                if f.prio_card_arrows.is_some() {
+                    dup(l.line, "优先级第1条");
+                }
+                f.prio_card_arrows = Some(arrows);
+            }
+            S13Claim::PriorityMidline { holder } => {
+                if f.prio_midline.is_some() {
+                    dup(l.line, "优先级第2条");
+                }
+                f.prio_midline = Some(holder);
+            }
+            S13Claim::OrderByPlacement { defines_entry } => {
+                if f.entry_order.is_some() {
+                    dup(l.line, "入场顺序那三条");
+                }
+                f.entry_order = Some((defines_entry, false, false));
+            }
+            S13Claim::OrderEarliestFirst { first } => {
+                    let e = f.entry_order.take().unwrap_or_else(|| dup(l.line, "「先放置的先攻击」早于「按入场顺序」到了"));
+                f.entry_order = Some((e.0, first, e.2));
+            }
+            S13Claim::OrderFreshSeqOnReplace { fresh } => {
+                    let e = f.entry_order.take().unwrap_or_else(|| dup(l.line, "「新卡按新入场顺序」早于前两条到了"));
+                f.entry_order = Some((e.0, e.1, fresh));
+            }
+            S13Claim::OwnStep1DamageNow { target_drops, now } => {
+                if f.own1.is_some() {
+                    dup(l.line, "我方第1步");
+                }
+                f.own1 = Some((target_drops, now));
+                f.own_steps = Some(1);
+            }
+            S13Claim::OwnStep2FlameNow { accrues, now } => {
+                if f.own2.is_some() {
+                    dup(l.line, "我方第2步");
+                }
+                f.own2 = Some((accrues, now));
+                f.own_steps = Some(2);
+            }
+            S13Claim::OwnStep3Threshold { fires, subtracts } => {
+                if f.own3.is_some() {
+                    dup(l.line, "我方第3步");
+                }
+                f.own3 = Some((fires, subtracts));
+                f.own_steps = Some(3);
+            }
+            S13Claim::OwnStep4Death { le, deathrattle, karma, arrows } => {
+                if f.own4.is_some() {
+                    dup(l.line, "我方第4步");
+                }
+                f.own4 = Some((le, deathrattle, karma, arrows));
+                f.own_steps = Some(4);
+            }
+            S13Claim::FoeStep1Accumulate { deferred } => {
+                if f.foe1.is_some() {
+                    dup(l.line, "敌方第1步");
+                }
+                f.foe1 = Some(deferred);
+                f.foe_steps = Some(1);
+            }
+            S13Claim::FoeStep2Immediate { immediate } => {
+                if f.foe2.is_some() {
+                    dup(l.line, "敌方第2步");
+                }
+                f.foe2 = Some(immediate);
+                f.foe_steps = Some(2);
+            }
+            S13Claim::FoeStep3FlameDeferred { deferred } => {
+                if f.foe3.is_some() {
+                    dup(l.line, "敌方第3步");
+                }
+                f.foe3 = Some(deferred);
+                f.foe_steps = Some(3);
+            }
+            S13Claim::FoeStep4SettleAtEnd { at_end } => {
+                if f.foe4.is_some() {
+                    dup(l.line, "敌方第4步");
+                }
+                f.foe4 = Some(at_end);
+                f.foe_steps = Some(4);
+            }
+            S13Claim::FoeStep5SettleBoth { hp, flame } => {
+                if f.foe5.is_some() {
+                    dup(l.line, "敌方第5步");
+                }
+                f.foe5 = Some((hp, flame));
+                f.foe_steps = Some(5);
+            }
+            S13Claim::FoeStep6Death { le, deathrattle, karma, arrows } => {
+                if f.foe6.is_some() {
+                    dup(l.line, "敌方第6步");
+                }
+                f.foe6 = Some((le, deathrattle, karma, arrows));
+                f.foe_steps = Some(6);
+            }
+            S13Claim::SelfDamageAfterAttack { amount } => {
+                if f.self_dmg.is_some() {
+                    dup(l.line, "自损那个 1");
+                }
+                f.self_dmg = Some(amount);
+            }
+            S13Claim::SelfDamageNoFlame { no_flame } => {
+                if f.self_no_flame.is_some() {
+                    dup(l.line, "「自损不触发业火」");
+                }
+                f.self_no_flame = Some(no_flame);
+            }
+            S13Claim::FlameOnlyFromDamage { only_damage } => {
+                if f.flame_only_damage.is_some() {
+                    dup(l.line, "「业火只由攻击造成的伤害触发」");
+                }
+                f.flame_only_damage = Some(only_damage);
+            }
+            S13Claim::HolderHpOwn { hp, candle, independent } => {
+                if f.hp_own_holder.is_some() {
+                    dup(l.line, "我方持业者那行 HP");
+                }
+                f.hp_own_holder = Some((hp, candle, independent));
+            }
+            S13Claim::HolderHpFoe { hp, candle, independent } => {
+                if f.hp_foe_holder.is_some() {
+                    dup(l.line, "敌方持业者那行 HP");
+                }
+                f.hp_foe_holder = Some((hp, candle, independent));
+            }
+            S13Claim::CardHpOwn { equals_power, independent } => {
+                if f.hp_own_card.is_some() {
+                    dup(l.line, "我方卡牌那行 HP");
+                }
+                f.hp_own_card = Some((equals_power, independent));
+            }
+            S13Claim::CardHpFoe { equals_power, independent } => {
+                if f.hp_foe_card.is_some() {
+                    dup(l.line, "敌方卡牌那行 HP");
+                }
+                f.hp_foe_card = Some((equals_power, independent));
+            }
+        }
+    }
+    let need = |what: &str| -> ! {
+        panic!("§十三 折叠缺条款「{what}」⇒ 文档把那一行删了／改了形状，而本帧的复现测与推导器都还按二十七行取数。请同步解析器与那两把尺");
+    };
+    f.only_front.unwrap_or_else(|| need("只有中线前卡牌可攻击"));
+    f.own_slots.unwrap_or_else(|| need("我方 P1-P4 全部可攻击"));
+    f.foe_hot_slots.unwrap_or_else(|| need("敌方 E5-E8 可攻击"));
+    f.foe_cold_slots.unwrap_or_else(|| need("敌方 E1-E4 不可攻击"));
+    f.foe_denied.unwrap_or_else(|| need("「不可攻击」那半个子句"));
+    f.same_col.unwrap_or_else(|| need("基础：只能攻击同列卡牌"));
+    f.cross_by.unwrap_or_else(|| need("例外：特性/技能允许则可跨列攻击"));
+    f.cross_example.unwrap_or_else(|| need("那句括号里的例子「可攻击相邻列」"));
+    f.prio_card_arrows.unwrap_or_else(|| need("优先级第1条 同列有卡牌→攻击该卡牌"));
+    f.prio_midline.unwrap_or_else(|| need("优先级第2条 同列无卡牌→攻击中线"));
+    f.entry_order.unwrap_or_else(|| need("入场顺序那三条"));
+    for (i, slot) in [(&f.own1, "我方第1步"), (&f.own2, "我方第2步"), (&f.own3, "我方第3步")] {
+        if i.is_none() {
+            need(slot);
+        }
+    }
+    f.own4.unwrap_or_else(|| need("我方第4步 数值≤0→死亡→亡语→业力"));
+    for (i, slot) in [(&f.foe1, "敌方第1步"), (&f.foe2, "敌方第2步"), (&f.foe3, "敌方第3步"), (&f.foe4, "敌方第4步")] {
+        if i.is_none() {
+            need(slot);
+        }
+    }
+    f.foe5.unwrap_or_else(|| need("敌方第5步 结算时数值降低＋业火增加"));
+    f.foe6.unwrap_or_else(|| need("敌方第6步 数值≤0→死亡→亡语→业力"));
+    let own_steps = f.own_steps.unwrap_or_else(|| need("我方半区的步数"));
+    let foe_steps = f.foe_steps.unwrap_or_else(|| need("敌方半区的步数"));
+    if (own_steps, foe_steps) != (4, 6) {
+        panic!("§十三 结算围栏的两个半区应折叠出 4 步与 6 步，实测 {own_steps}／{foe_steps} ⇒ 编号到达顺序与 fold 里的计数器对不上");
+    }
+    f.self_dmg.unwrap_or_else(|| need("攻击后自身-1"));
+    f.self_no_flame.unwrap_or_else(|| need("自损不触发业火"));
+    f.flame_only_damage.unwrap_or_else(|| need("业火只由攻击造成的伤害触发"));
+    f.hp_own_holder.unwrap_or_else(|| need("我方持业者 HP 20"));
+    f.hp_foe_holder.unwrap_or_else(|| need("敌方持业者 HP 20"));
+    f.hp_own_card.unwrap_or_else(|| need("我方卡牌 HP＝数值"));
+    f.hp_foe_card.unwrap_or_else(|| need("敌方卡牌 HP＝数值"));
+    f
+}
+
 #[cfg(test)]
 mod rule_tests {
     use super::*;
@@ -4410,6 +5069,314 @@ mod rule_tests {
         b.p_karma = b.p_karma.max(fire.cost);
         b.player_place(idx, 1)
             .unwrap_or_else(|e| panic!("{} 写的是「本回合」不能放置：跨到下一回合仍未解禁（{e}）⇒ 那道闸做成了永久的", tag(163)));
+    }
+
+    /// §十三「攻击与伤害结算」的 27 条规则行（授权句 1＋圆点 2＋六道围栏里 24 行）用**文档自己写的数字与措辞**
+    /// 驱动引擎跑一遍：那两个 20、那个自损的 1、那个死亡阈值 0、那三段格号（P1-P4／E5-E8／E1-E4）全部由
+    /// `parse_section13_attack`＋`s13_fold` 从文档读进来，本测一个都不写在代码里。
+    /// 为什么本章 27 行全走实测：与 §三／§四／§五／§六 同一条口径，但理由更硬——本章一半的条款写的是**时机**
+    /// （立即／阶段结束／暂不增加），锚点只能证明"这行代码提过那一行"，证不了"落地的时刻就是文档那一刻"。
+    /// 所以 md:551 与 md:545 这对必须拆成两次调用之间与之后各看一次数值，才叫把"立即"与"延迟"跑出来。
+    /// 本章唯一与文档相反的东西（Boss「炉温」＝非伤害来源发焰）不在这里洗白：它由 §十三 推导器 ④ 那份
+    /// `flame` 写点封闭名单**点名**登记，本测⑩ 只证常规对局那一侧成立。
+    #[test]
+    fn section13_attack_rules_reproduce_on_the_engine() {
+        let Some(lines) = crate::model::doc_or_skip() else { return };
+        let rows = parse_section13_attack(&lines);
+        let tag = |n: usize| format!("md:{n}「{}」", lines[n - 1].trim());
+        let got = |v: &[S13Line]| v.iter().map(|r| r.line).collect::<Vec<_>>();
+        let blocks = || rows.fences.iter().map(|b| got(b)).collect::<Vec<_>>();
+
+        // ⓪ 章界与外壳先对账：六道围栏、七条标题、一句 prose、两条圆点，行集与本测下面按块取数的那份一一对上。
+        assert_eq!(rows.fence_ticks, 12, "{} 这一章应恰有六道 ``` 围栏＝12 个围栏符（范围／优先级／顺序／结算／自损／血量），实测 {} ⇒ 文档加了第七道，而解析器与本测都只登记六道，那里的新行会一起漏过去", tag(541), rows.fence_ticks);
+        assert_eq!(got(&rows.prose), vec![514], "§十三 围栏外的 prose 应恰是 md:514 那一句「只有中线前卡牌可攻击：」，实测 {:?} ⇒ 标签判据（单 token＋不以「：」「。」收尾）漂了，有真规则行被当成标题吞掉", got(&rows.prose));
+        assert_eq!(rows.labels, vec![512, 519, 526, 533, 541, 559, 567], "§十三 围栏外的小节标题应恰好是那七条，实测 {:?} ⇒ 文档加了小节或改了标题措辞", rows.labels);
+        assert_eq!(got(&rows.dots), vec![516, 517], "「攻击条件」那两条圆点应是 516／517，实测 {:?} ⇒ 可攻击面加了第三条（例如「后排也可攻击」），那是与本整章相反的新规则", got(&rows.dots));
+        assert_eq!(
+            blocks(),
+            vec![
+                vec![522, 523],
+                vec![529, 530],
+                vec![536, 537, 538],
+                vec![544, 545, 546, 547, 548, 550, 551, 552, 553, 554, 555, 556],
+                vec![562, 563, 564],
+                vec![570, 571, 572, 573],
+            ],
+            "六道围栏的行集应与上面那份一一对应（结算那道含两句半区抬头共 12 行），实测 {:?} ⇒ 某一道围栏加了行或少了行，而本测是按块取数的",
+            blocks()
+        );
+        for (blk, idx, n) in [(3usize, 0usize, 544usize), (3, 5, 550)] {
+            assert_eq!(rows.fences[blk][idx].claim, S13Claim::Label, "md:{n} 那两句半区抬头没被判成 Label ⇒ 它会当成一步去折叠，整个结算围栏的编号对齐（第几步）当场错位");
+        }
+        assert_ne!(rows.fences[4][0].claim, S13Claim::Label, "md:562「攻击后自身-1（自损）：」被吞成 Label ⇒ 那个 1 从实测里消失，本测⑨ 就没有数可撞了（它带一个数字，不该走抬头判据）");
+
+        let f = s13_fold(&rows);
+        let only_front = f.only_front.unwrap();
+        let (p1, p4) = f.own_slots.unwrap();
+        let (e_hot1, e_hot2) = f.foe_hot_slots.unwrap();
+        let (e_cold1, e_cold2) = f.foe_cold_slots.unwrap();
+        let foe_denied = f.foe_denied.unwrap();
+        let same_col = f.same_col.unwrap();
+        let (cross_by, cross_example) = (f.cross_by.unwrap(), f.cross_example.unwrap());
+        let prio_arrows = f.prio_card_arrows.unwrap();
+        let prio_midline = f.prio_midline.unwrap();
+        let (by_placement, earliest_first, fresh_seq) = f.entry_order.unwrap();
+        let (own_drops, own_now) = f.own1.unwrap();
+        let (own_accrues, own_accrues_now) = f.own2.unwrap();
+        let (own_fires, own_subtracts) = f.own3.unwrap();
+        let (own_le, own_dr, own_karma, own_arrows) = f.own4.unwrap();
+        let (foe_deferred, foe_immediate, foe_flame_deferred, foe_at_end) = (f.foe1.unwrap(), f.foe2.unwrap(), f.foe3.unwrap(), f.foe4.unwrap());
+        let (foe_hp, foe_flame) = f.foe5.unwrap();
+        let (foe_le, foe_dr, foe_karma, foe_arrows) = f.foe6.unwrap();
+        let (own_steps, foe_steps) = (f.own_steps.unwrap(), f.foe_steps.unwrap());
+        let self_dmg = f.self_dmg.unwrap();
+        let (self_no_flame, flame_only_damage) = (f.self_no_flame.unwrap(), f.flame_only_damage.unwrap());
+        let (hp_own_holder, hp_own_candle, hp_own_indep) = f.hp_own_holder.unwrap();
+        let (hp_foe_holder, hp_foe_candle, hp_foe_indep) = f.hp_foe_holder.unwrap();
+        let (hp_own_card_eq, _) = f.hp_own_card.unwrap();
+        let (hp_foe_card_eq, _) = f.hp_foe_card.unwrap();
+
+        // ① 文档先跟自己自洽（不自洽就轮不到引擎出场）：三段格号拼得出一张棋盘；两侧那两句死亡行是同一句。
+        assert!(only_front && foe_denied && same_col && cross_by && cross_example && prio_midline, "本章前半那几条的措辞读不全（只取前排 {only_front}／后排不可打 {foe_denied}／同列 {same_col}／例外授权 {cross_by}＋例子 {cross_example}／无卡打中线 {prio_midline}）⇒ 本测③④⑤ 那三段拿它们当前提的地方一起失效");
+        assert!(by_placement && earliest_first && fresh_seq, "入场顺序那三条读不全（{by_placement}／{earliest_first}／{fresh_seq}）⇒ 本测⑥ 那句「先放的先打」没有文档依据");
+        assert_eq!(prio_arrows, 1, "{} 那条优先级只应有一个「→」（有卡→打它），实测 {prio_arrows} ⇒ 那一行被拆成了链，本测⑤ 撞的就不再是同一条判据", tag(529));
+        assert_eq!((e_hot1, e_hot2), (e_cold1 + 4, e_cold2 + 4), "{} 那两个区间在文档自己的编号里应当正好差一整排（E1-E4 后排／E5-E8 前排），实测 {e_hot1}-{e_hot2} 对 {e_cold1}-{e_cold2} ⇒ 棋盘行号改了，本测③ 就没法把「第几格」翻译成 p_front／e_front／e_back", tag(517));
+        assert_eq!(p4 - p1, e_hot2 - e_hot1, "{} 我方那一段的格数应与 {} 敌方前排那一段相同，实测 {} 格／{} 格 ⇒ 两侧棋盘不对称，本测③ 用同一个列数撞两侧就站不住", tag(516), tag(517), p4 - p1 + 1, e_hot2 - e_hot1 + 1);
+        assert_eq!((own_le, own_arrows), (foe_le, foe_arrows), "{} 与 {} 在文档里是逐字节同一句（本测靠半区＋编号才分得开），折叠出来的死亡阈值与链长却成了 ({own_le},{own_arrows})／({foe_le},{foe_arrows}) ⇒ 有人改掉了其中一句，那两侧结算就不再是同一条规则", tag(548), tag(556));
+        assert!(own_drops && own_now && own_accrues && own_accrues_now && own_fires && own_subtracts && own_dr && own_karma, "我方那四步的措辞读不全 {own_drops}／{own_now}／{own_accrues}／{own_accrues_now}／{own_fires}／{own_subtracts}／{own_dr}／{own_karma} ⇒ 本测⑦ 撞的那两个「立即」失去依据");
+        assert!(foe_deferred && foe_immediate && foe_flame_deferred && foe_at_end && foe_hp && foe_flame && foe_dr && foe_karma, "敌方那六步的措辞读不全 {foe_deferred}／{foe_immediate}／{foe_flame_deferred}／{foe_at_end}／{foe_hp}／{foe_flame}／{foe_dr}／{foe_karma} ⇒ 本测⑧ 撞的那三个「暂不」失去依据");
+        assert_eq!((own_steps, foe_steps), (4, 6), "文档自己给两侧标的步数应是 4 与 6（编号位与到达顺序在 s13_step 里逐条对过），折叠出来是 {own_steps}／{foe_steps} ⇒ 半区归属与编号错位，本测⑦⑧ 按第几步取数就会拿到别的行");
+        assert_eq!(hp_own_holder, hp_foe_holder, "{} 与 {} 那两个持业者 HP 不相等（{hp_own_holder}／{hp_foe_holder}）⇒ 文档不再对称，本测② 那句「两侧读同一个常量」当场失效", tag(570), tag(572));
+        assert!(hp_own_candle && hp_foe_candle && hp_own_indep && hp_foe_indep && hp_own_card_eq && hp_foe_card_eq, "血量体系那四行读不全（烛长 {hp_own_candle}／{hp_foe_candle}／独立 {hp_own_indep}／{hp_foe_indep}／＝数值 {hp_own_card_eq}／{hp_foe_card_eq}）⇒ 本测② 撞的是那四行合起来说的「两套数各归各」");
+        assert!(self_dmg > 0 && self_no_flame && flame_only_damage, "自损那个数读成 {self_dmg}（应为正）、两条否定式读成 {self_no_flame}／{flame_only_damage} ⇒ 本测⑨ 的边界（自损掉血却不发焰）没有依据");
+
+        let ember = faction_cards(Faction::Ember);
+        let by_tr = |tr: TraitKind, why: &str| -> CardDef {
+            *ember.iter().find(|d| d.tr == tr).unwrap_or_else(|| panic!("Ember 卡表里该有一张「{why}」（特性 {tr:?}），本测用它跑 §十三 那几步；整表实测见 battle.rs 的 faction_cards"))
+        };
+        let plain = by_tr(TraitKind::None, "无特性白板（火苗）");
+        let adj = by_tr(TraitKind::AttackAdjacent, "可攻击相邻列（引燃者）");
+        let thresh = by_tr(TraitKind::ThresholdSameColFlame2, "同列+2焰的阈值特性（焚稿人）");
+        let selfhurt = by_tr(TraitKind::SelfDmgOnAttack, "攻击后自身-1（余温）");
+        let drattle = by_tr(TraitKind::DeathRattleSameColFlame3, "亡语同列+3焰（回燃）");
+        let fresh = || Battle::new(4301, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 3);
+        let put = |b: &mut Battle, side_player: bool, col: usize, id: u64, def: CardDef, hp: i32| {
+            let mut c = CardInst::new(id, def);
+            c.hp = hp;
+            c.seq = b.seq; // 手工入场也要拿真实入场号，否则 row_seq_order 排出来全是 0，攻击序列就退化成一格
+            b.seq += 1;
+            c.placed_turn = b.turn;
+            if side_player {
+                b.p_front[col] = Some(c);
+            } else {
+                b.e_front[col] = Some(c);
+            }
+        };
+
+        // ② 血量体系（570／571／572／573）：那两个 20 与「HP＝数值」那个等式各自撞一次，再撞「独立」。
+        let b = fresh();
+        assert_eq!(b.p_candle, hp_own_holder, "{} 写我方持业者 HP {hp_own_holder}，引擎开局给了 {}", tag(570), b.p_candle);
+        assert_eq!(b.e_candle, hp_foe_holder, "{} 写敌方持业者 HP {hp_foe_holder}，引擎开局给了 {}", tag(572), b.e_candle);
+        for def in [plain, adj, thresh] {
+            let c = CardInst::new(9000 + def.cost as u64, def);
+            assert_eq!(c.hp, def.power, "{}／{} 说卡牌 HP＝数值，实测这张「{}」的数值 {} 落地成了血量 {}", tag(571), tag(573), def.name, def.power, c.hp);
+            assert_ne!(c.hp, hp_own_holder, "这张「{}」的 HP 恰好等于持业者那个 {hp_own_holder} ⇒ 本测没法用这一张区分「两套数」，换一张再来", def.name);
+        }
+
+        // ③ 可攻击面（514／516／517）：三段格号翻译成码面的三组下标，后排既不进攻击序列、也不在目标面上。
+        let mut b = fresh();
+        assert_eq!(b.p_front.len(), (p4 - p1 + 1) as usize, "{} 写的可攻击区间是 P{p1}-P{p4}（{} 格），码面我方前排数组却有 {} 格 ⇒ 两边已经不是同一张棋盘", tag(516), p4 - p1 + 1, b.p_front.len());
+        assert_eq!(b.e_front.len(), (e_hot2 - e_hot1 + 1) as usize, "{} 写的可攻击区间是 E{e_hot1}-E{e_hot2}（{} 格），码面敌方前排却有 {} 格 ⇒ 同上", tag(517), e_hot2 - e_hot1 + 1, b.e_front.len());
+        assert_eq!(b.e_back.len(), (e_cold2 - e_cold1 + 1) as usize, "{} 写的「不可攻击」区间是 E{e_cold1}-E{e_cold2}（{} 格），码面敌方后排却有 {} 格 ⇒ 那一排的尺寸变了", tag(517), e_cold2 - e_cold1 + 1, b.e_back.len());
+        for col in 0..b.p_front.len() {
+            put(&mut b, true, col, 9100 + col as u64, plain, plain.power);
+        }
+        b.player_attack_phase();
+        let shots = b.log.iter().filter(|l| l.contains("⚔ 我方 ")).count();
+        assert_eq!(shots, b.p_front.len(), "{} 说 P{p1}-P{p4} 全部可攻击（{} 格），实测这一趟只有 {shots} 张出手 ⇒ 有一格被排除在攻击序列之外", tag(516), b.p_front.len());
+        let mut b = fresh();
+        b.p_karma = 99;
+        b.hand.push(CardInst::new(9200, plain));
+        let idx = b.hand.len() - 1;
+        b.player_place(idx, 2).expect("③ 这里只验证放置落点");
+        assert!(b.p_front[2].is_some(), "{} 那半句「全部」在码面上的机器形式是：玩家根本没有后排那一档——struct Battle 只有 p_front／e_front／e_back 三排，放置入口 player_place 又只把牌交给 p_front，实测 p_front[2] 有卡", tag(516));
+        let mut b = fresh();
+        put(&mut b, false, 1, 9301, plain, plain.power);
+        let back_id = 9302u64;
+        let mut back = CardInst::new(back_id, plain);
+        back.hp = plain.power;
+        back.seq = b.seq;
+        b.seq += 1;
+        b.e_back[0] = Some(back);
+        let back_seq = b.e_back[0].as_ref().unwrap().seq;
+        b.enemy_attack_phase();
+        let shots = b.log.iter().filter(|l| l.contains("⚔ 敌方 ")).count();
+        assert_eq!(shots, 1, "{} 说 E{e_cold1}-E{e_cold2} 不可攻击，实测这一趟有 {shots} 张敌方牌出手（后排那张编号 {back_id} 若在其中，它就不是「不可攻击」而是「不参战」）", tag(517));
+        assert!(!b.attack_order.contains(&back_seq), "后排那张的入场号 {back_seq} 出现在攻击序列 {:?} 里 ⇒ {} 那句「不可攻击」在攻击这一侧失守", b.attack_order, tag(517));
+        let mut b = fresh();
+        put(&mut b, true, 0, 9401, plain, plain.power);
+        let mut ghost = CardInst::new(9402, thresh);
+        ghost.hp = 10;
+        ghost.seq = b.seq;
+        b.seq += 1;
+        b.e_back[0] = Some(ghost);
+        let c0 = b.e_candle;
+        b.player_attack_phase();
+        assert_eq!(b.e_candle, c0 - plain.power, "{}＋{} 的组合：同列前排空着，即使正后方站着一张卡，攻击也要落到中线上（敌方持业者掉 {}）", tag(514), tag(530), plain.power);
+        assert_eq!(b.e_back[0].as_ref().expect("后排那张还在").hp, 10, "那一发落到了后排卡身上 ⇒ {} 那句「只有中线前卡牌可攻击」在目标面这一侧失守", tag(514));
+
+        // ④ 攻击范围（522／523）：同列是唯一默认，跨列只由那一个特性开一个口子。
+        let mut b = fresh();
+        put(&mut b, true, 0, 9501, plain, plain.power);
+        put(&mut b, false, 1, 9502, plain, 10);
+        let (c0, k0) = (b.e_candle, b.dealt_this_turn);
+        b.player_attack_phase();
+        assert_eq!(b.e_front[1].as_ref().expect("相邻列那张还在").hp, 10, "白板卡打出了跨列伤害 ⇒ {} 那句「只能攻击同列」没有闸住（攻击者特性 {plain:?}）", tag(522));
+        assert_eq!(b.e_candle, c0 - plain.power, "白板卡同列无卡时应打中线，实测蜡烛从 {c0} 变到 {}", b.e_candle);
+        assert!(b.dealt_this_turn > k0, "这一发没进口径 A（{k0}→{}）⇒ 攻击根本没成立，上面那两条断言就是在比两次空", b.dealt_this_turn);
+        let mut b = fresh();
+        put(&mut b, true, 0, 9503, adj, adj.power);
+        put(&mut b, false, 1, 9504, plain, 10);
+        let c0 = b.e_candle;
+        b.player_attack_phase();
+        assert_eq!(b.e_front[1].as_ref().expect("相邻列那张该挨这一下").hp, 10 - adj.power, "{} 授权的例外没兑现：带「{}」特性的攻击者同列无卡，却没有跨到相邻列", tag(523), adj.name);
+        assert_eq!(b.e_candle, c0, "跨列那一发同时打了持业者 ⇒ 例外被做成了「同列＋相邻列一起挨」，文档 {} 只许了「可跨列」这一件事", tag(523));
+
+        // ⑤ 优先级（529／530）：同列有卡时那张卡就是唯一去处，两侧都有卡也不越线、不绕道。
+        let mut b = fresh();
+        put(&mut b, true, 0, 9601, plain, plain.power);
+        put(&mut b, false, 0, 9602, plain, 10);
+        put(&mut b, false, 1, 9603, plain, 10);
+        let c0 = b.e_candle;
+        b.player_attack_phase();
+        assert_eq!(b.e_front[0].as_ref().expect("同列那张还在").hp, 10 - plain.power, "{} 的第一条没兑现（同列那张没挨打）", tag(529));
+        assert_eq!(b.e_front[1].as_ref().expect("邻列那张还在").hp, 10, "{} 排第二的那条「无卡才打中线」被提前了：同列明明有卡，邻列那张却挨了打", tag(530));
+        assert_eq!(b.e_candle, c0, "同列有卡却还打了中线 ⇒ 优先级那两条之间多了一处兜底");
+
+        // ⑥ 攻击顺序（536／537／538）：入场号决定出手次序；被挤死后放进来的是新号，不继承旧号。
+        let mut b = fresh();
+        b.p_karma = 99;
+        let mut placed: Vec<&str> = Vec::new();
+        for (col, def) in [(2usize, plain), (0usize, adj), (1usize, selfhurt)] {
+            let id = 9700 + b.seq;
+            b.hand.push(CardInst::new(id, def));
+            let idx = b.hand.len() - 1;
+            b.player_place(idx, col).unwrap_or_else(|e| panic!("⑥ 放置「{}」到第 {} 列被拒：{e}", def.name, col + 1));
+            placed.push(def.name);
+        }
+        b.player_attack_phase();
+        let order: Vec<&str> = b.log.iter().filter_map(|l| l.strip_prefix("⚔ 我方 ").and_then(|r| r.split('(').next())).collect();
+        assert_eq!(order, placed, "{}＋{} 说的出手次序＝放置次序，实测这局的攻击日志顺序是 {order:?}（放置顺序是 {placed:?}）", tag(536), tag(537));
+        assert!(b.attack_order.windows(2).all(|w| w[0] < w[1]), "攻击序列 {:?} 不是严格升序 ⇒ {} 那句「按入场顺序」在码面上是另一套排序", b.attack_order, tag(536));
+        let mut b = fresh();
+        b.p_karma = 99;
+        b.hand.push(CardInst::new(9801, plain));
+        b.player_place(b.hand.len() - 1, 0).expect("⑥ 第一次放置");
+        let first_seq = b.p_front[0].as_ref().expect("刚放进去的那张").seq;
+        b.hand.push(CardInst::new(9802, plain));
+        b.player_place(b.hand.len() - 1, 0).expect("⑥ 同列再放一张（挤压）");
+        let second_seq = b.p_front[0].as_ref().expect("挤进来的那张在场上").seq;
+        assert!(second_seq > first_seq, "{} 说被挤死之后新卡「按新入场顺序」，实测旧号 {first_seq}／新号 {second_seq} ⇒ 新卡继承了旧号，它会插到攻击序列的前面", tag(538));
+
+        // ⑦ 我方攻击阶段四步（545／546／547／548）：全部落在同一次调用之内，这就是文档那两个「立即」。
+        let mut b = fresh();
+        put(&mut b, true, 0, 9901, plain, plain.power);
+        put(&mut b, false, 0, 9902, plain, 10);
+        let (pc0, ec0) = (b.p_candle, b.e_candle);
+        b.player_attack_phase();
+        assert_eq!(b.e_front[0].as_ref().expect("目标还在").hp, 10 - plain.power, "{} 第1步：伤害应把目标数值当场降低", tag(545));
+        assert_eq!(b.e_front[0].as_ref().unwrap().flame, plain.power, "{} 第2步：目标业火当场 += 伤害（这次攻击没有别的业火来源）", tag(546));
+        assert_eq!((b.p_candle, b.e_candle), (pc0, ec0), "我方烛 {pc0}→{}、敌方烛 {ec0}→{}：这一发打在卡牌身上，两侧持业者都不应被削（{} 那四步只动目标数值与业火）", b.p_candle, b.e_candle, tag(545));
+        let mut b = fresh();
+        put(&mut b, true, 0, 10001, plain, plain.power);
+        put(&mut b, false, 0, 10002, thresh, 10);
+        b.e_front[0].as_mut().unwrap().flame = thresh.threshold - plain.power;
+        let mut witness = CardInst::new(10003, plain);
+        witness.hp = 10;
+        witness.seq = b.seq;
+        b.seq += 1;
+        b.e_back[0] = Some(witness);
+        b.player_attack_phase();
+        assert_eq!(b.e_front[0].as_ref().expect("阈值那张还活着（它掉血但不死）").flame, 0, "{} 第3步：业火 {} 达阈值 {} → 触发特性 → 业火 -= 阈值，实测剩 {}", tag(547), thresh.threshold, thresh.threshold, b.e_front[0].as_ref().unwrap().flame);
+        assert_eq!(b.e_back[0].as_ref().expect("同列后排那张只是被特性照到").flame, 2, "{} 第3步那句「触发特性」要真兑现：这张同列友方卡应拿到 +2 焰", tag(547));
+        for extra in 0..=1i32 {
+            let mut b = fresh();
+            put(&mut b, true, 0, 10101 + extra as u64, plain, plain.power);
+            put(&mut b, false, 0, 10201 + extra as u64, drattle, plain.power + extra);
+            let k0 = b.e_karma;
+            b.player_attack_phase();
+            let died = b.e_front[0].is_none();
+            assert_eq!(died, extra == 0, "{} 第4步写的是数值 ≤ {own_le}：目标血量恰好落到 {own_le}（多打 {} 点的那局是 {}）时该死／该活搞反了", tag(548), extra, plain.power + extra);
+            if died {
+                assert!(b.e_karma > k0, "{} 第4步那半句「获得业力」没兑现：敌方业力 {k0}→{}", tag(548), b.e_karma);
+                assert_eq!(b.p_front[0].as_ref().expect("攻击者还在").flame, 3, "{} 第4步的「触发亡语」没兑现：那张亡语给同列+3焰，攻击者就在同一列，实测 {}", tag(548), b.p_front[0].as_ref().unwrap().flame);
+            }
+        }
+
+        // ⑧ 敌方攻击阶段六步（551／552／553／554／555／556）：攻击与结算分两次调用，才看得见那三步「暂不」。
+        let mut b = fresh();
+        put(&mut b, false, 0, 10301, selfhurt, selfhurt.power);
+        put(&mut b, true, 0, 10302, plain, 10);
+        b.enemy_attack_phase();
+        assert_eq!(b.p_front[0].as_ref().expect("目标还在").hp, 10, "{} 第1步：伤害只累积，目标数值此刻不降低", tag(551));
+        assert_eq!(b.p_front[0].as_ref().unwrap().flame, 0, "{} 第3步：业火值此刻暂不增加", tag(553));
+        assert_eq!(b.e_front[0].as_ref().expect("攻击者还在").hp, selfhurt.power - self_dmg, "{} 第2步：攻击时触发的特性要立即生效——自损就是那支特性，它不该跟着延迟账一起等", tag(552));
+        assert_eq!(b.pending_card_d, vec![(0usize, selfhurt.power)], "累积的形式＝那一发进了延迟账本；实测 {:?}", b.pending_card_d);
+        b.enemy_settle();
+        assert_eq!(b.p_front[0].as_ref().expect("结算后目标还在").hp, 10 - selfhurt.power, "{} 第5步前半：结算时目标数值降低", tag(555));
+        assert_eq!(b.p_front[0].as_ref().unwrap().flame, selfhurt.power, "{} 第5步后半：同一发结算把业火也补上（与 {} 我方那一发同形）", tag(555), tag(546));
+        assert!(b.pending_card_d.is_empty(), "结算后延迟账本没清空（{:?}）⇒ 下一回合会重复结算这一发", b.pending_card_d);
+        for extra in 0..=1i32 {
+            let mut b = fresh();
+            put(&mut b, false, 0, 10401 + extra as u64, plain, plain.power);
+            put(&mut b, true, 0, 10501 + extra as u64, drattle, plain.power + extra);
+            b.enemy_attack_phase();
+            assert!(b.p_front[0].is_some(), "攻击阶段结束前那一发还不该要它的命（目标血量 {}，伤害 {}）", b.p_front[0].as_ref().unwrap().hp, plain.power);
+            let k0 = b.p_karma;
+            b.enemy_settle();
+            let died = b.p_front[0].is_none();
+            assert_eq!(died, extra == 0, "{} 第6步写的是数值 ≤ {foe_le}：目标恰好落到 {foe_le}（多打 {} 点的那局是 {}）时该死／该活搞反了", tag(556), extra, plain.power + extra);
+            if died {
+                assert!(b.p_karma > k0, "{} 第6步那半句「获得业力」没兑现：我方业力 {k0}→{}", tag(556), b.p_karma);
+                assert_eq!(b.e_front[0].as_ref().expect("攻击者还在").flame, 3, "{} 第6步的「触发亡语」没兑现（延迟到结算才响的亡语也要把 +3 焰打出来）：实测 {}", tag(556), b.e_front[0].as_ref().unwrap().flame);
+            }
+        }
+
+        // ⑨ 自损两条（562／563）：掉的那一点是文档那个 1，而且它不产生业火。
+        let mut b = fresh();
+        put(&mut b, true, 0, 10601, selfhurt, selfhurt.power);
+        put(&mut b, false, 0, 10602, plain, 10);
+        b.player_attack_phase();
+        let atk = b.p_front[0].as_ref().expect("自损那张还活着");
+        assert_eq!(atk.hp, selfhurt.power - self_dmg, "{} 写「攻击后自身-{self_dmg}」，实测这张「{}」从 {} 掉到 {}", tag(562), selfhurt.name, selfhurt.power, atk.hp);
+        assert_eq!(atk.flame, 0, "{} 写「自损不触发业火」，实测它身上积了 {} 点业火 ⇒ 自损被接进了伤害→业火那条链", tag(563), atk.flame);
+        assert_eq!(b.e_front[0].as_ref().unwrap().flame, plain.power, "对面那张的业火是 {}（应等于这次攻击造成的伤害 {}）——本测⑨ 的对照面：攻击发焰、自损不发焰", plain.power, plain.power);
+
+        // ⑩ 业火只由攻击造成的伤害触发（564）：一整局没人出手，牌面上的业火一处也不动。
+        // 文档那句与 Boss「炉温」（boss.rs 的非伤害来源发焰）相反，本测⑩ 只证常规对局这一侧；
+        // 那个反面由 §十三 推导器 ④ 的 flame 写点封闭名单点名登记，不在这里洗白。
+        let mut b = fresh();
+        let mut back = CardInst::new(10701, plain);
+        back.hp = 10;
+        back.seq = b.seq;
+        b.seq += 1;
+        b.e_back[0] = Some(back);
+        b.player_attack_phase();
+        b.enemy_attack_phase();
+        b.enemy_settle();
+        b.check_all_triggers();
+        let flames = |b: &Battle| -> Vec<i32> {
+            b.p_front
+                .iter()
+                .chain(b.e_front.iter())
+                .chain(b.e_back.iter())
+                .flatten()
+                .map(|c| c.flame)
+                .collect()
+        };
+        assert!(flames(&b).iter().all(|&x| x == 0), "{} 说业火只由攻击造成的伤害触发：这一局两侧前排都是空的、一次伤害都没落地，实测却有人带了业火 {:?}（非 Boss 路径上的发焰点请挂进 §十三 推导器 ④ 那份封闭名单）", tag(564), flames(&b));
+        assert_eq!(b.p_candle, hp_own_holder, "上面那一趟也不该削烛（我方 {}）——{} 那两个 20 是「独立」的第四层含义", b.p_candle, tag(570));
+        assert_eq!(b.e_candle, hp_foe_holder, "上面那一趟也不该削敌方烛（敌方 {}）——与 {} 对称", b.e_candle, tag(572));
     }
 
     /// §十六「触发示例」三行（687/688/689）用**文档自己写的数字**驱动引擎跑一遍：每行给一个阈值与一个
