@@ -19,7 +19,7 @@
 # 用法：bash scripts/mutation-battery.sh   （在 mktemp 出来的 src 副本里改，工作树只读）
 # run() 现在把 panic 正文（前 3 行）也打出来：只看"红在哪条测"量不到"红在哪一层"，
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 90 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 99 条记录的补丁有没有真打上；
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -696,7 +696,7 @@ assert ls[82]=='第二次 50%', ls[82]
 ls[82]='第二次 40%'
 open(p,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
-echo "### M82 把献祭那一支从裸费用改成乘**当前**档位（摘掉 md:75「全额，不递减」的机器形式；档位推进仍留着不碰）⇒ 实测 3 红：复现测④ 第一段（battle.rs:3728，档位已掉到 10% 的那张牌献祭仍该拿全额 5，引擎给 0）＋两条**既有**献祭行为测（battle.rs:3097／4036）。本章的牙不是新长的，是把既有盲区接上账"
+echo "### M82 把献祭那一支从裸费用改成乘**当前**档位（摘掉 md:75「全额，不递减」的机器形式；档位推进仍留着不碰）⇒ 实测 3 红：复现测④ 第一段（battle.rs:3728，档位已掉到 10% 的那张牌献祭仍该拿全额 5，引擎给 0）＋两条**既有**献祭行为测（battle.rs:3097／4036）。本章的牙不是新长的，是把既有盲区接上账（§四 入列后实测 **4 红**：多出来那条是 §四 复现测 @battle.rs:4320——两章共读 `on_death` 里同一支「全额」match 臂，所以这一改现在两侧都喊；行号是当时的快照，按测名读）"
 # 这条特意不写成 `c.def.cost * pct / 100`——那个式子是 ③ 那份「恰有 2 处」的 needle（另一处是终影吞名，出处速查:985），
 # 写成它会把「互斥被摘」报成「有人硬编了同一个式子」，读数就分不清是哪一句话坏了。
 restore; py "
@@ -705,7 +705,7 @@ a='                    c.def.cost  // §三:75'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'                    c.def.cost * refund_pct(c.deaths) / 100  // §三:75'))"
 run
-echo "### M83 摘掉同名牌那道闸（条件写成 false，报错文案、名单维护与回合开始清空都留着）⇒ 读数：这条只红在复现测⑤——③ 咬的是那句「本回合献祭过同名」还在不在，不是闸到底执行没执行"
+echo "### M83 摘掉同名牌那道闸（条件写成 false，报错文案、名单维护与回合开始清空都留着）⇒ 读数：这条只红在复现测⑤——③ 咬的是那句「本回合献祭过同名」还在不在，不是闸到底执行没执行（§四 入列后实测 **2 红**：§三 复现测 @battle.rs:4146 ＋ §四 复现测 @battle.rs:4406，两章各撞一遍这条行为；§四 推导器**没喊**——本章 ③ 那批 grep 钉的是三道闸的**形状**，同名牌那条的文案没被摘、只是不执行，与待办 (e)「字面串可绕」同族，照登不改）"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='if self.pf.sacrificed_names.contains(&self.hand[hand_idx].def.name) {'
@@ -733,12 +733,12 @@ a='        if self.starter_pile > 0 {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        self.pf.starter_draws -= 1;'+chr(10)+a))"
 run
-echo "### M87 摘掉标签判据里那道「不带数字」（M71 的姊妹条）⇒ §三 多这一道是因为 md:128「若玩家手牌为0且场上无卡牌：」那句头里那个 0 **就是触发条件**：吞成标签等于把这条规则从实测里删掉。实测 2 红：复现测红在解析器自己那句「缺 md:128 这一行」（battle.rs:2967，走不到那两组「非空不补」的断言）＋推导器红在 ① 的围栏行集对账（model.rs:3660，第六道围栏 5 行变 4 行）——不是预测的那条 assert_ne"
+echo "### M87 摘掉标签判据里那道「不带数字」（M71 的姊妹条）⇒ §三 多这一道是因为 md:128「若玩家手牌为0且场上无卡牌：」那句头里那个 0 **就是触发条件**：吞成标签等于把这条规则从实测里删掉。实测 2 红：复现测红在解析器自己那句「缺 md:128 这一行」（battle.rs:2967，走不到那两组「非空不补」的断言）＋推导器红在 ① 的围栏行集对账（model.rs:3660，第六道围栏 5 行变 4 行）——不是预测的那条 assert_ne。§四 帧起 needle 带上「return S3Claim::Label;」那一行：「s4_classify」抄了同一条判据，单行 needle 变成 2 处（预检当场喊出来的，不是人读出来的）"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
-a=\"    if t.ends_with('：') && s15_digits(t).is_empty() {\"
+a=\"    if t.ends_with('：') && s15_digits(t).is_empty() {\"+chr(10)+'        return S3Claim::Label;'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,\"    if t.ends_with('：') {\"))"
+open(p,'w',encoding='utf8').write(s.replace(a,\"    if t.ends_with('：') {\"+chr(10)+'        return S3Claim::Label;'))"
 run
 echo "### M88 摘掉「初始业力那格该有 2 个数字」那道分类守卫 ＋ 文档 md:64 同一格追加第三个数（键名与 arity 都不动）⇒ 实测 1 红：只剩 ② 那份**独立**计数在喊（model.rs:3771，红字直接报出实测 [0, 0, 3] 对登记口径 2）——M78＋M79 那对成对姊妹条的 §三 版本，两处各数一遍不是重复，一处降级另一处仍红"
 restore; py "
@@ -758,4 +758,78 @@ p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='            if nums.len() != 2 {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(2, \"初始业力那格（我方起点＋普通关敌方起点）\");'))"
+run
+echo "### M90 抹掉 battle.rs 里 §四:154 那枚行尾锚（md:154 走的是实测路，锚是双记账那一半）⇒ 应只红在 §四 推导器 ②「14 行全指回」那层，配比 0／0／14 不动（M47／M80 的姊妹条，换个章各量一遍）"
+restore; py "
+import re,glob
+hits=0
+for p in glob.glob('$D/src/*.rs'):
+    s=open(p,encoding='utf8').read()
+    s2,n=re.subn(r'\s*//\s*§四:154[^\n]*','',s)
+    hits+=n
+    if n: open(p,'w',encoding='utf8').write(s2)
+assert hits==1, hits"
+run
+echo "### M91 文档副本把 md:152 行首那个「获得2业力」→3（括号里那个「死亡获2业力」不动）⇒ 应红在复现测① 那句「两处说的是同一笔钱」＋推导器 ③ 那个 door pin（gain=3≠2）；①′ 那份普查仍绿（数字个数没变，只有值变了）——arity 拦不住换值，这条与 M81 同形"
+restore; py "
+q='$D/doc.md'; ls=open(q,encoding='utf8').read().split('\n')
+assert ls[151].count('获得2业力')==1, ls[151]
+ls[151]=ls[151].replace('获得2业力','获得3业力',1)
+open(q,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M92 把在场闸那道「< 1」改成「< 0」（我方＋敌方两支场上入口一起，真行为回归：入场 0 回合也能献）⇒ 应红在复现测③ 那条边界扫描＋推导器 ③ 那句「码面恰有 2 处」实测 0 处"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='if self.turn - c.placed_turn < 1 {'
+assert s.count(a)==2, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'if self.turn - c.placed_turn < 0 {'))"
+run
+echo "### M93 摘掉开端那半道豁免（两支手牌入口的「if !is_starter {」一起改成「if true {」：开端也吃每回合1次额度）⇒ 实测 3 红：复现测⑤（battle.rs:4336「献完开端那位仍是 false」）＋**一条既有**手牌额度测 hand_sacrifice_quota_only_starter_exempt（battle.rs:4634）＋推导器 ③ 那句「码面恰有 2 处」实测 0 处（model.rs:4151）。预测只列了后两条，多出来的那条正向测与其五 §3.5 的 M82 同形——本章的牙把既有盲区接上账，不是新造；④ 那份名单确实不动（置位行数没变，变的是它被谁执行）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        if !is_starter {'
+assert s.count(a)==2, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        if true {'))"
+run
+echo "### M94 往玩家手牌献祭入口塞一道在场闸（md:153 那条否定式被摘：手牌献开端从此要看 placed_turn）⇒ 实测 **8 红**（预测 3 红，差额全是这条塞进去的闸在**行为侧**炸出的连锁）：7 条测死在同一处减法溢出 battle.rs:550:12（「self.turn - c.placed_turn」在 placed_turn=i64::MIN 上减穿下界），死者含 §三／§五 两章的复现测、既有手牌额度测，以及 boss／command／meta 三把**与本章无关**的既有尺；第 8 条是 §四 推导器，红在 ③ 那句闸计数「恰有 2 处」实测 3（model.rs:4145）——**④ 那份「体内零在场闸」的点名没读到**：同一条测里 assert 是串行的，③ 先炸就把④ 遮在后面（与 M95 合起来读出这条口径：红字数数的是**测**，不是层）。溢出这一形把池里 placed-turn-min-overflow 那个坑从**实测侧**也照了出来"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        let c = self.hand.remove(idx);'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a, a+chr(10)+'        if self.turn - c.placed_turn < 1 { return Err(\"在场不足1回合，不可献祭\".into()); }'))"
+run
+echo "### M95 生产码面新写一条文档里根本没有的献祭额度消耗（dead_code 方法，行为不变）⇒ 实测 **1 红**（预测 2 红）：推导器红在 ③ 那句「self.pf.sacrifice_used = true; 恰有 2 处」实测 3（model.rs:4157），而 ④ 那份封闭写点名单 14→15 **没被读到**——两层在同一条测里，assert 串行，先炸的那层就是这次的全部读数。M85 的姊妹条，但落点比它少一层：M85 那次 ③ 的 needle 恰好不覆盖新写点，所以 ④ 是唯一喊的人；这里两处都覆盖，③ 抢先。合起来（与 M94）读出的口径是：**红字数测不数层**，「两层的红字互相把对方指出来」这句话在单条测内不成立"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='impl Battle {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+chr(10)+'    #[allow(dead_code)]'+chr(10)+'    fn s4_probe_sac(&mut self) { self.pf.sacrifice_used = true; }'))"
+run
+echo "### M96 摘掉 s4_table_row「在场限制那格该有 1 个数字」那道 arity 守卫、文档不动 ⇒ **预期全绿**（M68／M78／M89 的姊妹条）：守卫单独降级，四把尺都看不见，它的牙只在文档那一格多写一个数时才出（M97 就是那一条）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            if nums.len() != 1 {'+chr(10)+'                expect(1, \"在场限制那格（「需在场N回合以上」那一个数）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(1, \"在场限制那格（「需在场N回合以上」那一个数）\");'))"
+run
+echo "### M97 M96 那层守卫降级 ＋ 文档 md:161 同一格追加第二个数（「（牌库上限10）」，键名与行号都不动）⇒ 实测只剩 §四 推导器 ①′ 那份**独立**普查在喊（该 1 个、实测 2）：fold 仍取 nums[0]=1，复现测一路绿——与 M96 合起来才读出 ①′ 这一层的价钱：M78／M79 那对读数在 §四 的重做"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='            if nums.len() != 1 {'+chr(10)+'                expect(1, \"在场限制那格（「需在场N回合以上」那一个数）\");'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if false {'+chr(10)+'                expect(1, \"在场限制那格（「需在场N回合以上」那一个数）\");'))
+q='$D/doc.md'; ls=open(q,encoding='utf8').read().split('\n')
+b='手牌献祭不受此限制'
+assert ls[160].endswith(b), ls[160]
+ls[160]=ls[160]+'（牌库上限10）'
+open(q,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M98 只摘掉 §四 复现测上方的 #[test]（函数体一字不动）⇒ 应红在推导器 ⑤（正证：定义还在≠测还在，161 项会掉成 160；M44 的姊妹条，§十四 之外再量一次那把尺本身）"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split('\n')
+i=[k for k,l in enumerate(ls) if l.strip().startswith('fn section4_sacrifice_rules_reproduce_on_the_engine(')]
+assert len(i)==1, i
+assert ls[i[0]-1].strip()=='#[test]', repr(ls[i[0]-1])
+ls[i[0]-1]='// 变异试验：把 #[test] 摘掉'
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
 run
