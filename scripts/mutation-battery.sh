@@ -21,7 +21,10 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 99 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 111 条记录的补丁有没有真打上；
+# 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
+# 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
+# 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
 # 它就是把本文件的 run() 换成空壳、py() 原样保留来跑，所以电池改了判据行形状时要同步那条尺）。
 # 本帧 M46 与 M57 各在这上面省了一次 15 分钟的白跑。
 set -u
@@ -698,7 +701,7 @@ assert ls[82]=='第二次 50%', ls[82]
 ls[82]='第二次 40%'
 open(p,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
-echo "### M82 把献祭那一支从裸费用改成乘**当前**档位（摘掉 md:75「全额，不递减」的机器形式；档位推进仍留着不碰）⇒ 实测 3 红：复现测④ 第一段（battle.rs:3728，档位已掉到 10% 的那张牌献祭仍该拿全额 5，引擎给 0）＋两条**既有**献祭行为测（battle.rs:3097／4036）。本章的牙不是新长的，是把既有盲区接上账（§四 入列后实测 **4 红**：多出来那条是 §四 复现测 @battle.rs:4320——两章共读 `on_death` 里同一支「全额」match 臂，所以这一改现在两侧都喊；行号是当时的快照，按测名读）"
+echo "### M82 把献祭那一支从裸费用改成乘**当前**档位（摘掉 md:75「全额，不递减」的机器形式；档位推进仍留着不碰）⇒ 实测 3 红：复现测④ 第一段（battle.rs:3728，档位已掉到 10% 的那张牌献祭仍该拿全额 5，引擎给 0）＋两条**既有**献祭行为测（battle.rs:3097／4036）。本章的牙不是新长的，是把既有盲区接上账（§四 入列后实测 **4 红**：多出来那条是 §四 复现测 @battle.rs:4320——两章共读「on_death」里同一支「全额」match 臂，所以这一改现在两侧都喊；行号是当时的快照，按测名读）"
 # 这条特意不写成 `c.def.cost * pct / 100`——那个式子是 ③ 那份「恰有 2 处」的 needle（另一处是终影吞名，出处速查:985），
 # 写成它会把「互斥被摘」报成「有人硬编了同一个式子」，读数就分不清是哪一句话坏了。
 restore; py "
@@ -834,4 +837,105 @@ assert len(i)==1, i
 assert ls[i[0]-1].strip()=='#[test]', repr(ls[i[0]-1])
 ls[i[0]-1]='// 变异试验：把 #[test] 摘掉'
 open(p,'w',encoding='utf8').write('\n'.join(ls))"
+run
+
+# ===== §十三 攻击与伤害结算（第十三步·其七）：双记账那层／那两个 20 的两条不同出口／分类 panic 与半区编号的牙／封闭业火写点名单／攻击路径零后排／独立普查的价钱 =====
+echo "### M99 抹掉 battle.rs 那处发焰行尾注释里的 §十三:546 那一段（同一行还挂着 §十二:445／§十六:677／§十三:564，只抠这一段）⇒ 实测 **1 红**、与预测一致：只红在 §十三 推导器 ② 那句「md:546 没有锚点指回」（model.rs:4482），配比 锚点0／挂债0／实测27 照旧绿——摘锚它看不见（M47／M72／M80／M90 的姊妹条，换个章各量一遍）"
+restore; py "
+import re,glob
+hits=0
+for p in glob.glob('$D/src/*.rs'):
+    s=open(p,encoding='utf8').read()
+    s2,n=re.subn(r'；§十三:546[^；\n]*','',s)
+    hits+=n
+    if n: open(p,'w',encoding='utf8').write(s2)
+assert hits==1, hits"
+run
+echo "### M100 文档副本只改 md:570（我方持业者 HP 20→18，md:572 不动）⇒ 实测 **2 红**、与预测一致：复现测① 那句「两侧那两个 20 不相等（18／20）」@battle.rs:5149 ＋ 推导器 ③ 那句 (20,20)@model.rs:4505；①′ 那份普查仍绿（数字个数没变、只有值变了），码面 CANDLE_HP 常量声明那条 grep 也仍 1 处——两条各守一头：文档自洽 vs 码面字面（M81／M91 同形）"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split(chr(10))
+assert ls[569]=='我方持业者 HP：20（蜡烛长度，独立）', ls[569]
+ls[569]='我方持业者 HP：18（蜡烛长度，独立）'
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M101 文档副本把 md:570 与 md:572 那两个 20 一起改成 18（M100 那条「文档自己就不对称」的出口被封掉）⇒ 实测 **2 红**：复现测② 那句「文档写 18、引擎开局给了 20」@battle.rs:5178（M100 那条对称断言这回报平了，红的是撞引擎那一句）＋推导器 ③ 同一句@model.rs:4505。M74 的姊妹条：正证 ③ 那一层不是文档自洽的重复"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split(chr(10))
+assert ls[569]=='我方持业者 HP：20（蜡烛长度，独立）' and ls[571]=='敌方持业者 HP：20（蜡烛长度，独立）', (ls[569], ls[571])
+ls[569]=ls[569].replace('HP：20','HP：18'); ls[571]=ls[571].replace('HP：20','HP：18')
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M102 文档副本把 md:564 换成一句不含任何已登记键的话（原地换字、行号不漂移、不带数字也不以「：」收尾）⇒ 实测 **2 红**（复现测＋推导器各撞一次），落点是解析器自己那句 panic@battle.rs:3564「它既不是那六道围栏里登记过的任何一条，也不是一句抬头」，红字里点名 md:564：围栏里加第五种写法时，实测路必须当场喊「这行我没读法」，不能安静走过去（M75 的姊妹条）。推导器 ①′ 那条 census(564) 与 ② 那份 27 行名单都排在 parse 之后、够不到，照登"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split(chr(10))
+assert ls[563]=='- 业火只由攻击造成的伤害触发', ls[563]
+ls[563]='- 业火只在结算之后才给'
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M103 文档副本把 md:556 那一步的行首编号 6 改成 5（措辞一字不动）⇒ 实测 **2 红**，同一句 s13_bad@battle.rs:3564 报出「它是『Foe』半区的第 6 步到达的，行首编号却写着 5」——本章独有那道「半区＋编号」对齐的牙。推导器 ①′ 那份编号普查（model.rs:4422）排在 parse 之后、够不到，照登不圆场"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split(chr(10))
+assert ls[555].startswith('6. '), ls[555]
+ls[555]='5.'+ls[555][2:]
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M104 生产码面新写一条文档里根本没有的业火增补（dead_code 方法，行为不变）⇒ 实测 **1 红**、与预测一致：只红在 §十三 ④ 那份封闭业火写点名单 14→15（model.rs:4624，多出来的正是那句探针），复现测一路绿（行为一字没动）。M41／M76／M85／M95 的姊妹条，换个章各量一遍"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+n='impl Battle {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n, n+chr(10)+'    #[allow(dead_code)]'+chr(10)+'    fn s13_probe_flame(t: &mut CardInst) { t.flame += 1; }'))"
+run
+echo "### M105 给 pick_target 体内塞一句只读后排长度、不改任何分支的话（行为一字不变）⇒ 实测 **1 红**、与预测一致：只红在 ④ 那句「攻击路径三段体内一个后排量都不出现」（model.rs:4633），复现测仍绿——这条正证 ④ 那半边否定式与复现测③ 是两条独立的路：那里看行为、这里看形状，行为一字不变的纯形状改动只有这一层看得见"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split(chr(10))
+k=[m for m,l in enumerate(ls) if l.startswith('    pub(crate) fn pick_target(')]
+assert len(k)==1, k
+ls.insert(k[0]+1, '        let _ = self.e_back.len();')
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+run
+echo "### M106 把自损那一支接进业火链（在那个裸字面量 1 之后补一笔业火，真行为回归：md:563「自损不触发业火」被摘）⇒ 实测 **2 红**：复现测⑨ 那句「md:563 写自损不触发业火，实测它身上积了 1 点业火」@battle.rs:5353 ＋ 推导器 ④ 那份名单 14→15（多出来的正是这一笔）。与 M104 的差别：那条只碰形状、只有 ④ 喊；这条行为也变了，两把尺各撞一遍。另有一条读数要登：163 项里**没有第三条**测兜「自损不发焰」——这条否定式此前只由 §十三 那一章的两把尺守着"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split(chr(10))
+k=[m for m,l in enumerate(ls) if l.lstrip().startswith('atk.hp -= 1;')]
+assert len(k)==1, k
+lead=ls[k[0]][:len(ls[k[0]])-len(ls[k[0]].lstrip())]
+ls.insert(k[0]+1, lead+'atk.flame += 1;')
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+run
+echo "### M107 摘掉 s13_dot「敌方那两条区间该有四个数」那道守卫、文档不动 ⇒ 实测 **0 红、163 项全绿**（M68／M78／M89／M96 的姊妹条）：守卫单独降级，四把尺都看不见，它的牙只在文档那一格多写第五个数时才出（M108 就是那一条）。这一半不测就只是推断，所以单独立一条"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        if nums.len() != 4 {'+chr(10)+'            s13_bad(&tag, &'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        if false {'+chr(10)+'            s13_bad(&tag, &'))"
+run
+echo "### M108 M107 那层守卫降级 ＋ 文档 md:517 那条圆点追加第五个数（「（后排4格）」紧贴原句、不引空格⇒标签判据那条「单 token」不受影响，hot／cold 仍取前四个数）⇒ 实测 **1 红**、与预测一致：只剩 §十三 推导器 ①′ 那份**独立**普查在喊（model.rs:4412，md:517 该 4 个、实测 5），复现测一路绿（hot／cold 仍取前四个数，第五个没人读）。M79／M88／M97 那对成对姊妹条的 §十三 版本，两处各数一遍不是重复，一处降级另一处仍红"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='        if nums.len() != 4 {'+chr(10)+'            s13_bad(&tag, &'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        if false {'+chr(10)+'            s13_bad(&tag, &'))
+q='$D/doc.md'; ls=open(q,encoding='utf8').read().split(chr(10))
+assert ls[516]=='· 敌方：E5-E8可攻击，E1-E4不可攻击', ls[516]
+ls[516]=ls[516]+'（后排4格）'
+open(q,'w',encoding='utf8').write(chr(10).join(ls))"
+DOC="$D/doc.md" run
+echo "### M109 只摘掉 §十三 复现测上方的 #[test]（函数体一字不动）⇒ 实测 **1 红**：163 项掉成 162，红在推导器 ⑤ 那句「定义上方的第一条非注释行是『}』而不是 #[test]」（engine_repro_test_exists @model.rs:1608）——正证：定义还在≠测还在。M44／M98 的姊妹条，换个章再量一次那把尺本身"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split(chr(10))
+i=[k for k,l in enumerate(ls) if l.strip().startswith('fn section13_attack_rules_reproduce_on_the_engine(')]
+assert len(i)==1, i
+assert ls[i[0]-1].strip()=='#[test]', repr(ls[i[0]-1])
+ls[i[0]-1]='// 变异试验：把 #[test] 摘掉'
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
+run
+echo "### M110 摘掉 s13_is_label 里那道「不带数字」（M87／M71 的姊妹条，换成本章那份判据）⇒ 实测 **2 红**、与预测同数：复现测红在 battle.rs:5111 那句 assert_ne（md:562 被吞成 Label ⇒ 那个 1 从实测里消失）——**没走到折叠**，那条断言排在 s13_fold 之前；推导器红在 model.rs:4365 ① 那份围栏必检行集（第五道围栏 3 行变 2 行），也**不是**它自己排在后面的那句 assert_ne（4373）。两条合起来把「红字数测不数层」在本章又量正一遍：同一条测里对同一个事实立了两道守卫时，先炸那道就是这次读数的全部，别写成三红"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split(chr(10))
+q=chr(39)
+k=[m for m,l in enumerate(ls) if l.strip()==('t.ends_with('+q+'：'+q+') && s15_digits(t).is_empty()')]
+assert len(k)==1, k
+ls[k[0]]='    t.ends_with('+q+'：'+q+')'
+open(p,'w',encoding='utf8').write(chr(10).join(ls))"
 run
