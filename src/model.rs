@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十八张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十九张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -210,7 +210,7 @@
 //!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
 //!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
 //!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
-//!       §一/§二/§十/§十九/§廿 那五章的散文行——那里"整条规则没落地"仍查不出；
+//!       §一/§二/§十/§廿 那四章的散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       以及本帧的 §十四 持业者·蜡烛（**第一条同章并用两条路、且九行双记账的章**：12 行＝围栏外表体 3
 //!       （走锚点）＋围栏内 9（走"文档数字驱动引擎复现"，**同时**一行都不许缺锚点）。配比钉死 锚点3／挂债0／实测9，
@@ -323,6 +323,20 @@
 //!       盲区照登：无实测路 ⇒ skill 臂 `c.skills.push(pool[upgrades % len])` 钉的是**字面在不在**，选哪支技能、叠加是否正确都不由本章
 //!       兑现（与待办「字面串可绕」同族，本帧接受并登记）；403 的「+1」若被写成 `+= 2` 会红在字面，但「一次调用只加一次」这条幂等性
 //!       本章不钉（章强化的幂等由 §三／裁定 ③ 那半另行看守）。
+//!     - 以及本帧（第十三步·其九）的 §十九 数值平衡（**本仓第一张混合章**：一章里同时开两条认领路，按文档段自己的形状分。
+//!       `特性价值量化`（md:832 列头＋835-842 八行）这八个数**真的被 `TraitKind::ai_value()` 消费**（给 AI 在场价值评分用），
+//!       走**锚点＋逐字段撞码面**；`费用公式`（md:829）／`阈值公式`（md:847-849）／`数值参考`（md:855-860）全仓**无一行代码按它们
+//!       算费、算阈或校验区间**（卡值一律 §十八 硬编码），走**挂债**。配比钉 **锚点8／挂债10／实测0**（coverage-probe 那格显示
+//!       生产锚点=9，多出的第 9 枚是 md:832 列头本身被 `ai_value` 的文档注释指回，与八臂不是一回事——835-842 才是「量化表八行」）。
+//!       六层各钉一件事（① 形状：本章**不叫 `table_body` 读**，叫它读会把 829 那条公式塞进表体、又在 833 空行处停住；② 逐行认领：
+//!       八臂须有锚、十式须有债，且都不许两头下注；③ 逐字段撞码面：八个数逐个撞回 `ai_value()` 臂尾**注释里写的锚＋数**——注释在这里
+//!       第二次被当数据读；④ 配比钉 8／10；⑤ 文档数字驱动引擎·公式 vs 实卡：拿**真实 `faction_cards`**（39 张）撞文档抄下来的系数与
+//!       区间，钉死符合数 **阈值 11/36／数值参考 30/39／费用 5/39**——这几条不新写任何引擎规则，只量「实际卡值离设计式有多远」，
+//!       正是十条债证据里那几个数字的真身）。**双记账不适用**：§九／§十四 那条「实测＝引擎真复现」的前提在本章不成立（公式既没实现
+//!       也没复现，只有债这一条腿），所以「债行不许有锚」就是它的另一半记账。电池配 M117–M122 六颗牙：M117 改臂值（③ 漂移，**1 红**、
+//!       纯文档-码面对撞、不借运行时）；M118 抹臂尾锚（②，**1 红**）；M119 给债行贴生产锚（§十九② ＋ 债表机检，**2 红**＝同一处被两把尺各喊）；
+//!       M120 删债条目（债表条数 ＋ §十九②，**2 红**）；M121 给 catch-all `_ => 1.0` 贴锚（③ 臂数≠8，**1 红**）；M122 改一张卡阈值
+//!       （§十九⑤ 符合数 ＋ §十八 逐字段，**2 红**＝同表两章各撞）。本帧 §十九 只动注释与测试面，release 二进制 10 场景逐字节双臂 SAME。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -520,17 +534,19 @@ impl TraitKind {
         }
     }
 
-    /// 评分用特性价值（§十九:832 量化表，逐条数值见 835-842）。
+    /// 评分用特性价值（§十九:832 量化表，逐条数值见下面八枚臂尾锚 835-842；债表另记 829/847-849/855-860 三条**公式**——文档给的是卡表**设计时**的推导式，运行时没有任何一处按它算费/算阈/查参考区间，见 §十九 推导器层⑤ 实测违反计数）。
     pub fn ai_value(self) -> f64 {
         match self {
-            TraitKind::None | TraitKind::Starter => 0.0,
-            TraitKind::AttackAdjacent => 0.5,
-            TraitKind::EnemyColAttackMinus1 => 1.0,
-            TraitKind::AllyColDamageTakenMinus1 => 1.5,
-            TraitKind::ThresholdSameColFlame2 | TraitKind::ThresholdAllyColFlame2 => 1.0,
-            TraitKind::DeathRattleSameColFlame3 => 1.5,
-            TraitKind::BattleCrySameColFlame2 => 0.5,
-            TraitKind::SelfDmgOnAttack => -0.5,
+            TraitKind::None | TraitKind::Starter => 0.0, // §十九:835 无特性 0
+            TraitKind::AttackAdjacent => 0.5, // §十九:836 可攻击相邻列 0.5
+            TraitKind::EnemyColAttackMinus1 => 1.0, // §十九:837 同列敌方攻击-1 1
+            TraitKind::AllyColDamageTakenMinus1 => 1.5, // §十九:838 同列友方受伤-1 1.5
+            TraitKind::ThresholdSameColFlame2 | TraitKind::ThresholdAllyColFlame2 => 1.0, // §十九:839 阈值技（+2累积） 1
+            TraitKind::DeathRattleSameColFlame3 => 1.5, // §十九:840 亡语（+3累积） 1.5
+            TraitKind::BattleCrySameColFlame2 => 0.5, // §十九:841 战吼（+2累积） 0.5
+            TraitKind::SelfDmgOnAttack => -0.5, // §十九:842 攻击后自损 -0.5
+            // 文档只量化上列八档；余下四档（阈值:邻列+3焰／攻后自身+1焰／阈值:整列3伤／阈值:本回合友+2焰）§十九 未给数，
+            // 这里赋默认 1.0 是**自造**、不是文档兑现——所以它不进 835-842 那八枚臂锚，只由 §十九 推导器层①「量化表恰八行」反证文档没列它们。
             _ => 1.0,
         }
     }
@@ -746,7 +762,7 @@ pub(crate) fn doc_or_skip() -> Option<Vec<String>> {
 /// 语义是否被曲解无法机检——那仍靠人向设计逐条核对。
 #[cfg(test)]
 mod anchor_tests {
-    use super::{Faction, Skill, doc_or_skip, faction_cards};
+    use super::{Faction, Skill, TraitKind, doc_or_skip, faction_cards};
 
     const NUM: &[char] = &['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '廿'];
 
@@ -1129,7 +1145,7 @@ mod anchor_tests {
     /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）；
     /// §十四 由 `every_row_of_section14_…` 覆盖（也是按形态推，但它开了**双记账**：围栏里那 9 行既走
     /// 文档数字驱动引擎的实测，也一行都不许缺锚点，见该测试注释）。
-    /// **其余各章**（§一/§二/§十/§十九/§廿）那五章仍未反向纳入。
+    /// **其余各章**（§一/§二/§十/§廿）那四章仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -1417,6 +1433,138 @@ mod anchor_tests {
         // 六行"技能≠效果"是文档自己的两种写法；把这份读数钉住，改措辞／增删行都会先在这里响。
         assert_eq!(reworded, vec![291, 292, 293, 294, 299, 300], "§八 里「技能」列与「效果」列不同字面的行变了：实测 {reworded:?}");
         assert!(bad.is_empty(), "{} 处 §八 技能表与代码不符：\n{}", bad.len(), bad.join("\n"));
+    }
+
+    /// §十九 数值平衡反向覆盖——**本仓第一张混合章**：既不是 §十一 那种「锚点N／挂债0／实测0」的纯锚表，也不是 §六／§九 那种整章走实测，
+    /// 而是**一章里同时开两条认领路**，按文档段自己的形状分：
+    /// - `特性价值量化`（md:832 列头＋835-842 八行）——这八个数**真的被实现消费**（`TraitKind::ai_value()` 给 AI 评分用），走**锚点＋逐字段撞码面**；
+    /// - `费用公式`（md:829）／`阈值公式`（md:847-849）／`数值参考`（md:855-860）——全仓**无一行代码按它们算费、算阈或校验区间**（grep `cost=`／`threshold=` 在 src/ 无一推导，卡值一律 §十八 硬编码），走**挂债**。
+    ///
+    /// 配比钉死 **锚点 8／挂债 10／实测 0**（实测 0 是因为公式压根没驱动任何引擎函数——若哪天卡表改成按公式生成，这几行才从债翻成实测，届时债表与本测一起改）。
+    ///
+    /// **双记账不适用**：§九／§十四 那条「围栏规则行既走实测又全有锚」的前提是"实测=引擎真复现"；本章的公式既没实现也没复现，只有债这一条腿，所以"债行不许有锚"就是它的另一半记账。
+    ///
+    /// 六层各钉一件事：
+    /// ① 形状：`table_body` 在 §十九 里只能读出量化表那一段（`费用公式` 标题与 ``` 围栏不符它的连续行判据），所以本章的形状**不叫 `table_body` 读**——叫它读，它会把 md:829 那条费用公式塞进"表体行"、又在 833 那行空行处停住，得出一份看着合理其实认错了段的清单。本章自己数四段标题＋八臂＋三围栏，把"哪几行是表体、哪几行在围栏里"钉死。
+    /// ② 逐行认领：八臂行必须**有锚**、十条公式行必须**有债**，且都不许两头下注。
+    /// ③ 逐字段撞码面：把 md:835-842 那八个数，逐个撞回 `ai_value()` 臂尾**注释里写的锚＋注释里写的数**（注释是文档措辞的落点，与 §八 用枚举行内注释同一手法）。
+    /// ④ 分配比：钉 锚点8／挂债10／实测0；挪一条就红。
+    /// ⑤ 文档数字驱动引擎·实测公式 vs 实卡：费用/阈值公式与数值参考既然是设计式，就用**引擎真实的 `faction_cards`**（§十八 的落地）去撞**文档抄下来的系数与区间**，钉死符合／违反计数（阈值 11/36、数值参考 30/39、费用 5/39 符合）——**这几条不新写任何引擎规则**，只证明"实际卡值长这样、离设计式有多远"，正是债证据里那几个数字的真身。
+    #[test]
+    fn every_row_of_section19_balance_is_anchored_by_trait_or_debited_by_formula_and_formulas_measured_on_real_cards() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+
+        // ① 形状。§十九 从标题到 `---`，四段子块各有明确行号段（用文档现量行号钉，结构漂了就红）。
+        let head = lines.iter().position(|l| l.trim() == "十九、数值平衡").expect("§十九 标题必须存在");
+        let mut end = head + 1;
+        while end < lines.len() && lines[end].trim() != "---" {
+            end += 1;
+        }
+        assert!(end < lines.len(), "§十九 没有以 `---` 收尾，后面的章会被误扫进来");
+        let fences = lines[head..end].iter().filter(|l| l.trim() == "```").count();
+        assert_eq!(fences, 6, "§十九 应有三道围栏＝6 个 ``` 符（费用公式／阈值公式／数值参考各一道），实测 {fences} ⇒ 加了或拆了一道，本章数的正是这三道");
+
+        // 八臂＝量化表；十条＝三公式/参考。逐行按现量核字面，结构一改本测先响。
+        let arms: [usize; 8] = [835, 836, 837, 838, 839, 840, 841, 842];
+        let formulas: [usize; 10] = [829, 847, 848, 849, 855, 856, 857, 858, 859, 860];
+        for &n in arms.iter().chain(formulas.iter()) {
+            assert!(!at(n).trim().is_empty(), "md:{n} 现在是空行 ⇒ §十九 的行号段漂了，本章硬钉的行号要先重新数");
+        }
+
+        // ② 逐行认领＋分配比。八臂走锚、十条公式走债，各不两头下注。
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        let (mut anchored, mut on_debt) = (0usize, 0usize);
+        for &n in &arms {
+            assert!(referenced.contains(&(n as u32)), "md:{n}「{}」是 §十九 量化表的一臂、数值真被 `ai_value()` 消费，现在没有锚点指回 ⇒ 实现被删或锚被摘", at(n));
+            assert!(!debited.contains(&n), "md:{n} 既走锚（量化表）又挂债＝两头下注");
+            anchored += 1;
+        }
+        for &n in &formulas {
+            assert!(debited.contains(&n), "md:{n}「{}」是 §十九 的公式/参考行、无任何代码消费，必须躺在债表里；把它摘进实现＝替文档把设计式做平", at(n));
+            assert!(!referenced.contains(&(n as u32)), "md:{n}「{}」是债（未实现的设计式），却有生产锚指回＝债已偿，请删债条目", at(n));
+            on_debt += 1;
+        }
+        // ④ 配比钉死。
+        assert_eq!((anchored, on_debt), (8, 10), "§十九 配比应为 锚点8／挂债10（实测0），实测 ({anchored},{on_debt}) ⇒ 有一行从一条路挪到另一条");
+
+        // ③ 逐字段撞码面。读 `ai_value` 函数体（**保留行尾注释**，`s7_fn_body` 会把注释剔掉、这里要的正是注释）。
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let model_src = std::fs::read_to_string(manifest.join("src/model.rs")).unwrap();
+        let msls: Vec<&str> = model_src.lines().map(str::trim).collect();
+        let ah = msls.iter().position(|l| l.starts_with("pub fn ai_value(")).expect("§十九 ③ 要读 `pub fn ai_value(` 的签名行；改名或挪出 ⇒ 同步这里");
+        // 臂尾形状：`... => 0.0, // §十九:835 无特性 0` ⇒ (锚号, 注释里写的那个数)。
+        let mut arm_by_anchor: std::collections::BTreeMap<usize, (f64, String)> = std::collections::BTreeMap::new();
+        for l in &msls[ah + 1..] {
+            if *l == "}" {
+                break;
+            }
+            let Some((code, comment)) = l.split_once("//") else { continue };
+            let Some(pos) = comment.find("§十九:") else { continue };
+            let digits: String = comment[pos + "§十九:".len()..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            let Ok(md) = digits.parse::<usize>() else { continue };
+            let val = code.split("=>").nth(1).and_then(|v| v.trim().trim_end_matches(',').parse::<f64>().ok()).unwrap_or_else(|| panic!("§十九 ③ 臂 `{l}` 读不出 `=> <f64>` 的值"));
+            arm_by_anchor.insert(md, (val, comment.trim().to_string()));
+        }
+        assert_eq!(arm_by_anchor.len(), 8, "§十九 ③：`ai_value()` 里带 `§十九:` 尾锚的臂应恰 8 条（对应量化表八行），实测 {} ⇒ 有人给 catch-all `_ => 1.0` 也贴了 §十九 锚（文档没量化它，不该有锚）", arm_by_anchor.len());
+        for &n in &arms {
+            let doc_val: f64 = at(n).split_whitespace().last().and_then(|s| s.parse().ok()).unwrap_or_else(|| panic!("§十九 ③：md:{n}「{}」末尾读不出价值数字", at(n)));
+            let (code_val, comment) = arm_by_anchor.get(&n).unwrap_or_else(|| panic!("§十九 ③：md:{n}「{}」在 `ai_value()` 没有对应臂尾锚", at(n)));
+            assert!(
+                (code_val - doc_val).abs() < 1e-9,
+                "§十九 ③：md:{n} 文档写 {doc_val}，`ai_value()` 臂尾锚那行写 {code_val} ⇒ 量化表与实现漂移"
+            );
+            let name: String = at(n).split_whitespace().rev().skip(1).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" ");
+            assert!(comment.contains(&name), "§十九 ③：臂尾注释 {comment:?} 不含 md:{n} 的特性名「{name}」⇒ 锚贴到了别的特性上，逐字段对不上");
+        }
+
+        // ⑤ 文档数字驱动引擎·公式 vs 实卡。三公式从文档抄系数，实卡取 `faction_cards`（§十八 的落地）真值。
+        let all_cards: Vec<(i32, i32, i32, TraitKind)> = [Faction::Ember, Faction::Frost, Faction::Shadow]
+            .iter()
+            .flat_map(|f| faction_cards(*f))
+            .map(|c| (c.cost, c.power, c.threshold, c.tr))
+            .collect();
+        assert_eq!(all_cards.len(), 39, "§十九 ⑤：三阵营卡表应共 39 张（含三份开端）⇒ faction_cards 加了/删了卡，本章钉的符合计数全体失效");
+
+        // 阈值公式：从 md:847/848/849 抄「费用区间 + ×系数」，非 0 费逐张撞。
+        let mult = |n: usize| -> f64 {
+            at(n).split('×').nth(1).and_then(|s| s.trim().parse().ok()).expect("阈值公式行读不出 × 后的系数")
+        };
+        let thr_expected = |cost: i32, power: i32| -> Option<i32> {
+            match cost {
+                0 => None,
+                1..=2 => Some((power as f64 * mult(847)).round() as i32),
+                3..=4 => Some((power as f64 * mult(848)).round() as i32),
+                _ => Some((power as f64 * mult(849)).round() as i32),
+            }
+        };
+        let thr_fit = all_cards.iter().filter(|(c, p, t, _)| thr_expected(*c, *p).is_some_and(|e| e == *t)).count();
+        let thr_total = all_cards.iter().filter(|(c, ..)| *c != 0).count();
+        assert_eq!((thr_fit, thr_total), (11, 36), "§十九 ⑤：阈值公式符合数应恰 (11, 总数36)，实测 ({thr_fit},{thr_total}) ⇒ 卡值改了、或文档 847-849 的系数改了；这条债的「离设计式有多远」读数得重新量");
+
+        // 数值参考：从 md:855-860 抄「N费 → 区间」。区间上界若文档没给（如 0费→1）按下界算。
+        let ref_range = |n: usize| -> (i32, (i32, i32)) {
+            let t = at(n);
+            let cost: i32 = t.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap();
+            let right = t.split('→').nth(1).unwrap_or(t);
+            let nums: Vec<i32> = right.split(|c: char| !c.is_ascii_digit() && c != '-').filter(|s| s.chars().any(|c| c.is_ascii_digit())).map(|s| s.parse().unwrap()).collect();
+            match nums.as_slice() {
+                [lo] => (cost, (*lo, *lo)),
+                [lo, hi] => (cost, (*lo, *hi)),
+                _ => panic!("数值参考 md:{n}「{t}」读不出 1~2 个界"),
+            }
+        };
+        let ref_map: std::collections::BTreeMap<i32, (i32, i32)> = (855..=860).map(ref_range).collect();
+        let ref_fit = all_cards.iter().filter(|(c, p, ..)| ref_map.get(c).is_some_and(|(lo, hi)| *p >= *lo && *p <= *hi)).count();
+        assert_eq!((ref_fit, all_cards.len()), (30, 39), "§十九 ⑤：数值参考符合数应恰 (30, 总39)，实测 ({ref_fit},{}) ⇒ 见上——9 张低于区间下限是本章登记的现状", all_cards.len());
+
+        // 费用公式：round(数值/2 + 阈值/4 + 特性价值 + 技能价值)，**技能价值文档未给数** ⇒ 取 0 基线（债证据里那句「公式缺一半输入」的真身）。
+        let fei_fit = all_cards.iter().filter(|(c, p, t, tr)| {
+            let est = (*p as f64 / 2.0 + *t as f64 / 4.0 + tr.ai_value() + 0.0).round() as i32;
+            est == *c
+        }).count();
+        assert_eq!((fei_fit, all_cards.len()), (5, 39), "§十九 ⑤：费用公式（技能价值取0基线）符合数应恰 (5, 总39)，实测 ({fei_fit},39) ⇒ 现状 34 张不符是本章挂债 md:829 的依据，改了要重判该偿还是继续挂");
     }
 
     /// §八「技能」／「效果」两列的语义槽位——本检查唯一的人工词表。
@@ -4780,8 +4928,8 @@ mod anchor_tests {
 
     /// 未实现债表（`reverse-coverage-multi-chapter` 的 D3）。逐条按"文档行 + 原文 + 证据 + 去处"录，
     /// 读数：呈现层 17 行（§十五 665/666 ＋ §十六 697/698/702/705/706/707/708/709/715/716/717/718/721
-    /// ＋ §十二 479 ＋ §廿三 980；704 是列头「状态 表现」，属非规则行不入债表）、规则层 5 行（§二 47/48 ＋
-    /// §九 335 ＋ §十二 416/456）、豁免改登记 1 行（§一 17）、模式层 3 行（§廿一 915/922/923）＝**26 条**。
+    /// ＋ §十二 479 ＋ §廿三 980；704 是列头「状态 表现」，属非规则行不入债表）、规则层 15 行（§二 47/48 ＋
+    /// §九 335 ＋ §十二 416/456 ＋ §十九 829/847/848/849/855/856/857/858/859/860 那十条卡表设计式）、豁免改登记 1 行（§一 17）、模式层 3 行（§廿一 915/922/923）＝**36 条**。
     /// 提案原文写"18 行／呈现层 15 行"，与它自己逐行列举的 14 差一，本表以文档实测为准。§十二 那三条、
     /// §廿三 980、以及本帧 §廿一 那三条都不是手挑：由各自章的推导器从文档结构里列出"无人认领"的行，
     /// 再逐行判定挂锚还是挂债。模式层这一档是 §廿一 逼出来的——"整块模式没做"塞进前两档都是改写缺口性质。
@@ -4962,6 +5110,89 @@ mod anchor_tests {
             evidence: "「碎片」0 命中——裂纹既不存在，也就没有消散",
             dest: "壳的粒子层（与 md:717 同一套设施）",
         },
+        // —— §十九 数值平衡：三条「卡表设计式」全挂债，不假装修平衡（同 §九 md:335「文档说反、引擎照做」的先例：矛盾的设计式只能挂债写去处，摘进实现＝替文档把反账做平）——
+        // 费用/阈值/数值参考全是**卡表定值时**的推导依据；运行时没有任何一处按它们算费、算阈或校验区间（`grep cost=|threshold=` 在 src/ 无一处推导，卡值一律 §十八 硬编码）。
+        // 违反计数由 §十九 推导器层⑤ 用真实 `faction_cards` 撞文档公式当场算出并钉死，改一个卡值就红——债条 evidence 里的数字不是抄来的，是那一层实测的转录。
+        Debt {
+            doc: 829,
+            section: 19,
+            row: "费用 = round(数值/2 + 阈值/4 + 特性价值 + 技能价值)",
+            tier: Tier::Rule,
+            evidence: "费用没有任何一处由公式推导——`CardDef.cost` 全部 §十八 硬编码；且「技能价值」这一项文档从未给数（技能是随机附加，§八 技能池无价），公式当场就缺一半输入。§十九 推导器层⑤ 用真实 faction_cards 实测：技能价值取 0 基线时 39 张卡仅符合 5 / 违反 34",
+            dest: "若将来把 §十八 卡表改成「按公式生成费用」的生成器，接在 model.rs::faction_cards 的构造处（需文档先补「技能价值」表）；现状由 §十九 推导器层⑤ 钉死符合 5/违反 34，防它被静默改平",
+        },
+        Debt {
+            doc: 847,
+            section: 19,
+            row: "低费卡（1-2费）：阈值 = 数值 × 2",
+            tier: Tier::Rule,
+            evidence: "阈值无任何运行时校验；§十九 推导器层⑤ 实测：1-2 费的卡里多张阈值 ≠ 数值×2（如火星 2费数值3 阈值3、山火…等），全 36 张非0费合阈值公式者仅 11、违反 25",
+            dest: "同上：卡表合规校验器（若引入）接 model.rs::faction_cards；现状由层⑤ 逐费段实测钉死",
+        },
+        Debt {
+            doc: 848,
+            section: 19,
+            row: "中费卡（3-4费）：阈值 = 数值 × 1.5",
+            tier: Tier::Rule,
+            evidence: "同 847——3-4 费段阈值同样不受校验；炉壁 3费数值3 阈值8（≠round(3×1.5)=5）即一段实例。§十九 推导器层⑤ 逐费段实测并钉死违反计数",
+            dest: "同 847：卡表合规校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
+        Debt {
+            doc: 849,
+            section: 19,
+            row: "高费卡（5费+）：阈值 = 数值 × 1.2",
+            tier: Tier::Rule,
+            evidence: "同 847——5 费段亦然；山火/深壑 5费数值6 阈值10（≠round(6×1.2)=7）即实例。§十九 推导器层⑤ 逐费段实测并钉死违反计数",
+            dest: "同 847：卡表合规校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
+        Debt {
+            doc: 855,
+            section: 19,
+            row: "0费 → 1（开端）",
+            tier: Tier::Rule,
+            evidence: "「数值参考」是设计时的 cost→power 区间表，运行时无一处按它校验卡值。0费开端数值1 恰落在 [1,1]——这一条实际满足，但满足≠被校验：没有闸挡得住有人把开端改成 0费数值3。§十九 推导器层⑤ 逐档实测符合/违反并钉死（39 张合计符合 30/违反 9）",
+            dest: "卡表数值区间校验器（若引入）接 model.rs::faction_cards；现状由层⑤ 钉死，六档各挂一条以防单档被悄悄改数",
+        },
+        Debt {
+            doc: 856,
+            section: 19,
+            row: "1费 → 2",
+            tier: Tier::Rule,
+            evidence: "同 855——1费区间 [2,2]，火苗/初霜/影仆 均数值2，实际满足但无校验闸。§十九 推导器层⑤ 逐档实测钉死",
+            dest: "同 855：卡表数值区间校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
+        Debt {
+            doc: 857,
+            section: 19,
+            row: "2费 → 2~3",
+            tier: Tier::Rule,
+            evidence: "同 855——2费区间 [2,3]，但续炭/暖誓/余光 数值1 落在区间外（违反）。§十九 推导器层⑤ 逐档实测钉死，这条尤其证明「文档给的是设计目标、不是已实现的不变式」",
+            dest: "同 855：卡表数值区间校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
+        Debt {
+            doc: 858,
+            section: 19,
+            row: "3费 → 3~5",
+            tier: Tier::Rule,
+            evidence: "同 855——3费区间 [3,5]，守夜人/冻时/止时 数值2 落在区间外（违反）。§十九 推导器层⑤ 逐档实测钉死",
+            dest: "同 855：卡表数值区间校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
+        Debt {
+            doc: 859,
+            section: 19,
+            row: "4费 → 4~5",
+            tier: Tier::Rule,
+            evidence: "同 855——4费区间 [4,5]，回燃/幽雷/引渡 数值3 落在区间外（违反）。§十九 推导器层⑤ 逐档实测钉死",
+            dest: "同 855：卡表数值区间校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
+        Debt {
+            doc: 860,
+            section: 19,
+            row: "5费 → 6~8",
+            tier: Tier::Rule,
+            evidence: "同 855——5费区间 [6,8]，山火/深壑数值6、冰川数值8 均落在区间内（这一档实际全满足，但同样无校验闸）。§十九 推导器层⑤ 逐档实测钉死",
+            dest: "同 855：卡表数值区间校验器接 model.rs::faction_cards；现状由层⑤ 钉死",
+        },
         Debt {
             doc: 915,
             section: 21,
@@ -5005,9 +5236,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一 十八张表／章现在各自带推导器
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一／§十九 十九张表／章现在各自带推导器
     /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十八章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§十/§十九/§廿）那五章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 其余各章（§一/§二/§十/§廿）那四章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {
@@ -5083,7 +5314,7 @@ mod anchor_tests {
         assert!(bad.is_empty(), "未实现债表有 {} 处失效：\n{}", bad.len(), bad.join("\n"));
         assert_eq!(
             NOT_IMPLEMENTED.len(),
-            26,
+            36,
             "债表条数变了。偿了债 ⇒ 删条目并把本数字与下面的分档数一起改小；真要新增债 ⇒ 连同文档出处、证据、去处一起写"
         );
         let pres = NOT_IMPLEMENTED.iter().filter(|d| d.tier == Tier::Presentation).count();
@@ -5093,8 +5324,8 @@ mod anchor_tests {
         // 分档不许互相挪：把规则层挪进呈现层＝把"引擎收了它不该收的走法"说成"只是没画出来"，缺口的性质就变了。
         assert_eq!(
             (pres, rule, washed, mode),
-            (17, 5, 1, 3),
-            "债表应为 呈现层17／规则层5／豁免改登记1／模式层3，实测 ({pres},{rule},{washed},{mode})"
+            (17, 15, 1, 3),
+            "债表应为 呈现层17／规则层15／豁免改登记1／模式层3，实测 ({pres},{rule},{washed},{mode})"
         );
         assert_eq!(
             pres + rule + washed + mode,

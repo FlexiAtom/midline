@@ -21,7 +21,7 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 117 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 123 条记录的补丁有没有真打上；
 # 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
 # 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
 # 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
@@ -948,14 +948,14 @@ a='pub const CHAPTER_STRENGTH_CAP: u32 = 3;'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'pub const CHAPTER_STRENGTH_CAP: u32 = 4;'))"
 run
-echo "### M112 把玩家侧 upgrade_card 的当场拒闸 upgrades >= 3 写成 >= 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1277「玩家侧当场拒闸 upgrades >= 3 没了」＋既有 `upgrade_three_kind_and_cap` @progress.rs:634（第4次不再被拒 ⇒ 期望 Err 处 unwrap None）"
+echo "### M112 把玩家侧 upgrade_card 的当场拒闸 upgrades >= 3 写成 >= 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1277「玩家侧当场拒闸 upgrades >= 3 没了」＋既有「upgrade_three_kind_and_cap」@progress.rs:634（第4次不再被拒 ⇒ 期望 Err 处 unwrap None）"
 restore; py "
 p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
 a='    if c.upgrades >= 3 {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    if c.upgrades >= 4 {'))"
 run
-echo "### M113 把存档越界闸 upgrades > 3 写成 > 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1279「存档越界闸 upgrades > 3 没了」＋既有 `each_corruption_is_refused_not_guessed` @save.rs:645（「升级数越界 §十一:404」样本被当合法档读过）——M111/M112/M113 三条各撞一侧上限、又各牵一条不同的既有测，正证 ③ 那层「多侧」不是抄三遍同一处"
+echo "### M113 把存档越界闸 upgrades > 3 写成 > 4 ⇒ 实测 **2 红**：§十一 推导器 ③ @model.rs:1279「存档越界闸 upgrades > 3 没了」＋既有「each_corruption_is_refused_not_guessed」@save.rs:645（「升级数越界 §十一:404」样本被当合法档读过）——M111/M112/M113 三条各撞一侧上限、又各牵一条不同的既有测，正证 ③ 那层「多侧」不是抄三遍同一处"
 restore; py "
 p='$D/src/save.rs'; s=open(p,encoding='utf8').read()
 a='    if upgrades > 3 {'
@@ -969,7 +969,7 @@ a='\"thr\" => c.def.threshold = (c.def.threshold - 1).max(1),'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'\"thr\" => c.def.threshold = (c.def.threshold - 2).max(1),'))"
 run
-echo "### M115 把 *up_used = true 写成 = false（真行为回归：通关限1张那道闸永远置不回，第二次 up 不再被拒）⇒ 实测 **2 红**：既有 `the_upgrade_gate_is_the_phase_not_the_index` @command.rs:509（第二次 up 没被拒）＋§十一 推导器 ⑤ @model.rs:1289「写 *up_used = true 的行实测 0 处」"
+echo "### M115 把 *up_used = true 写成 = false（真行为回归：通关限1张那道闸永远置不回，第二次 up 不再被拒）⇒ 实测 **2 红**：既有「the_upgrade_gate_is_the_phase_not_the_index」@command.rs:509（第二次 up 没被拒）＋§十一 推导器 ⑤ @model.rs:1289「写 *up_used = true 的行实测 0 处」"
 restore; py "
 p='$D/src/command.rs'; s=open(p,encoding='utf8').read()
 a='*up_used = true;'
@@ -986,4 +986,48 @@ for p in glob.glob('$D/src/*.rs'):
     hits+=n
     if n: open(p,'w',encoding='utf8').write(s2)
 assert hits==1, hits"
+run
+echo "### M117 把 ai_value 臂 836「可攻击相邻列」码面 0.5 写成 0.6（文档 md:836 仍是 0.5）⇒ 实测 **1 红**、与预测同数：只红在 §十九 推导器 ③ @model.rs:1500「md:836 文档写 0.5、码面写 0.6 ⇒ 量化表与实现漂移」。0.5→0.6 同时改了 AI 在场价值，却没有任何既有测被带红——正证这颗牙是纯文档-码面对撞，③ 不借运行时读数也咬得住"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='TraitKind::AttackAdjacent => 0.5, // §十九:836 可攻击相邻列 0.5'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'TraitKind::AttackAdjacent => 0.6, // §十九:836 可攻击相邻列 0.5'))"
+run
+echo "### M118 抹掉 §十九:836 臂尾那段行尾锚（836 全仓唯一生产锚就是这条，M116 同族换章各量一遍）⇒ 实测 **1 红**、与预测同数：只红在 §十九 推导器 ② @model.rs:1466「md:836 是量化表的一臂、数值真被 ai_value 消费，现在没有锚点指回 ⇒ 实现被删或锚被摘」。③ 那层也盯着 836 臂尾，但 ② 在测内串行在前、先炸即全报，故这条落点归 ②——它量的是「摘锚」，与 M117 量的「改值」分属两层"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='TraitKind::AttackAdjacent => 0.5, // §十九:836 可攻击相邻列 0.5'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'TraitKind::AttackAdjacent => 0.5,'))"
+run
+echo "### M119 给 ai_value 的文档注释补一处 §十九:829 生产锚（829 是挂着的设计式、本不该有锚）⇒ 实测 **2 红**：§十九 推导器 ② @model.rs:1472「829 是债却有生产锚指回＝债已偿」＋债表机检 @model.rs:5256「src 已有锚点指回 ⇒ 债已偿，请删条目」。同一处贴锚被两把尺各喊一次，正证「债行不许有锚」在 §十九 与债表两侧都设了防，抹一侧留不住"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='见 §十九 推导器层⑤ 实测违反计数）。'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,a+' §十九:829'))"
+run
+echo "### M120 删掉 md:829 那条 Debt 条目（当作已偿）⇒ 实测 **2 红**：债表机检 @model.rs:5301「债表条数变了」(36→35) ＋ §十九 推导器 ② @model.rs:1471「829 必须躺在债表里」。分档断言 @model.rs:5311 与条数同测、串行先撞条数那条故本测只报一处。删一条债＝同时欠 §十九：这条牙把 M119 的反向（贴锚冒充已偿）与正向（真删条目）夹在同一行 md:829 上。用定位切除而非抄整块，免把 evidence 里的反引号带进 py 串"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+i=s.index('            doc: 829,')
+st=s.rindex('        Debt {',0,i)
+en=s.index('        },',i)+len('        },\n')
+assert st<i<en
+open(p,'w',encoding='utf8').write(s[:st]+s[en:])"
+run
+echo "### M121 给 catch-all 兜底臂 _ => 1.0 贴一处 §十九:844 锚（844 是「阈值公式」标题、文档没量化兜底档）⇒ 实测 **1 红**、与预测同数：只红在 §十九 推导器 ③ @model.rs:1496「带 §十九 尾锚的臂应恰 8 条，实测 9 ⇒ 有人给 catch-all 也贴了 §十九 锚」。844 非空行且归 §十九，every_doc_anchor_lands 放行——这条量的是「多贴」，与 M117 改值／M118 摘锚三向把 ③ 的臂集钉成恰八"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='            _ => 1.0,'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            _ => 1.0, // §十九:844'))"
+run
+echo "### M122 把 火星（md:781）的卡表阈值 3 写成 6（改 §十八 落地值去凑 2费×数值3＝阈值6 那条设计式）⇒ 实测 **2 红**：§十九 推导器 ⑤ @model.rs:1530「阈值公式符合数应恰 (11,36)，实测 (12,36)」＋§十八 逐字段 every_card_row_of_section18…（卡表与文档 md:781 漂移）。改一张卡被两章各撞一次：⑤ 量的是「离设计式有多远」这个债读数，§十八 量的是「卡表逐字段照文档」——正证这两把尺盯的是同一张表的不同侧面，不是重复记账。债表 md:847 的 evidence 里「火星 2费数值3 阈值3」那句转录的就是改前那个 3"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='name: \"火星\", faction: Ember, cost: 2, power: 3, threshold: 3,'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'name: \"火星\", faction: Ember, cost: 2, power: 3, threshold: 6,'))"
 run
