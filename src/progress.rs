@@ -86,8 +86,8 @@ pub fn collect_survivors(b: &mut Battle, inherit: &mut Vec<CardInst>) -> Vec<Str
     let mut out = Vec::new();
     let mut survivors = b.battle_survivors();
     survivors.sort_by_key(|c| c.id);
-    inherit.append(&mut survivors);
-    while inherit.len() > 10 {
+    inherit.append(&mut survivors);  // §十:371 自造牌可带入下一关：幸存者（含 crafted 融合产物）原样 append 进继承堆，本行不清 crafted（阵亡者已在 battle_survivors 侧过滤，永久消失见 §十:372）
+    while inherit.len() > 10 {  // §十:376 继承堆上限10（build 侧）：超出从堆顶（最早入堆）弃置、永久消失；载入侧同一道闸见 save.rs 的 `继承堆 … ＞ 上限10`
         let c = inherit.remove(0);
         out.push(format!("继承堆超10张 → 弃置（永久消失）：{}", short_card(&c)));
     }

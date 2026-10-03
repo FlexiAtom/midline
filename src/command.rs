@@ -242,11 +242,11 @@ pub fn execute_settle(
         SettleCommand::Quit => SettleStep::Quit,
         SettleCommand::Blank => SettleStep::Stay(Vec::new()),
         SettleCommand::Unknown(w) => SettleStep::Stay(one(format!("✖ 未知命令：{w}"))),
-        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）；§九:317 §九:319 §九 时机表那两行的 ✅ 就落在这一条上；§十一:406 融合与升级是两条并列命令（见下方 Up 臂），玩家自选先后、闸门互不引用⇒无强制顺序
+        SettleCommand::Fuse { main, sub } => match crate::progress::fuse_cards(inherit, main, sub, karma) {  // §十二:415 准备阶段融合；§十二:500 结算阶段融合（同一张词表）；§廿三:1000 融合时机＝准备∪结算（战斗内词表没有 fuse）；§九:317 §九:319 §九 时机表那两行的 ✅ 就落在这一条上；§十一:406 融合与升级是两条并列命令（见下方 Up 臂），玩家自选先后、闸门互不引用⇒无强制顺序；§十:388 准备阶段·可融合继承堆中的卡牌
             Ok(msg) => SettleStep::Stay(one(format!("✓ {msg}"))),
             Err(e) => SettleStep::Stay(one(format!("✖ {e}"))),
         },
-        SettleCommand::Drop(i) => {  // §十二:417 管理继承堆·弃置；§十二:502 结算阶段同一动作
+        SettleCommand::Drop(i) => {  // §十二:417 管理继承堆·弃置；§十二:502 结算阶段同一动作；§十:387 准备阶段可弃置继承堆中的卡牌
             if i < inherit.len() {
                 let c = inherit.remove(i);
                 SettleStep::Stay(one(format!("弃置 {}（进弃牌堆，本关不再使用；自造弃牌永久消失）", short_card(&c))))
@@ -254,7 +254,7 @@ pub fn execute_settle(
                 SettleStep::Stay(one("✖ 下标无效".into()))
             }
         }
-        SettleCommand::Move { from, to } => {  // §十二:417 管理继承堆·调整；§十二:502 结算阶段同一动作
+        SettleCommand::Move { from, to } => {  // §十二:417 管理继承堆·调整；§十二:502 结算阶段同一动作；§十:389 准备阶段·可调整继承堆顺序（remove+insert 重排，抽牌从堆顶起 ⇒ 顺序有意义）
             if from < inherit.len() && to < inherit.len() {
                 let c = inherit.remove(from);
                 inherit.insert(to, c);
@@ -306,7 +306,7 @@ pub fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
 
 /// 一整个「继承堆清单 + 提示」文本块（每行自带换行）。调用方接 `> ` 提示符。
 /// 它是逐字搬来的：改前三段 `println!` 的顺序、括号、全角冒号一个字没动。
-pub fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆
+pub fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆；§十:386 准备阶段·可查看继承堆所有卡牌（整堆逐行列出，不改状态）
     let mut s = format!("继承堆（{}张）：\n", inherit.len());
     for (i, c) in inherit.iter().enumerate() {
         s.push_str(&inherit_line(i, c));

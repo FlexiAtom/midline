@@ -172,7 +172,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **十九张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **二十张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -210,7 +210,7 @@
 //!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
 //!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
 //!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
-//!       §一/§二/§十/§廿 那四章的散文行——那里"整条规则没落地"仍查不出；
+//!       §一/§二/§廿 那三章的散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       以及本帧的 §十四 持业者·蜡烛（**第一条同章并用两条路、且九行双记账的章**：12 行＝围栏外表体 3
 //!       （走锚点）＋围栏内 9（走"文档数字驱动引擎复现"，**同时**一行都不许缺锚点）。配比钉死 锚点3／挂债0／实测9，
@@ -337,6 +337,25 @@
 //!       纯文档-码面对撞、不借运行时）；M118 抹臂尾锚（②，**1 红**）；M119 给债行贴生产锚（§十九② ＋ 债表机检，**2 红**＝同一处被两把尺各喊）；
 //!       M120 删债条目（债表条数 ＋ §十九②，**2 红**）；M121 给 catch-all `_ => 1.0` 贴锚（③ 臂数≠8，**1 红**）；M122 改一张卡阈值
 //!       （§十九⑤ 符合数 ＋ §十八 逐字段，**2 红**＝同表两章各撞）。本帧 §十九 只动注释与测试面，release 二进制 10 场景逐字节双臂 SAME。
+//!     - 以及本帧（第十三步·其十）的 §十 跨关继承（**§七／§八／§十一 那一族的第四张纯锚表**：16 行＝表体 7（371-377）
+//!       ＋围栏 9（382/383/386/387/388/389/392/393/394），两道围栏、两条阶段标签（385「准备阶段」／391「战斗开始」）不算必检行，
+//!       配比钉死 **锚点16／挂债0／实测0**——本章**无示例围栏**，第三条实测路开不出来，与 §十一 同此形状，见
+//!       `every_row_of_section10_…`）。五层里 ③ 是本帧的重头：它比的不是字面而是**继承机制的码面形状**——重置循环体
+//!       须含 `c.hp = c.def.power` 且**不得**碰 `.tr`／`skills`（特性·技能继承＝不覆盖，md:374/375），`progress.rs` 须
+//!       `inherit.append` ＋ `> 10` ＋文档 376 那个「10」三头对齐，`starter_gains >= 2` 在码面**恰好 1 处**（377 每关开端上限），
+//!       `HAND_LIMIT==8` 且文档 383 那个「8」对撞。⑤ **本帧新加的行为测**：一张被改过血量／技能／自造标记的继承牌进下一关，
+//!       血量必回 `def.power` 满格、特性与技能与 `crafted` 全部原样带过来（`inherited_card_enters_next_level_…`）——
+//!       把 ③ 的"形状对不对"补成"跑起来真不真"。盲区照登：③ 钉上限**存在**、不钉**超限留哪几张**（截断丢堆尾的语义无测），
+//!       ⑤ 只走一张代表牌、不覆盖多张混合堆。**本帧踩的坑（下一帧通用）**：我给 battle.rs 的两处锚追加了交叉引用尾串
+//!       （`；§六:243／§廿二:948／§十二:429` 与 `；§五:201`），而那些 §N:NN token 在别处已有**数命中次数==1** 的牙守着，
+//!       多写一处 ⇒ M72 的 `assert n==1` 当场变 2 而红（不是 §十 的错，是**新写点撞了旧牙的口径**）。删掉冗余尾串后恢复——
+//!       记一条通则：**凡追加锚 token，先 grep 它是否被某颗 count==1 牙点名，是则不得在第二处复写**。电池配 M123–M127 五颗牙：
+//!       M123 摘 373 的锚（②漏登记，**1 红**）；M124 把 `c.hp = c.def.power` 写成 `c.hp = (c.def.power)`（③字面撞码面，**1 红**）；
+//!       M125 在重置循环里插 `c.skills.clear()`（③"技能不许碰"＋⑤行为测，**2 红**＝同处被形状尺与行为尺各喊）；
+//!       M126 把 `starter_gains >= 2` 改成 `>= 3`（③ count==1 撞码面 ＋ §五 那半，**3 红**＝跨章同字面）；
+//!       M127 把 `inherit.len() > 10` 改成 `> 9`（③上限对撞 ＋ §廿二 边界表，**2 红**）。本帧只动注释与 `#[cfg(test)]` 测，
+//!       release 二进制 10 场景逐字节双臂 SAME（先误把 worktree 目录当二进制传进 byte-baseline，p1..p10 全报"是一个目录"⇒ 那是**尺子用错**不是行为回归，
+//!       改传 HEAD 编译产物后十场景 md5 全等）。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -1145,7 +1164,7 @@ mod anchor_tests {
     /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）；
     /// §十四 由 `every_row_of_section14_…` 覆盖（也是按形态推，但它开了**双记账**：围栏里那 9 行既走
     /// 文档数字驱动引擎的实测，也一行都不许缺锚点，见该测试注释）。
-    /// **其余各章**（§一/§二/§十/§廿）那四章仍未反向纳入。
+    /// **其余各章**（§一/§二/§廿）那三章仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -1565,6 +1584,155 @@ mod anchor_tests {
             est == *c
         }).count();
         assert_eq!((fei_fit, all_cards.len()), (5, 39), "§十九 ⑤：费用公式（技能价值取0基线）符合数应恰 (5, 总39)，实测 ({fei_fit},39) ⇒ 现状 34 张不符是本章挂债 md:829 的依据，改了要重判该偿还是继续挂");
+    }
+
+    /// §十 跨关继承——**纯规则章**（项目表＋定义/动作围栏），与 §八／§十一 同族：没有「文档给数字、引擎复现」
+    /// 那第三条实测路（围栏是定义与动作清单、不是可复现的算例），故 16 行**全走锚点指回**、零挂债。形状上它比
+    /// §八／§十一 多一道 ``` 围栏，且大量与 §五／§六／§十二／§廿三 **共用同一段码面**——本章把 §十 自己的文档
+    /// 行一枚枚指回那段码（同一段码替多章作证，改动会同时惊动多章推导器与电池，口径照 §十三 点名、不替哪侧圆场）。
+    /// ③ 逐字段撞码面挑「数在码面、义在形状」那几条，专门堵「注释里提一句就算认领」的假绿：
+    /// - 373 每关血量重置 ↔ 那段 `for c in draw_pile.iter_mut()` 里**逐行剔注释后仍含 `c.hp = c.def.power`**；
+    /// - 374 特性保留／375 技能保留 ↔ **同一个循环剔注释后不含 `def.tr`、也不含 `skills`**（它只动 hp/flame/seq/
+    ///   placed_turn/triggered_turn 五项，正证「继承时保留」不是一句空话——注意判据取 `def.tr` 而非裸 `.tr`，
+    ///   否则 `triggered_turn` 里的 `tr` 会被误伤）；
+    /// - 376 ↔ `collect_survivors` 的 `> 10`，且文档 376 的 ASCII 数字含 10；
+    /// - 377 ↔ 全仓**唯一**一处开端回合末业力上限闸 `starter_gains >= 2`；
+    /// - 383 ↔ `crate::battle::HAND_LIMIT`＝8，且文档 383 的 ASCII 数字恰为 8；
+    /// - 386–389 准备阶段四条动作 ↔ `settle_listing` 与 `execute_settle` 里 Fuse/Drop/Move 三条 handler 臂的**字面
+    ///   落点各恰一处**（parse 臂写法不同、不会被误计）。
+    #[test]
+    fn every_row_of_section10_inherit_is_anchored_back_and_its_reset_and_caps_are_code_shaped() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "十、跨关继承")
+            .expect("§十 标题必须存在（文档结构变了就要同步改本检查）");
+        let head1 = head + 1; // 标题的 1 基行号
+        let arity = |n: usize| -> usize { at(n).split_whitespace().count() };
+        let next_non_blank = |n: usize| -> usize {
+            let mut k = n + 1;
+            while k <= lines.len() && at(k).trim().is_empty() {
+                k += 1;
+            }
+            k
+        };
+
+        // ① 形状：列头之后的连续非空 run＝项目表体；围栏内单 token 且冒号收尾者＝阶段标签（不计），其余＝规则行。
+        //   故意不用 `table_body`——它会一路读到 `---`，把 379 小标题、两枚 ``` 与 385/391 阶段标签全吞成"表体行"
+        //   （§十九 同病）。这里自己分表行、阶段标签、围栏规则。
+        let col_header = next_non_blank(head1);
+        assert_eq!(at(col_header).trim(), "项目 说明", "§十 标题后首个非空行应是列头「项目 说明」，实测行{col_header}「{}」⇒ 列头措辞变了", at(col_header));
+        let mut rows: Vec<usize> = Vec::new();
+        let mut n = col_header + 1;
+        while at(n).trim() != "---" && !at(n).trim().is_empty() {
+            rows.push(n);
+            n += 1;
+        }
+        assert_eq!(rows, vec![371, 372, 373, 374, 375, 376, 377], "§十 项目表体应为 371–377 七行，实测 {rows:?} ⇒ 文档加了／改了表行，本章硬钉的行号要重新数");
+
+        let fpos = lines[head..].iter().position(|l| l.trim() == "```").expect("§十 应有一道 ``` 围栏");
+        let fence_open = head + 1 + fpos; // 1 基
+        assert_eq!(at(fence_open - 2).trim(), "继承堆与手牌关系", "§十 围栏前的小标题（行{}）不是「继承堆与手牌关系」⇒ 章结构漂了", fence_open - 2);
+        let mut fence_ticks = 0usize;
+        let mut fence_rows: Vec<usize> = Vec::new();
+        let mut phase_labels: Vec<usize> = Vec::new();
+        let mut k = fence_open;
+        while k <= lines.len() {
+            let t = at(k).trim();
+            if t == "---" {
+                break;
+            }
+            if t == "```" {
+                fence_ticks += 1;
+                k += 1;
+                continue;
+            }
+            if !t.is_empty() {
+                if arity(k) == 1 && (t.ends_with('：') || t.ends_with(':')) {
+                    phase_labels.push(k);
+                } else {
+                    fence_rows.push(k);
+                }
+            }
+            k += 1;
+        }
+        assert_eq!(fence_ticks, 2, "§十 应只有一道 ``` 围栏（2 个围栏符），实测 {fence_ticks} ⇒ 文档加了第二段围栏，本章只读第一段，那里的新行会从两把尺外面一起漏过去");
+        assert_eq!(phase_labels, vec![385, 391], "§十 围栏内阶段标签应恰为 385 准备阶段：／391 战斗开始：，实测 {phase_labels:?} ⇒ 阶段标签判据（单元数＋冒号收尾）失效，会把真规则行当标签吞掉");
+        assert_eq!(
+            fence_rows,
+            vec![382, 383, 386, 387, 388, 389, 392, 393, 394],
+            "§十 围栏内规则/定义行应为 382/383＋386–389＋392–394 九行，实测 {fence_rows:?} ⇒ 文档改了围栏结构或加了动作行"
+        );
+
+        let mut all = rows.clone();
+        all.extend(fence_rows.iter().copied());
+        all.sort_unstable();
+        assert_eq!(all.len(), 16, "§十 必检行应恰好 16（表 7 ＋ 围栏规则 9），实测 {} ⇒ 形状判据把行数数错了", all.len());
+
+        // ② 逐行认领：全走锚点、零挂债（本章无实测路）。锚点不许与债两头下注。
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (m, why) in NOT_A_RULE {
+            assert!(!all.contains(m), "md:{m} 落在 §十 内却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则（登记的排除理由：{why}）");
+        }
+        let (mut anchored, mut on_debt) = (0usize, 0usize);
+        let mut missing: Vec<String> = Vec::new();
+        for &r in &all {
+            if referenced.contains(&(r as u32)) {
+                anchored += 1;
+                assert!(!debited.contains(&r), "md:{r}（「{}」）既有锚点指回又挂着债 ⇒ 同一行两头下注", at(r));
+            } else if debited.contains(&r) {
+                on_debt += 1;
+            } else {
+                missing.push(format!("  md:{r} ← {}", at(r)));
+            }
+        }
+        assert!(missing.is_empty(), "§十 有 {} 行没有任何锚点指回（实现被删或锚被摘）：\n{}", missing.len(), missing.join("\n"));
+        assert_eq!((anchored, on_debt), (16, 0), "§十 配比应为 锚点16／挂债0（纯锚表、无实测路），实测 ({anchored},{on_debt}) ⇒ 有一行从锚挪到债或反之");
+
+        // ③ 逐字段撞码面：数在码面、义在形状。
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let digits = |q: usize| -> String { at(q).chars().filter(char::is_ascii_digit).collect() };
+
+        // 371／376：collect_survivors 函数体（s7_fn_body 已剔注释）里既有 append（带入）、又有 > 10 的 build 侧上限。
+        let cs = s7_fn_body(&std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap(), "pub fn collect_survivors");
+        assert!(cs.contains("inherit.append"), "§十:371「自造牌可带入下一关」：`collect_survivors` 里没有 `inherit.append` ⇒ 幸存者不再并入继承堆，带入这条路断了");
+        assert!(cs.contains("> 10"), "§十:376「继承堆上限10」：`collect_survivors` 里没有 `> 10` 那道 build 侧闸 ⇒ 堆能涨过上限");
+        assert!(digits(376).contains("10"), "§十:376 文档行「{}」的 ASCII 数字不含 10 ⇒ 上限措辞变了，上面撞的 `> 10` 就对不上", at(376));
+
+        // 373／374／375：读那段每关重置循环（它在 Battle::new 里、不便整体读）——逐行剔注释后：
+        //   必含 c.hp = c.def.power（373）；必不含 def.tr／skills（374/375＝这循环不碰特性与技能）。
+        let bsrc = std::fs::read_to_string(manifest.join("src/battle.rs")).unwrap();
+        let bsls: Vec<&str> = bsrc.lines().collect();
+        let lh = bsls
+            .iter()
+            .position(|l| l.trim_start().starts_with("for c in draw_pile.iter_mut()"))
+            .expect("§十:373/374/375 要读每关重置循环 `for c in draw_pile.iter_mut()`；拆函数／改名 ⇒ 同步这里（不许静默跳过）");
+        let mut loop_body = String::new();
+        for l in &bsls[lh + 1..] {
+            if l.trim() == "}" {
+                break;
+            }
+            loop_body.push_str(l.split("//").next().unwrap_or(""));
+            loop_body.push('\n');
+        }
+        assert!(loop_body.contains("c.hp = c.def.power"), "§十:373「血量重置满格」：重置循环里没有 `c.hp = c.def.power` ⇒ 继承牌血量不再每关回满");
+        assert!(!loop_body.contains("def.tr"), "§十:374「特性继承时保留」：重置循环里出现了 `def.tr` ⇒ 特性被每关照掉，那句『保留』成空话（判据取 def.tr 而非裸 .tr，免误伤 triggered_turn）");
+        assert!(!loop_body.contains("skills"), "§十:375「技能继承时保留」：重置循环里出现了 `skills` ⇒ 技能被每关照掉");
+
+        // 377：全仓唯一一处开端回合末业力上限闸。
+        assert_eq!(code_occurrences("starter_gains >= 2"), 1, "§十:377「开端每关…最多+2业力」：`starter_gains >= 2` 实测 {} 处（应为 1）⇒ 闸被复制或删除，『每关最多2』失去唯一落点", code_occurrences("starter_gains >= 2"));
+
+        // 383：手牌上限＝HAND_LIMIT，且必须等于文档 383 里那个 8。
+        assert_eq!(crate::battle::HAND_LIMIT, 8, "§十:383「手牌…上限8张」：`HAND_LIMIT` 不是 8 ⇒ 文档与代码上限漂移");
+        assert_eq!(digits(383), "8", "§十:383「{}」里的 ASCII 数字不是单个 8 ⇒ 上限措辞变了，上面 `HAND_LIMIT==8` 就对不上", at(383));
+
+        // 386–389：准备阶段四条动作各有唯一的 handler 落点（挡住"只在注释里提继承堆"的假绿）。
+        assert_eq!(code_occurrences("pub fn settle_listing"), 1, "§十:386「可查看继承堆所有卡牌」：`settle_listing` 定义实测 {} 处 ⇒ 查看整堆的实现没了或被拆", code_occurrences("pub fn settle_listing"));
+        assert_eq!(code_occurrences("SettleCommand::Fuse { main, sub } =>"), 1, "§十:388「可融合继承堆中的卡牌」：execute_settle 里 Fuse handler 臂实测 {} 处（应为 1）", code_occurrences("SettleCommand::Fuse { main, sub } =>"));
+        assert_eq!(code_occurrences("SettleCommand::Drop(i) =>"), 1, "§十:387「可弃置继承堆中的卡牌」：execute_settle 里 Drop handler 臂实测 {} 处（应为 1）", code_occurrences("SettleCommand::Drop(i) =>"));
+        assert_eq!(code_occurrences("SettleCommand::Move { from, to } =>"), 1, "§十:389「可调整继承堆顺序」：execute_settle 里 Move handler 臂实测 {} 处（应为 1）", code_occurrences("SettleCommand::Move { from, to } =>"));
     }
 
     /// §八「技能」／「效果」两列的语义槽位——本检查唯一的人工词表。
@@ -5236,9 +5404,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一／§十九 十九张表／章现在各自带推导器
-    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这十八章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§十/§廿）那四章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一／§十／§十九 二十张表／章现在各自带推导器
+    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这二十章的完整性由推导器负责**；
+    /// 其余各章（§一/§二/§廿）那三章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {

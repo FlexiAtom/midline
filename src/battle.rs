@@ -213,8 +213,8 @@ impl Battle {
             draw_pile = pool.into_iter().map(|d| mk(&mut id, &mut rng, d, true)).collect();
         } else {
             draw_pile = inherit;  // §六:224 「第2关起：从继承堆抽3张」——那份堆原序即牌库（裁定11 按堆顶顺序取）；§廿三:993 继承堆即牌库；上限10见 `collect_survivors`，开端不入堆见 `battle_survivors`
-            for c in draw_pile.iter_mut() {
-                c.hp = c.def.power; // 每关血量重置满格（升级已写入实例定义）
+            for c in draw_pile.iter_mut() {  // §十:374 特性继承保留、§十:375 技能继承保留：本循环只重置下面这五个字段，def.tr 与 skills 一律不碰（对比 §九 融合只搬 skills、不动 def）
+                c.hp = c.def.power; // §十:373 血量重置满格（每关开始把继承牌血量拉回 def.power）
                 c.flame = 0;
                 c.seq = 0;
                 c.placed_turn = i64::MIN;
@@ -237,8 +237,8 @@ impl Battle {
         let p_starter = mk(&mut id, &mut rng, faction_cards(player_faction)[0], false);
         let e_starter = mk(&mut id, &mut rng, faction_cards(enemy_faction)[0], false);
 
-        let mut hand = vec![p_starter];  // §六:219 「开端 1张 固定发放」——它是 vec 的字面首项，不经任何抽牌路径；§十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）；§五:191 开局手牌＝开端＋3 张 ｜ §五:185 开端每关固定发放（不从堆里来）
-        for _ in 0..3 {  // §六:220 那 3 张的张数出自表1「继承堆抽牌 3张」；§六:226 这个循环**不碰** pf.manual_draws，所以开局手牌不计入每回合抽牌次数；§十二:421 开局从继承堆抽 3 张（裁定11：按堆顶顺序取）；§廿三:992 开局手牌（固定开端＋3张，不经 manual_draws）
+        let mut hand = vec![p_starter];  // §六:219 「开端 1张 固定发放」——它是 vec 的字面首项，不经任何抽牌路径；§十二:421 手牌＝开端固定发放（每关 1 张，不从堆里抽）；§五:191 开局手牌＝开端＋3 张 ｜ §五:185 开端每关固定发放（不从堆里来）；§十:392 战斗开始＝开端固定发放（每关重新发，不经继承）
+        for _ in 0..3 {  // §六:220 那 3 张的张数出自表1「继承堆抽牌 3张」；§六:226 这个循环**不碰** pf.manual_draws，所以开局手牌不计入每回合抽牌次数；§十二:421 开局从继承堆抽 3 张（裁定11：按堆顶顺序取）；§廿三:992 开局手牌（固定开端＋3张，不经 manual_draws）；§十:393 战斗开始＝从继承堆抽 3 张作初始手牌
             if !draw_pile.is_empty() {
                 hand.push(draw_pile.remove(0)); // 开局手牌按继承堆顺序取（裁定11）
             }
@@ -411,7 +411,7 @@ impl Battle {
     /// §廿二:949 弃的牌进弃牌堆、本关不再使用（自造牌例外：任何离场永久消失，§十:372）；§廿三:996 弃牌堆的定义行。
     fn push_hand(&mut self, c: CardInst) {
         self.hand.push(c);
-        while self.hand.len() > HAND_LIMIT {
+        while self.hand.len() > HAND_LIMIT {  // §十:383 手牌上限8（HAND_LIMIT=8）：超出的从手牌头（最早进入）弃置（与上方 push_hand 文档头那条闸同源，那里已挂别章的锚）
             let old = self.hand.remove(0);
             if old.crafted {
                 self.log.push(format!("手牌溢出8张：自造牌 {} 被弃永久消失", short_card(&old)));
@@ -433,7 +433,7 @@ impl Battle {
         }
         self.karma_penalty_next = 0;
         if !self.draw_pile.is_empty() {  // §六:239 每回合开始「自动从继承堆抽1张」——这一支不碰 `manual_draws`，所以它花掉的是 §六:232 那份「1自动」；§十二:427 每回合自动从继承堆抽 1 张
-            let mut c = self.draw_pile.remove(0); // 堆顶抽取，继承堆顺序有意义（裁定11）
+            let mut c = self.draw_pile.remove(0); // 堆顶抽取，继承堆顺序有意义（裁定11）；§十:394 每回合从继承堆抽牌（draw_pile 即上一关带过来的 inherit）
             if c.skills.is_empty() && !c.is_starter() {
                 let pool = Skill::list();
                 let s = pool[self.rng.below(pool.len())];
@@ -1083,7 +1083,7 @@ impl Battle {
             SideK::Player => &mut self.pf,
             SideK::Enemy => &mut self.ef,
         };
-        if flags.starter_gains >= 2 {  // §十二:452 开端回合末业力每关上限 2 次；§五:200「每关最多 2 次」这道闸
+        if flags.starter_gains >= 2 {  // §十二:452 开端回合末业力每关上限 2 次；§五:200「每关最多 2 次」这道闸；§十:377 开端每关上限·每关重置·最多+2业力（pf/ef 随每关新建的 Battle 归零 ⇒ 重置这一半无需显式代码）
             return;
         }
         flags.starter_gains += 1;  // §五:201 「持续积累」＝这个计数器在涨；写满上限就不再给业力
@@ -4119,6 +4119,38 @@ mod rule_tests {
 
     fn fresh_battle() -> Battle {
         Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
+    }
+
+    #[test]
+    fn inherited_card_enters_next_level_full_hp_with_trait_and_skill_intact() {
+        // §十:373／374／375 的运行时正证（推导器只能静态钉住那段循环"没写 def.tr/skills"，证不了真跑一遍会把残血牌拉回满格）：
+        // 一张上一关带下来的残血自造牌，经 Battle::new（关号≥2、继承堆非空）应回到满格，且实例上的 def.tr／skills 一律保留。
+        // 用覆写过的 def.power 钉死"满格＝实例值"而非卡表基准（升级跨关保留的落点也在这条上）。
+        let mut def = faction_cards(Faction::Ember)[3];
+        def.power = 9; // 模拟升级后的数值：重置必须拉回 9，不是卡表基准
+        let mut c = CardInst::new(700, def);
+        c.hp = 2; // 上一关残血
+        c.flame = 5;
+        c.seq = 3;
+        c.placed_turn = 1;
+        c.crafted = true; // §十:372 自造牌
+        c.skills = vec![Skill::AtkSameColFlame1, Skill::AllyColAtk1];
+        let tr = c.def.tr;
+        let b = Battle::new(99, Faction::Ember, Faction::Frost, Difficulty::Normal, vec![c], 2);
+        let back = b
+            .draw_pile
+            .iter()
+            .chain(b.hand.iter())
+            .find(|x| x.id == 700)
+            .expect("继承牌应在下关的牌库或手牌里（id 原样带下来）");
+        assert_eq!(back.hp, back.def.power, "§十:373 血量重置满格：残血牌进下关没回满（hp {} vs def.power {}）", back.hp, back.def.power);
+        assert_eq!(back.hp, 9, "§十:373「满格」＝实例 def.power（升级值），不是卡表基准");
+        assert_eq!(back.flame, 0, "重置顺带清业火条");
+        assert_eq!(back.seq, 0, "重置顺带清入场序");
+        assert_eq!(back.placed_turn, i64::MIN, "重置顺带清在场回合");
+        assert_eq!(back.def.tr, tr, "§十:374 特性继承保留：下关这牌的特性变了");
+        assert_eq!(back.skills, vec![Skill::AtkSameColFlame1, Skill::AllyColAtk1], "§十:375 技能继承保留：下关这牌的技能丢了或改了序");
+        assert!(back.crafted, "§十:372 自造牌标记跨关保留");
     }
 
     #[test]

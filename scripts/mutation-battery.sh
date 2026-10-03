@@ -1031,3 +1031,39 @@ a='name: \"火星\", faction: Ember, cost: 2, power: 3, threshold: 3,'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'name: \"火星\", faction: Ember, cost: 2, power: 3, threshold: 6,'))"
 run
+echo "### M123 抹掉 battle.rs 每关重置那行行尾的 §十:373 那一段（同一行还挂着 §五:201，只抠这段）⇒ 实测 1 红、与预测同数：只红在 §十 推导器 ② 「md:373 没有锚点指回」。③ 那句撞码面读的是 c.hp = c.def.power 这段代码、与锚无关，代码一字没动故仍绿；行为测也绿（血量照样回满）——摘锚它看不见（M99／M116／M118 同族换章各量一遍）"
+restore; py "
+import re
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+s2,n=re.subn(r'c\.hp = c\.def\.power; // §十:373[^\n]*','c.hp = c.def.power; // M123 血量重置仍在、本帧锚已摘',s)
+assert n==1, n
+open(p,'w',encoding='utf8').write(s2)"
+run
+echo "### M124 把每关重置那行 c.hp = c.def.power 写成 c.hp = (c.def.power)（纯写法漂移：行为与锚都不动、只加一对括号）⇒ 实测 1 红、与预测同数：只红在 §十 推导器 ③ 那句「重置循环里没有 c.hp = c.def.power」。行为测仍绿（血量照样回满）、② 仍绿（锚没摘）——正证 ③ 是一把逐字形状尺：语义等价的加括号重构会让这条规则的码面认领对尺子整个隐身（M104／M105 那种纯形状改动只有形状层看得见的 §十 版本）"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='c.hp = c.def.power; // §十:373'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'c.hp = (c.def.power); // §十:373'))"
+run
+echo "### M125 往每关重置循环塞一句 c.skills.clear（真行为回归：§十:375 那句技能继承保留被摘）⇒ 实测 2 红、与预测同数：§十 推导器 ③ 那句「重置循环里出现了 skills」（否定式被踩）＋本帧新写的运行时行为测 inherited_card_enters_next_level_full_hp（下关那张的技能被清成空）。mk_inherit 造的那些件技能本就空、clear 无副作用，不连锁——与 M124 合起来把 ③ 的正／负两半各撞一次：M124 动正证那半、这条动否定那半"
+restore; py "
+p='$D/src/battle.rs'; ls=open(p,encoding='utf8').read().split('\n')
+i=next(k for k,l in enumerate(ls) if 'c.hp = c.def.power; // §十:373' in l)
+ls.insert(i+1,'                c.skills.clear();')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+run
+echo "### M126 把开端回合末业力上限闸 starter_gains >= 2 写成 >= 3（§十:377 每关上限从2变3）⇒ 实测 3 红、与预测同数：§十 推导器 ③ 那句「starter_gains >= 2 实测 0 处（应为1）」＋§五 推导器同一道闸那句（fe_cap 由文档推得仍是2）＋§五／§六 行为侧那条开端回合末业力序列复现测（第3次不再被拒、期望序列落空）。这道闸被 §十／§五 两章共守一处，改一个字符两章各撞一遍、又各牵一条既有测——M113 各撞一侧上限又各牵一条既有测的换章版"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='flags.starter_gains >= 2 {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'flags.starter_gains >= 3 {'))"
+run
+echo "### M127 把继承堆 build 侧上限 collect_survivors 的 > 10 写成 > 9（§十:376 超上限早一格弃牌）⇒ 实测 2 红、与预测同数：§十 推导器 ③ 那句「collect_survivors 里没有 > 10 那道闸」＋既有超上限弃置测 survivors_are_capped_at_ten（堆被压成9、那句「上限恒 10」落空）。载入侧那道 > 10 在 save.rs、这条不碰——正证 build／载入两道同闸分属两处、摘一侧另一侧仍在守（与 §十:376 只挂 build 侧锚那条口径一致）"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+a='while inherit.len() > 10 {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'while inherit.len() > 9 {'))"
+run
