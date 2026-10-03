@@ -1020,12 +1020,12 @@ en=s.index('        },',i)+len('        },\n')
 assert st<i<en
 open(p,'w',encoding='utf8').write(s[:st]+s[en:])"
 run
-echo "### M121 给 catch-all 兜底臂 _ => 1.0 贴一处 §十九:844 锚（844 是「阈值公式」标题、文档没量化兜底档）⇒ 实测 **1 红**、与预测同数：只红在 §十九 推导器 ③ @model.rs:1496「带 §十九 尾锚的臂应恰 8 条，实测 9 ⇒ 有人给 catch-all 也贴了 §十九 锚」。844 非空行且归 §十九，every_doc_anchor_lands 放行——这条量的是「多贴」，与 M117 改值／M118 摘锚三向把 ③ 的臂集钉成恰八"
+echo "### M121 给表外那四臂之一（ThresholdAdjColFlame3 => 1.5）贴一处 §十九:844 锚（844 是「阈值公式」标题、文档没量化那四臂）⇒ 实测 **1 红**、与预测同数：只红在 §十九 推导器 ③「带 §十九 尾锚的臂应恰 8 条，实测 9 ⇒ 有人给表外那四臂（自行完善的外推档）也贴了 §十九 锚」。844 非空行且归 §十九，every_doc_anchor_lands 放行——这条量的是「多贴」，与 M117 改值／M118 摘锚三向把 ③ 的臂集钉成恰八"
 restore; py "
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
-a='            _ => 1.0,'
+a='            TraitKind::ThresholdAdjColFlame3 => 1.5,'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,'            _ => 1.0, // §十九:844'))"
+open(p,'w',encoding='utf8').write(s.replace(a,'            TraitKind::ThresholdAdjColFlame3 => 1.5, // §十九:844'))"
 run
 echo "### M122 把 火星（md:781）的卡表阈值 3 写成 6（改 §十八 落地值去凑 2费×数值3＝阈值6 那条设计式）⇒ 实测 **2 红**：§十九 推导器 ⑤ @model.rs:1530「阈值公式符合数应恰 (11,36)，实测 (12,36)」＋§十八 逐字段 every_card_row_of_section18…（卡表与文档 md:781 漂移）。改一张卡被两章各撞一次：⑤ 量的是「离设计式有多远」这个债读数，§十八 量的是「卡表逐字段照文档」——正证这两把尺盯的是同一张表的不同侧面，不是重复记账。债表 md:847 的 evidence 里「火星 2费数值3 阈值3」那句转录的就是改前那个 3"
 restore; py "
