@@ -47,7 +47,10 @@ restore() { PATCH_FAIL=""; cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$
 #      这种 preflight 量不到（补丁确实打上了），只有整族复跑会露。所以：凡改动过注释的帧，末了必须整族复跑一次；
 #      记录里也一律断言"命中次数 == 预期"，多一处提及就当场喊，而不是静默转绿。
 run() { local o r; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，下面的读数一律不算落点\n' "$PATCH_FAIL"; fi; o="$(cd "$D" && MIDLINE_DOC="${DOC:-$REAL}" cargo test -q 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- "--- FAILED|test result:")"; if [ -z "$r" ]; then printf '!! cargo 没有产出 test result ⇒ 编译失败（或输出形状变了）——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -12; printf '%s\n' "$o" | grep -E -- "^Traceback|AssertionError" | head -3; }
-py() { local e rc; e="$(python3 -c "$1" 2>&1)"; rc=$?; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; return 0; }
+# ④ 补丁跑通了（python 退出 0）、却没改变任何字节＝这条变异其实什么都没动（索引式无断言的记录最易中招）。
+#    本帧 D19 补的通用牙：py() 对 $D/src 与 doc.md 取 patch 前后 cksum，rc==0 且字节没变 ⇒ 记 PATCH_FAIL。
+#    于是这类静默 no-op 与 ① 一样在预检里当场喊，不必等整族、也不必靠人读日志。
+py() { local e rc before after; before="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ -n "$before" ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何字节"; return 0; }
 
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
 echo "### M1 抹掉 md:452 的两处行尾锚点 ⇒ 应红在 §十二 推导器（漏登记）"
@@ -1066,4 +1069,30 @@ p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
 a='while inherit.len() > 10 {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'while inherit.len() > 9 {'))"
+run
+echo "### M128 把 production_face 规则③ 的向上吞串循环置恒假（while up > 0 && false ⇒ 压在 cfg(test) 上方那段 /// 不再归测试面）⇒ 实测 **1** 红（正中预测）：只红在 rule_three_swallows…（负向半边：150／544／550 三枚围栏抬头回到生产认领集，断言 ① 当场在 model.rs:1113 喊「行 150 不该有生产锚指回」）。正证规则③确在剔那三枚假覆盖——摘掉它，机检重新替围栏抬头作证"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='while up > 0 {'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'while up > 0 && false {'))"
+run
+echo "### M129 把规则③ 的向上吞放宽成「越过非注释行也继续吞到文件顶」（else 分支同样标记并上行）⇒ 实测 **18** 红（预测「正向半边被咬＋若干章」，量清「若干」＝17）：rule_three 正向半边（真锚被误吞）＋17 条各章反向覆盖推导器（§三／§四／§五／§六／§七／§八／§九／§十／§十一／§十二／§十三／§十四／§十五／§十六／§十七／§廿二／§廿三）——压在 cfg(test) 上方的真生产锚整段消失，凡以该锚做认领的章当场红。正证「遇第一非注释行即停、不越界」这条边界是有牙的：放宽＝机检自己造出假缺口"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='''                    } else {
+                        break;
+                    }'''
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'''                    } else {
+                        tags[up - 1] = false;
+                        up -= 1;
+                    }'''))"
+run
+echo "### M130 把 derivator 文档头自称的「二十张表／章」改成「十九张表／章」而不动任何推导器 ⇒ 实测 **1** 红（正中预测）：只红在 the_module_header_self_claimed…（S 侧 count_before 撞上 left 19 ≠ right 20，model.rs:1237 当场喊「自称的 derivator 总表数与现推 S 不符」）。正证 D23 这把自声称计数尺咬得住——头里的数字与现推 derivator 章集漂一字即红"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+n='二十张表／章现在各自带推导器'
+assert s.count(n)==1, s.count(n)
+open(p,'w',encoding='utf8').write(s.replace(n,'十九张表／章现在各自带推导器'))"
 run

@@ -21,6 +21,9 @@
 # 或 `mod anchor_tests` 截断＝其后全算测试面；`#[cfg(test)]` 挂在**普通 item** 上时只跳那一个 item 的区间
 # （按"与属性行同缩进的收尾"定界）。这一条是 2026-10-01 §九 帧补的：探针当时只认 `+mod`，于是把解析器
 # 那些测试专用 item 里的 `/// md:311` 也算成生产锚点——一章的锚点数虚高，盲区就从这张表上看不见了。
+# 再加规则③（本帧 D17 补，与 production_face 同步）：紧压在 `#[cfg(test)]` **上方**的 `///`／`//` 串也归
+# 测试面——那是该 item 的 `#[doc]`，串里的锚不该算生产覆盖。两侧谓词逐字对齐（trim 后判、排除 //!、空行即停、
+# 遇非注释行即停）；泄漏出的三枚假覆盖 §4:150／§13:544／§13:550 都是围栏抬头，剔出后不新增盲区。
 # 两边各数一遍是刻意的：同一串字两套口径，偏移只会露出来，不会互相圆过去。
 import glob, re, os, sys
 
@@ -81,6 +84,12 @@ def face_of(raw):
             tail = True
             break
         if t.startswith('#[cfg(test)]'):
+            # 规则③（与 model.rs production_face 同规则、各写各的）：自属性行向上吞紧邻的 ///／// 串
+            # （空行即停、遇非注释行即停）标成 item——那是本 item 的文档注释，串里的锚不该算生产覆盖。
+            u = i - 1
+            while u >= 0 and ((not ls[u]) or (ls[u].startswith('//') and not ls[u].startswith('//!'))):
+                face[u] = 'item'
+                u -= 1
             ind, j, opened = indent_of(raw[i]), i + 1, False
             while j < len(raw):
                 lt = raw[j].strip()

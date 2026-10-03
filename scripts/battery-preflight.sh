@@ -47,4 +47,13 @@ PY
 
 echo "### 预检（只打补丁、不跑 cargo）｜红＝某条变异的补丁没打上或内嵌 Python 有语法错"
 bash "$T"
-echo "### 预检结束｜记录共 $(grep -c '^echo "### ' "$B") 条（含 M0 对照与 M19 收尾）。上面没有「补丁失败」行＝逐条补丁都真打到了码。"
+# 记录条数钉死（本帧 D19）：以前这行只打印条数、没人核对，一条记录静默丢失（echo 头被误删、或整条误并）
+# 就会让"预检全过"变成假绿。现在断言 == 期望数；加一条牙就同步改 EXPECTED_RECORDS 这一处。
+EXPECTED_RECORDS=131
+N="$(grep -c '^echo "### ' "$B")"
+if [ "$N" -ne "$EXPECTED_RECORDS" ]; then
+    printf '!! 记录条数对不上：期望 %s 条，实测 %s 条 ⇒ 有 echo "### " 头被删／多写／整条误并，请核对电池\n' "$EXPECTED_RECORDS" "$N"
+    exit 1
+fi
+echo "### 预检结束｜记录共 $N 条（含 M0 对照与 M130 收尾，与 EXPECTED_RECORDS 相符）。上面没有「补丁失败」行＝逐条补丁都真打到了码。"
+

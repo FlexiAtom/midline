@@ -860,12 +860,12 @@ mod anchor_tests {
     /// 而"某个串在实现里出现几次""某行有没有锚点指回"这类断言恰恰要靠三份同口径才算成立
     /// （同 `doc_sections`／`table_body`／`s7_fn_body` 摘出来的理由）。
     ///
-    /// 两条排除，性质不同，别合成一条：
+    /// 三条排除，性质不同，别合成一条：
     /// ① `#[cfg(test)]` **后面紧跟 `mod`** ⇒ 从这里到文件尾一律不算（测试模块总在文件尾部）。
     /// ② `#[cfg(test)]` 挂在**普通 item**（enum／struct／fn／impl）上 ⇒ 只跳掉那**一个** item：
     ///    属性行之后直到**与属性同缩进的那行 `}`**（顶层 item 即 0 列，判法是 `s7_fn_body` 那条"块内花括号
     ///    带缩进"的推广——只看缩进相等，不数花括号，字符串里的 `{}` 就骗不到它）。
-    ///    缩进这一步是实测逼出来的：`battle.rs:786` 的 `#[cfg(test)] pub(crate) fn s9_run_player_attack_phase`
+    ///    缩进这一步是实测逼出来的：`battle.rs:789` 的 `#[cfg(test)] pub(crate) fn s9_run_player_attack_phase`
     ///    是 impl 块里的一个方法，按"顶格 `}`"去找会一路吞到 impl 收尾（1486 行），§十四～§廿三 十章的锚点
     ///    当场集体消失——**机检自己造出的假缺口**，正是这条口径原先写著要避免的那种错。
     /// ② 是本帧被 §九 逼出来的：`progress.rs` 的 `S9Claim` 是测试专用 enum，它的变体注释写「md:341」，
@@ -875,18 +875,43 @@ mod anchor_tests {
     /// 为什么不能简化成"看见 `#[cfg(test)]` 就跳过后半份文件"：函数级的那一个（`rng.rs` 的 `state()`）
     /// 后面还有几十行真实现，一并跳过等于机检自己造出一个假缺口——比漏锚点更难发现，因为它看起来像是照规则排除掉了。
     /// 找不到那个 item 的收尾就**当场 panic**，不平跳：静默吞掉后半份文件的代价比报一次错大。
+    /// ③ 是本帧（D17）补的：紧压在 `#[cfg(test)]` **上方**的 `///`／`//` 注释串原先**仍算生产面**——② 只从
+    ///    属性行往下跳，那串位于属性行之上、早于 ② 被收进面里，于是串里的锚被错当成生产覆盖。实测量清此洞
+    ///    漏出的三枚假覆盖 `§四:150`／`§十三:544`／`§十三:550`（全是围栏/半区抬头、非必检行；泄漏源
+    ///    `battle.rs:3127`／`:3568` 两处压在 cfg(test) 上的 `///`）。语义正当性：Rust 里 `///`＝`#[doc]`
+    ///    **下挂其下那个 item**，本属测试面。修法＝自属性行向上吞紧邻的 `///`／`//`（**排除 `//!`**）串标记为
+    ///    测试面，遇**第一非注释行**即停、**不跳空行**（空行隔开的串更可能是上一 item 的尾巴，保守留在生产面
+    ///    不造新洗白口）。Python 侧 `coverage-probe.py::face_of` 同规则、**各写各的实现**。
     fn production_face(src: &str) -> Vec<String> {
+        // 两趟：先给每行贴"是不是生产面"的标签，再统一发射——一趟边扫 push 时，注释串在撞上
+        // `#[cfg(test)]` 之前就已经进了 out，无法回退（规则③要的就是这个回退）。
         let raw: Vec<&str> = src.lines().collect();
         let indent_of = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
-        let mut out: Vec<String> = Vec::new();
+        let is_plain_comment = |t: &str| t.starts_with("//") && !t.starts_with("//!");
+        let mut tags = vec![true; raw.len()];
         let mut idx = 0usize;
         while idx < raw.len() {
             let t = raw[idx].trim();
             let next = raw[idx + 1..].iter().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("");
             if t.starts_with("mod anchor_tests") || (t.starts_with("#[cfg(test)]") && next.starts_with("mod ")) {
-                return out;
+                // ① 从这里到文件尾一律不算（测试模块总在文件尾部）。
+                tags[idx..].fill(false);
+                break;
             }
             if t.starts_with("#[cfg(test)]") {
+                // 规则③：自属性行向上吞紧邻的 `///`/`//` 串（空行即停、遇非注释行即停）——那是这
+                // 测试专用 item 的文档注释（`///`＝`#[doc]` 下挂本 item），串里的锚不该算生产覆盖。
+                let mut up = idx;
+                while up > 0 {
+                    let p = raw[up - 1].trim();
+                    if p.is_empty() || is_plain_comment(p) {
+                        tags[up - 1] = false;
+                        up -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                let attr = idx;
                 let indent = indent_of(raw[idx]);
                 let start = idx + 1;
                 idx += 1;
@@ -910,12 +935,16 @@ mod anchor_tests {
                     }
                     idx += 1;
                 }
+                tags[attr..idx].fill(false); // 属性行连同其 item 全归测试面
                 continue;
             }
-            out.push(t.to_string());
             idx += 1;
         }
-        out
+        raw.iter()
+            .enumerate()
+            .filter(|(k, _)| tags[*k])
+            .map(|(_, l)| l.trim().to_string())
+            .collect()
     }
 
     /// 许可证头机检。人原话（09-28）：「代码头要加AGPL-v3头，这个需要检查，如果没有的话补，署名用FlexiAtom」。
@@ -1071,6 +1100,188 @@ mod anchor_tests {
         }
         referenced
     }
+
+    /// 规则③（本帧 D17）的牙。剔掉压在 `#[cfg(test)]` 上方那段 `///` 注释串后，泄漏出来的三枚**围栏/半区
+    /// 抬头**（§四:150／§十三:544／§十三:550，都不是必检行）不再被生产面认领；真规则行必须留下。
+    /// 为什么值得单独立一条：今天全绿正说明这条口径此前**没有牙**——加规则③很容易写成"过界吞真生产锚"，
+    /// 只靠 coverage-probe 那一眼看不住；这里双向钉死（抬头不许回来、真行不许被吞）。
+    /// 断言体只用裸整数＋ `{n}` 插值，不写 `md:`/`§:` 形态（同 `anchor_grammar_accepts_only_these_shapes` 的拆字纪律）。
+    #[test]
+    fn rule_three_swallows_exactly_the_three_fenced_title_runs() {
+        let referenced = referenced_doc_lines();
+        for n in [150u32, 544, 550] {
+            assert!(!referenced.contains(&n), "行 {n} 是围栏/半区抬头，规则③生效后不该有生产锚指回它——回到认领集＝规则③失效");
+        }
+        for n in [151u32, 152, 153, 154, 545, 551] {
+            assert!(referenced.contains(&n), "真规则行 {n} 被规则③误吞＝walk-up 过界（它并不压在某个 cfg(test) item 上方）");
+        }
+    }
+
+    /// D23（本帧）：模块头与反向覆盖文档里那些**自称的表数／章数**（"多少张表""哪几章未纳入"）此前没有尺子核对，
+    /// 历史上漂过两次（加了推导器忘改头）。本尺从 `fn every_…_section<N>` 现推 derivator 章集 S，用文档章头现推
+    /// 补集 U，再逐条对撞每一处**现在时**的声称；数字或集合对不上、或冒出一处未登记的同类自称，当场红。
+    /// 刻意读**原始文件文本**而非面口径：这些声称本身就是注释里的散文，走面口径会把它们全剔掉、对账成空转
+    /// （姿态同 `no_doc_anchor_is_written_without_its_colon`）。DATED 的历史读数（旧帧那段带书名号引文的叙事）
+    /// 不回改也不参与——带「」引文的行自动放过，其余豁免见 EXEMPT。
+    /// 盲区照登：净网只认「那＋中文数＋章」与"张表"式两种措辞——用「这＋数＋章」自称的局部清单（如 §十七 推导器头里
+    /// "这三章不是表"指 §十五/§十七/§十六 那三张，非全局补集）刻意不纳入，纳入会误伤局部叙事；将来若改用第三种句式自称，
+    /// 需补进触发判据，但当前唯一的全局「这」式声称（derivator 文档头"这 N 章"）已由键 B 单独钉死。
+    #[test]
+    fn the_module_header_self_claimed_chapter_counts_match_the_derivable_derivator_set() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // 自称措辞的 token 拆开拼出来——免得本测试自己源码里那行撞上净网触发（净网读的是含本函数的 model.rs 原文）。
+        let tok = "张表".to_string() + "／章";
+        // 六处声称的定位 marker 同样碎片拼——`one` 断言全文件里该串恰一处，若本函数源码直接写全串（调用行＋registered 数组）
+        // 会把自己也算成"又一处声称"，唯一性当场破。碎片行不含连续 marker，故只落在真正的那行注释上。
+        let m_included = "反向覆盖已".to_string() + "纳入";
+        let m_enum = "现在各自带".to_string() + "推导器";
+        let m_complete = "的完整性由".to_string() + "推导器负责";
+        let m_complement = "仍是散文".to_string() + "行";
+        let m_scattered = "的散文".to_string() + "行";
+        let m_unincluded = "仍未反向".to_string() + "纳入";
+
+
+        // 1) 现推 derivator 章集 S：只认 `fn every_` 声明（注释里 `every_row_of_section15_…` 那种没有 `fn ` 前缀）；
+        //    取"section"之后第一段 ASCII 数字＝章号（与 coverage-probe.py 的非贪婪 `section(\d+)` 同取首个）。
+        let mut s: Vec<u32> = Vec::new();
+        for fp in src_rs_files() {
+            let src = std::fs::read_to_string(&fp).unwrap();
+            for line in src.lines() {
+                let Some(rest) = line.trim().strip_prefix("fn every_") else { continue };
+                let Some(pos) = rest.find("section") else { continue };
+                let num: String = rest[pos + "section".len()..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(v) = num.parse::<u32>() {
+                    s.push(v);
+                }
+            }
+        }
+        s.sort_unstable();
+        s.dedup();
+        assert!(s.len() >= 10, "derivator 扫描疑似失效：只推出 {} 章（少于 10 视为判据崩了）：{s:?}", s.len());
+
+        // 2) 文档章域 D（严格递增章头）与补集 U。
+        let lines_s = doc_or_skip().expect("文档不可读");
+        let mut d: Vec<u32> = Vec::new();
+        for l in &lines_s {
+            let Some((num, _)) = l.trim().split_once('、') else { continue };
+            let Some(v) = cn2int(num) else { continue };
+            if d.last().is_none_or(|&last| v > last) {
+                d.push(v);
+            }
+        }
+        assert!(s.iter().all(|c| d.contains(c)), "有 derivator 章号不在文档章域：{s:?} ⊄ {d:?}");
+        let u: Vec<u32> = d.iter().filter(|&&x| !s.contains(&x)).copied().collect();
+
+        // 辅助：定位含某 marker 的**唯一**原始行；解析紧邻中文数；解析 `§<中文数>` 枚举；解析"中文数＋章"。
+        let raw = std::fs::read_to_string(manifest.join("src/model.rs")).unwrap();
+        let one = |marker: &str| -> Vec<char> {
+            let hits: Vec<&str> = raw.lines().filter(|l| l.contains(marker)).collect();
+            assert_eq!(hits.len(), 1, "标记在 model.rs 里应恰一处，实测 {} 处：{marker}", hits.len());
+            hits[0].chars().collect()
+        };
+        let count_before = |c: &[char], token: &str| -> u32 {
+            let t: Vec<char> = token.chars().collect();
+            let starts: Vec<usize> =
+                (0..=c.len().saturating_sub(t.len())).filter(|&i| c[i..i + t.len()] == t[..]).collect();
+            assert_eq!(starts.len(), 1, "token 在行内应恰一次：{token}");
+            let mut j = starts[0];
+            while j > 0 && NUM.contains(&c[j - 1]) {
+                j -= 1;
+            }
+            let run: String = c[j..starts[0]].iter().collect();
+            cn2int(&run).unwrap_or_else(|| panic!("token 前不是中文数字：{token}"))
+        };
+        let chapter_nums = |c: &[char]| -> Vec<u32> {
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < c.len() {
+                if c[i] == '§' {
+                    let mut j = i + 1;
+                    while j < c.len() && NUM.contains(&c[j]) {
+                        j += 1;
+                    }
+                    let run: String = c[i + 1..j].iter().collect();
+                    if let Some(v) = cn2int(&run) {
+                        out.push(v);
+                    }
+                    i = j;
+                    continue;
+                }
+                i += 1;
+            }
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+        let nums_then_chapter = |c: &[char]| -> Vec<u32> {
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < c.len() {
+                if c[i] == '章' && i > 0 && NUM.contains(&c[i - 1]) {
+                    let mut j = i;
+                    while j > 0 && NUM.contains(&c[j - 1]) {
+                        j -= 1;
+                    }
+                    let run: String = c[j..i].iter().collect();
+                    if let Some(v) = cn2int(&run) {
+                        out.push(v);
+                    }
+                }
+                i += 1;
+            }
+            out
+        };
+
+        // 3) 逐条对撞。S 侧（自称"纳入多少表"与枚举的 derivator 章集）。
+        let l_enum = one(m_enum.as_str());
+        assert_eq!(count_before(&l_enum, "张表"), s.len() as u32, "自称的 derivator 总表数与现推 S 不符");
+        assert_eq!(chapter_nums(&l_enum), s, "自称枚举的 derivator 章集与现推 S 不符");
+        let l_complete = one(m_complete.as_str());
+        assert_eq!(nums_then_chapter(&l_complete), vec![s.len() as u32], "自称「这 N 章」的完整性与现推 S 不符");
+        let l_included = one(m_included.as_str());
+        assert_eq!(count_before(&l_included, "张表"), s.len() as u32, "自称已纳入的表数与现推 S 不符");
+        // U 侧（自称"未纳入的那几章"＝补集）。
+        for m in [&m_complement, &m_scattered, &m_unincluded] {
+            let l = one(m.as_str());
+            assert_eq!(chapter_nums(&l), u, "自称的未纳入章集与现推补集 U 不符");
+            assert_eq!(nums_then_chapter(&l), vec![u.len() as u32], "自称未纳入的章数与现推补集不符");
+        }
+
+        // 4) 净网 backstop：任何"自称句式"的原始行必须已登记／带书名号引文／在豁免表里。
+        //    registered 复用上面碎片拼好的 var——直接写全串会让本函数源码自身也被净网当成"一处声称"。
+        let registered = [&m_included, &m_enum, &m_complete, &m_complement, &m_scattered, &m_unincluded];
+        // 内容子串豁免（旧帧把计数修到某数的**叙事**，行号会漂故不按行号）。
+        let exempt = ["各数一遍"];
+        let na_then_chapter_ge2 = |c: &[char]| -> bool {
+            for i in 0..c.len() {
+                if c[i] == '那' {
+                    let mut j = i + 1;
+                    while j < c.len() && NUM.contains(&c[j]) {
+                        j += 1;
+                    }
+                    if j > i + 1 && j < c.len() && c[j] == '章' {
+                        let run: String = c[i + 1..j].iter().collect();
+                        if cn2int(&run).is_some_and(|v| v >= 2) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        };
+        for line in raw.lines() {
+            let c: Vec<char> = line.chars().collect();
+            if !(line.contains(tok.as_str()) || na_then_chapter_ge2(&c)) {
+                continue;
+            }
+            let ok = registered.iter().any(|m| line.contains(m.as_str()))
+                || line.contains('「')
+                || line.contains('」')
+                || exempt.iter().any(|m| line.contains(m));
+            assert!(ok, "自称计数行未登记进 D23 键表（新漂移？）：{}", line.trim());
+        }
+    }
+
 
     /// 反向覆盖机检的**唯一人工入口**（§廿二 表体里不算规则的行），逐条必须写理由。
     /// 提到模块级而不藏在测试函数里：债表机检要拿它做交叉核对——同一条缺口不能既躺在排除表里
