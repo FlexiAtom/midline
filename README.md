@@ -75,7 +75,7 @@ cargo build --release     # 产物：target/release/midline
 cargo test
 ```
 
-169 项全在仓库内，含两类值得一提的：
+171 项全在仓库内，含两类值得一提的：
 
 - **确定性**：同种子必得同结果（战斗、AI 托管、Boss 脚本都靠这条活着）。
 - **反向覆盖机检**：规则文档每一章的"必检行"必须由代码指回——锚点指回、挂成有去处的债、或被文档自身的
@@ -288,9 +288,11 @@ MIDLINE_DOC_SKIP=1 cargo test              # 明确跳过那几条推导器
 
 两个都不给时锚点推导器**报错退出**而不是静默通过——"文档不在"不该被读成"规则都已覆盖"。
 
+- **第十三步·其十三「跨侧同号自排除·判据改复合键」**落地 `cross-side-id-collision`（pool→working→**finished/done**）：`Battle::new` 每关从 `id=1` 重发号、继承牌又保留上一关的号 ⇒ **两侧可同号**；"按 id 自排除"的判据只判 id 不判 side ⇒ **跨侧同号同列**的敌牌被误当成"自己"免掉一发业火（或反向漏加）。这不是洁癖——它改逐帧结果。按池档"先有红样本才动代码"的红线**先证后修**：可达性经真实入口 `player_place`／`enemy_place` 双双 Ok 坐实（两侧同号牌真能落同一列），判定分歧**实测** `add_flame_col` 改前 `[0,0,2]`／改后 `[0,2,2]`——受害牌 +2 焰，红差坐实 ⇒ 才动码。**修法＝①复合键 `(SideK,u64)`**（不改发号、不破复现、不碰"载入不重排／不重编号"的存档纪律）：`add_flame_col` 的 `except` 由 `Option<u64>` 升为 `Option<(SideK,u64)>`，两处**跨侧**发火点跟随——`ThresholdSameColFlame2` 传 `Some((side,id))`、`ThresholdFullColDamage3` 的内联 `card.id == id` 加 `&& s == side`；同侧点（`ThresholdAllyColFlame2` 只单侧迭代、玩家单槽不可能同列同号）**不动**。**两把常驻锁**入 `mod rule_tests`（`cross_side_same_id_card_in_same_column_is_not_exempted…`／`threshold_burst_does_not_exempt_opposite_side_same_id…`，后者端到端走真实触发臂）。电池加 **M131**：把复合键退化成"只看 id 不看 side"，**实测 2 红**＝两把锁当场各自喊——正证它们咬的是复合键语义、不是碰巧绿。**五把尺现量**：`cargo test` **169→171 全绿**（+2 常驻锁）、clippy 停基线 **bin 7／all-targets 10**（无新增）、盘点尺生产面 **441 不变**／挂债 **36 不变**／有推导器章 **20**（本帧只动 battle.rs 跨侧点＋`#[cfg(test)]` 测，未碰 model.rs 面口径）、`byte-baseline` 10 场景逐字节**双臂 SAME** 且另扩逐关长梯×多种子亦全 SAME（贪心轨迹从不触发碰撞）、电池 **131→132 记录**（M0 171 绿、无 PATCH_FAIL／编译失败／no-op，盲区集仍＝M19＋六条 arity 降级）。**两处诚实边界（禁忌6/7）**：① 本修法只让**排除判据**带上 side，**不消除 id 物理重号** ⇒ 存档侧"禁加 id 唯一性校验"的纪律**不撤**（池档 §4 那句"①之后存档侧例外可撤"被证伪、已在池档更正）；② byte-baseline 与长梯 SAME 只说明这族 seed **从未触发**碰撞，"行为中性"是"未被这些读数触发"、**非**"每关每档证过"，正确性由两把常驻锁**独立固定**（镜像其十二 ai_value 的分工）。§2 三行反证全闭合（可达＝已测／改判定＝实测红差 +2／修①不破复现＝实测全 SAME）⇒ 本档 complete。
+
 另外四把可复跑的尺也进了版本库：`scripts/byte-baseline.sh`（把 10 个场景跑成文本再比 md5，
 用来证明"只动注释、没动行为"；其中 p9＝每日挑战，种子按 UTC 日界算 ⇒ 跨天复跑它必然换 md5，
-那是日历在走，不是行为漂了）、`scripts/mutation-battery.sh`（129 条反证变异＝**131 条记录**，外加 M0 不打补丁的对照与 M19
+那是日历在走，不是行为漂了）、`scripts/mutation-battery.sh`（130 条反证变异＝**132 条记录**，外加 M0 不打补丁的对照与 M19
 复原收尾，每条变异都必须把某一条测试撞红，并记下**红在哪条测、红在哪一层**——`run()` 连 panic 正文前几行一起打，
 多层等值的章里"落点"要按层号读；但**红字数的单位是"测"不是"层"**（§四 帧由 M94／M95 量正：同一条测里 assert 串行，
 先炸那层就是这次读数的全部，别把"两层都会喊"写成"两红"）、`scripts/battery-preflight.sh`（半分钟量完"每条变异的补丁
