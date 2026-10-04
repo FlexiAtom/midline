@@ -26,7 +26,7 @@ use crate::model::CardInst;
 
 /// 一张牌的可见面。`threshold` 的口径由构造点决定：在场格＝该格生效阈值，手牌＝基础阈值。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CardView {
+pub(crate) struct CardView {
     pub name: &'static str,
     pub cost: i32,
     pub hp: i32,
@@ -45,7 +45,7 @@ pub struct CardView {
 /// 一个持业者（蜡烛）。`karma`/`column_zone` 为 `None` 表示"这一根不显示该项"——
 /// 业力是敌方共用一池故只在第一根上给；受击列区只属于双持业者的第二根。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HolderView {
+pub(crate) struct HolderView {
     pub name: &'static str,
     pub hp: i32,
     pub cap: i32,
@@ -55,7 +55,7 @@ pub struct HolderView {
 
 /// 我方持业者。称呼（"我方持业者"）留在渲染层，不进快照——那是文案不是事实。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PlayerView {
+pub(crate) struct PlayerView {
     pub hp: i32,
     pub cap: i32,
     pub karma: i32,
@@ -64,14 +64,14 @@ pub struct PlayerView {
 
 /// Boss 特殊规则的可见文本（壳层直接显示，不需要认识 `BossRule` 枚举）。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuleView {
+pub(crate) struct RuleView {
     pub label: &'static str,
     pub text: &'static str,
 }
 
 /// 一帧完整战况。12 个格位固定 4 列（P1-P4 / E1-E8），空格为 `None`。 §廿三:981 我方4×1＋敌方4×2 共用一张 4 列棋盘。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Board {
+pub(crate) struct Board {
     /// 敌方持业者，1 或 2 根（双持只在炎与冰）。
     pub enemy_holders: Vec<HolderView>,
     pub rule: Option<RuleView>,
@@ -89,7 +89,7 @@ pub struct Board {
 }
 
 impl Board {
-    pub fn log_tail(&self, n: usize) -> String {
+    pub(crate) fn log_tail(&self, n: usize) -> String {
         let start = self.log.len().saturating_sub(n);
         self.log[start..].join("\n")
     }
@@ -113,7 +113,7 @@ fn card_view(c: &CardInst, threshold: i32) -> CardView {
 
 impl Battle {
     /// 取本帧可见快照。渲染层改读它，壳层也读它——**同一个上游**，不允许出现第二个真相源。
-    pub fn view(&self) -> Board {
+    pub(crate) fn view(&self) -> Board {
         let mut enemy_back: [Option<CardView>; 4] = [None, None, None, None];
         let mut enemy_front: [Option<CardView>; 4] = [None, None, None, None];
         let mut player_front: [Option<CardView>; 4] = [None, None, None, None];

@@ -28,7 +28,7 @@ use crate::battle::{Battle, Outcome};
 use crate::model::CardInst;
 
 /// 会话层对外的全部接缝。实现方＝壳。
-pub trait Host {
+pub(crate) trait Host {
     /// 原样输出，不补换行。
     fn write(&mut self, s: &str);
     /// 打一帧棋盘。改前＝`print!("\n{}", render::render(b))`。
@@ -50,7 +50,7 @@ pub trait Host {
 }
 
 /// 一关的固定入参。头报文本由调用方算好传入（`level_head` 是 CLI 文案，且 2D 未必用它）。
-pub struct LevelCfg {
+pub(crate) struct LevelCfg {
     pub head: String,
     pub level: u32,
     /// 后面还有没有关：只影响败北那一句（阵亡自造牌永久消失／本局到此为止）。
@@ -59,7 +59,7 @@ pub struct LevelCfg {
 
 /// 一关是怎么结束的。
 #[derive(Debug)]
-pub enum Terminus {
+pub(crate) enum Terminus {
     /// 打完，带战斗结果——关卡推进（level+1／终结文案）归调用方。
     Done(Outcome),
     /// 玩家要求离开这一局。`msg` 是走之前该打的那一行；`None`＝一个字节都不打
@@ -70,7 +70,7 @@ pub enum Terminus {
 /// 跑完一关。两条 EOF 语义分开对待，且各自与改前同一分支：
 /// **战斗内** EOF＝输入结束 ⇒ `Quit{msg:Some("输入结束，退出。")}`；
 /// **准备/结算** EOF＝视作 `go` ⇒ 正常离开该阶段，继续往下走（不退出）。
-pub fn run_level<H: Host>(host: &mut H, cfg: &LevelCfg, inherit: &mut Vec<CardInst>, karma: &mut i32) -> Terminus {
+pub(crate) fn run_level<H: Host>(host: &mut H, cfg: &LevelCfg, inherit: &mut Vec<CardInst>, karma: &mut i32) -> Terminus {
     host.write(&format!("\n===== {} · 准备阶段 =====\n", cfg.head));
     if let Some(t) = settle_loop(host, inherit, karma, false) {
         return t;

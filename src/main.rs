@@ -26,6 +26,7 @@ mod render;
 mod rng;
 mod save;
 mod session;
+mod tui;
 mod view;
 
 use battle::Difficulty;
@@ -57,14 +58,16 @@ const USAGE: &str = "\
 战斗内命令：
   p <手牌idx> <P1-P4> 放置 | s <P1-P4> 场上献祭 | sh <手牌idx> 手牌献祭
   di|ds 抽继承堆/开端堆 | e 结束回合 | l 日志 | b Boss档案 | q 退出
-结算/准备阶段：fuse <主> <副> / up <idx> power|thr|skill / drop <idx> / move <从> <到> / go";
+结算/准备阶段：fuse <主> <副> / up <idx> power|thr|skill / drop <idx> / move <从> <到> / go
+交互界面：
+  --tui               TUI 逐帧重绘 + 行输入（本版仅单关跳打 boss <id> / play --boss <id>；整局爬梯与存档待 L3-d）";
 
 /// 吃一个值的长选项（其值不算位置参数）。
 const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", "--save"];
 
 /// 不带值的长选项（出现即为真）。它必须单列一张表：漏了它，`--resume` 会被当成未知选项，
 /// 而它的值（如果紧跟位置参数）又不会被吞掉——两处错法互不相干，一起改才对齐。
-const BOOL_FLAGS: &[&str] = &["--resume"];
+const BOOL_FLAGS: &[&str] = &["--resume", "--tui"];
 
 /// 未知长选项一律报错：`auto 1 --bos all` 静默当普通对局跑完，比一条错误难查得多。
 fn reject_unknown_flags(args: &[String]) {
@@ -109,6 +112,8 @@ fn main() {
     // 无命令词、直接给标志（`midline --seed 42`）＝ play，旧版即如此，不当未知命令。
     let cmd = if cmd.starts_with('-') { "play" } else { cmd };
     gate_save_flags(cmd, &args);
+    gate_tui(cmd, &args);
+    let tui = has_flag(&args, "--tui");
     match cmd {
         "auto" => {
             let n: u32 = positionals(&args).first().and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -122,11 +127,25 @@ fn main() {
         "mainline" => meta::mainline_run(seed, faction, diff, save_path(&args), has_flag(&args, "--resume")),
         "play" => match value_flag(&args, "--boss") {
             Flag::Absent => meta::play_run(seed, faction, diff),
-            Flag::Value(raw) => meta::boss_run(seed, faction, diff, require_boss(raw)),
+            Flag::Value(raw) => {
+                let id = require_boss(raw);
+                if tui {
+                    tui::run(seed, faction, id)
+                } else {
+                    meta::boss_run(seed, faction, diff, id)
+                }
+            }
             Flag::Missing => bad_boss_arg(),
         },
         "boss" => match positionals(&args).first() {
-            Some(raw) => meta::boss_run(seed, faction, diff, require_boss(raw)),
+            Some(raw) => {
+                let id = require_boss(raw);
+                if tui {
+                    tui::run(seed, faction, id)
+                } else {
+                    meta::boss_run(seed, faction, diff, id)
+                }
+            }
             None => {
                 println!("✖ boss 需要一个参数：1-5 / luzhu xuejue yingzhang yanbing zhongying / 炉主 雪爵 影长 炎与冰 终影");
                 std::process::exit(2);
@@ -152,6 +171,25 @@ fn gate_save_flags(cmd: &str, args: &[String]) {
             println!("✖ {flag} 不用于「{cmd}」：只有 mainline / daily 落盘，play 与 boss/auto 是跳打。");
             std::process::exit(2);
         }
+    }
+}
+
+/// `--tui` 的作用域：本版只驱动**单关 Boss 跳打**（`boss <id>` / `play --boss <id>`）。
+/// 整局爬梯（`play` 无限梯 / `mainline` / `daily`）与 `auto` 尚未接壳——那要先做 L3-d
+/// （`one_level`/`ladder` 把"关隘头报＋逐关推进＋落盘/exit"泛型化到壳可驱动）。
+/// 带着本版不认的 `--tui` 一律报错退出，**不静默回退成文本路**——"以为开了 TUI、其实没开"是最难查的失真。
+fn gate_tui(cmd: &str, args: &[String]) {
+    if !has_flag(args, "--tui") {
+        return;
+    }
+    let ok = match cmd {
+        "boss" => true,
+        "play" => has_flag(args, "--boss"),
+        _ => false,
+    };
+    if !ok {
+        println!("✖ --tui 本版只支持单关跳打（boss <id> / play --boss <id>）：整局爬梯与存档要先做 L3-d。");
+        std::process::exit(2);
     }
 }
 

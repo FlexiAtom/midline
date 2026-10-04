@@ -31,11 +31,11 @@ use crate::model::{CardInst, short_card};
 use crate::render;
 
 /// 帮助行。逐字抄自改前的 `meta.rs`，它是这局游戏里唯一被机检钉住的 UI 文案。
-pub const HELP: &str = "p <手牌idx> <P1-P4> 放置 | s <Pn> 场上献祭 | sh <idx> 手牌献祭 | di/ds 抽继承/开端 | e 结束回合 | l 日志 | b Boss档案 | q 退出";
+pub(crate) const HELP: &str = "p <手牌idx> <P1-P4> 放置 | s <Pn> 场上献祭 | sh <idx> 手牌献祭 | di/ds 抽继承/开端 | e 结束回合 | l 日志 | b Boss档案 | q 退出";
 
 /// 一条已解析的战斗内命令。
 #[derive(Debug)]
-pub enum Command<'a> {
+pub(crate) enum Command<'a> {
     // §九:318 战斗阶段不可融合＝这张战斗内词表里**没有** fuse 这一项（融合只长在下面那张 SettleCommand 词表上）。
     // 封闭名单（谁在调 fuse_cards）由 model.rs 的 §九 推导器逐条点名，锚点指回证不了"战斗里没有这个东西"。
     Place { hand_idx: usize, slot: usize },
@@ -59,7 +59,7 @@ pub enum Command<'a> {
 
 /// 执行结果：要么什么都没发生，要么是一段该显示的文本，要么是要退出。
 #[derive(Debug)]
-pub enum Exec {
+pub(crate) enum Exec {
     Done,
     /// 正常输出（日志、档案、帮助）。CLI 用 `println!` 落它。
     Print(String),
@@ -79,7 +79,7 @@ pub enum Exec {
 // 生产构建里今天没有调用方（调用方＝TUI/2D 壳），用 `expect` 而不是 `allow`：壳真接上那一刻它会报"未满足"，逼着删掉这条豁免。
 // 挂成 `cfg_attr(not(test))` 是为了不在测试构建里反噬——测试正是当下的唯一调用方。
 #[cfg_attr(not(test), expect(dead_code, reason = "L2 接缝等壳来调；壳接上后请删掉这条 expect"))]
-pub fn probe(b: &Battle, line: &str) -> Verdict {
+pub(crate) fn probe(b: &Battle, line: &str) -> Verdict {
     let mut mirror = b.clone();
     match execute(&mut mirror, parse(line)) {
         Exec::Refused(reason) => Verdict::Illegal(reason),
@@ -90,7 +90,7 @@ pub fn probe(b: &Battle, line: &str) -> Verdict {
 /// [`probe`] 的答复。只有两个值是有意义的：合法性；不合法时引擎自己的那句理由。
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), expect(dead_code, reason = "与 `probe` 同一条"))]
-pub enum Verdict {
+pub(crate) enum Verdict {
     Legal,
     /// 引擎给出的拒绝理由，与真跑一遍 `execute` 拿到的 `Exec::Refused` **同一句**（不是复述）。
     Illegal(String),
@@ -123,7 +123,7 @@ fn parse_index(s: &str) -> usize {
 
 /// 一行输入 → 一条命令。arity 判定与改前的字符串 match 逐条对齐：只有 `p`(3)／`s`(2)／`sh`(2) 卡长度，
 /// `di`/`ds`/`e`/`l`/`b`/`q`/`h` 多带参数照旧忽略——「多余参数报错」是新行为，不在这次重构的范围里。
-pub fn parse(line: &str) -> Command<'_> {
+pub(crate) fn parse(line: &str) -> Command<'_> {
     let mut it = line.split_whitespace();
     let Some(word) = it.next() else { return Command::Blank };
     let a = it.next();
@@ -150,7 +150,7 @@ pub fn parse(line: &str) -> Command<'_> {
 }
 
 /// 执行一条命令。`Reject`／`Unknown`／`Blank` 三条路径一个字都不改引擎状态。
-pub fn execute(b: &mut Battle, cmd: Command<'_>) -> Exec {
+pub(crate) fn execute(b: &mut Battle, cmd: Command<'_>) -> Exec {
     let r = match cmd {
         Command::Place { hand_idx, slot } => b.player_place(hand_idx, slot),
         Command::SacrificeField { slot } => b.player_sacrifice_field(slot),
@@ -181,7 +181,7 @@ pub fn execute(b: &mut Battle, cmd: Command<'_>) -> Exec {
 
 /// 结算阶段的一条命令。词表与 arity 逐条抄自改前 `meta.rs::settle_phase`。
 #[derive(Debug)]
-pub enum SettleCommand<'a> {
+pub(crate) enum SettleCommand<'a> {
     /// `go`——进入下一关（准备阶段＝直接开战）。
     Go,
     /// `q`/`quit`/`exit`。旧实现在这里 `process::exit(0)` 且**不输出任何文本**，那个"无文案"也是行为的一部分。
@@ -196,7 +196,7 @@ pub enum SettleCommand<'a> {
 
 /// 结算阶段一条命令的产出。
 #[derive(Debug)]
-pub enum SettleStep {
+pub(crate) enum SettleStep {
     /// 阶段继续，先把这些行显示出去。
     Stay(Vec<String>),
     /// 阶段结束（`go`，与旧实现里 stdin 读到 EOF 走的是同一条路）。
@@ -206,7 +206,7 @@ pub enum SettleStep {
 }
 
 /// 一行输入 → 结算阶段的一条命令。
-pub fn parse_settle(line: &str) -> SettleCommand<'_> {
+pub(crate) fn parse_settle(line: &str) -> SettleCommand<'_> {
     let mut it = line.split_whitespace();
     let Some(word) = it.next() else { return SettleCommand::Blank };
     let a = it.next();
@@ -229,7 +229,7 @@ pub fn parse_settle(line: &str) -> SettleCommand<'_> {
 /// 「✓ 排序：…」。拆成两截要么改文案（撞逐字节尺），要么让壳去猜哪条该加什么。归一属"文案改造"另一帧的事，
 /// 现在登记不实现。
 /// `up_used` 是"本次结算限 1 张"的闸（§十一:402），由调用方按阶段持有——它不进存档，所以跨关自然归零。
-pub fn execute_settle(
+pub(crate) fn execute_settle(
     inherit: &mut Vec<CardInst>,
     karma: &mut i32,
     up_used: &mut bool,
@@ -282,7 +282,7 @@ pub fn execute_settle(
 }
 
 /// 继承堆的一条清单行。改前住在 `meta.rs` 的循环里，文案逐字搬来。
-pub fn inherit_line(i: usize, c: &CardInst) -> String {
+pub(crate) fn inherit_line(i: usize, c: &CardInst) -> String {
     format!(
         "  [{i}] {} | 特性:{} | 死过{}次{}",
         short_card(c),
@@ -293,7 +293,7 @@ pub fn inherit_line(i: usize, c: &CardInst) -> String {
 }
 
 /// 阶段提示行（`post_battle` 决定是通关奖励口径还是纯准备口径）。
-pub fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
+pub(crate) fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
     if post_battle {
         format!(
             "（可保留业力 {karma}：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张{}）；drop <idx>；move <从> <到>；go）",
@@ -306,7 +306,7 @@ pub fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
 
 /// 一整个「继承堆清单 + 提示」文本块（每行自带换行）。调用方接 `> ` 提示符。
 /// 它是逐字搬来的：改前三段 `println!` 的顺序、括号、全角冒号一个字没动。
-pub fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆；§十:386 准备阶段·可查看继承堆所有卡牌（整堆逐行列出，不改状态）
+pub(crate) fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆；§十:386 准备阶段·可查看继承堆所有卡牌（整堆逐行列出，不改状态）
     let mut s = format!("继承堆（{}张）：\n", inherit.len());
     for (i, c) in inherit.iter().enumerate() {
         s.push_str(&inherit_line(i, c));

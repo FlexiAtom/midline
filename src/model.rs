@@ -1526,7 +1526,7 @@ mod anchor_tests {
             crate::battle::CHAPTER_STRENGTH_CAP
         );
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let up_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap(), "pub fn upgrade_card");
+        let up_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap(), "pub(crate) fn upgrade_card");
         assert!(up_body.contains(&format!("upgrades >= {cap}")), "§十一:404 上限 {cap}：玩家侧 `upgrade_card` 的当场拒闸 `upgrades >= {cap}` 没了 ⇒ 升级不封顶");
         let pc_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/save.rs")).unwrap(), "fn parse_card");
         assert!(pc_body.contains(&format!("upgrades > {cap}")), "§十一:404 上限 {cap}：存档越界闸 `upgrades > {cap}` 没了 ⇒ 坏档能把升级数写超上限");
@@ -1551,7 +1551,7 @@ mod anchor_tests {
             "§十一:402「限1张」的 bool 声明 `up_used: &mut bool` 实测 {} 处 ⇒ 类型一改（如换成计数）这个「1」就没人对账了",
             code_occurrences("up_used: &mut bool")
         );
-        let es_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/command.rs")).unwrap(), "pub fn execute_settle");
+        let es_body = s7_fn_body(&std::fs::read_to_string(manifest.join("src/command.rs")).unwrap(), "pub(crate) fn execute_settle");
         assert!(
             es_body.contains("SettleCommand::Fuse") && es_body.contains("SettleCommand::Up"),
             "§十一:406「先升级或先融合自由选择」：结算函数里 fuse 臂与 up 臂没同时在场 ⇒ 两条命令不再并列，「无强制顺序」这条读不出来了"
@@ -1914,7 +1914,7 @@ mod anchor_tests {
         let digits = |q: usize| -> String { at(q).chars().filter(char::is_ascii_digit).collect() };
 
         // 371／376：collect_survivors 函数体（s7_fn_body 已剔注释）里既有 append（带入）、又有 > 10 的 build 侧上限。
-        let cs = s7_fn_body(&std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap(), "pub fn collect_survivors");
+        let cs = s7_fn_body(&std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap(), "pub(crate) fn collect_survivors");
         assert!(cs.contains("inherit.append"), "§十:371「自造牌可带入下一关」：`collect_survivors` 里没有 `inherit.append` ⇒ 幸存者不再并入继承堆，带入这条路断了");
         assert!(cs.contains("> 10"), "§十:376「继承堆上限10」：`collect_survivors` 里没有 `> 10` 那道 build 侧闸 ⇒ 堆能涨过上限");
         assert!(digits(376).contains("10"), "§十:376 文档行「{}」的 ASCII 数字不含 10 ⇒ 上限措辞变了，上面撞的 `> 10` 就对不上", at(376));
@@ -1947,7 +1947,7 @@ mod anchor_tests {
         assert_eq!(digits(383), "8", "§十:383「{}」里的 ASCII 数字不是单个 8 ⇒ 上限措辞变了，上面 `HAND_LIMIT==8` 就对不上", at(383));
 
         // 386–389：准备阶段四条动作各有唯一的 handler 落点（挡住"只在注释里提继承堆"的假绿）。
-        assert_eq!(code_occurrences("pub fn settle_listing"), 1, "§十:386「可查看继承堆所有卡牌」：`settle_listing` 定义实测 {} 处 ⇒ 查看整堆的实现没了或被拆", code_occurrences("pub fn settle_listing"));
+        assert_eq!(code_occurrences("pub(crate) fn settle_listing"), 1, "§十:386「可查看继承堆所有卡牌」：`settle_listing` 定义实测 {} 处 ⇒ 查看整堆的实现没了或被拆", code_occurrences("pub(crate) fn settle_listing"));
         assert_eq!(code_occurrences("SettleCommand::Fuse { main, sub } =>"), 1, "§十:388「可融合继承堆中的卡牌」：execute_settle 里 Fuse handler 臂实测 {} 处（应为 1）", code_occurrences("SettleCommand::Fuse { main, sub } =>"));
         assert_eq!(code_occurrences("SettleCommand::Drop(i) =>"), 1, "§十:387「可弃置继承堆中的卡牌」：execute_settle 里 Drop handler 臂实测 {} 处（应为 1）", code_occurrences("SettleCommand::Drop(i) =>"));
         assert_eq!(code_occurrences("SettleCommand::Move { from, to } =>"), 1, "§十:389「可调整继承堆顺序」：execute_settle 里 Move handler 臂实测 {} 处（应为 1）", code_occurrences("SettleCommand::Move { from, to } =>"));
@@ -2489,7 +2489,7 @@ mod anchor_tests {
         }
 
         // —— ⑤ 融合行＋设计意图 ↔ `fuse_cards` 函数体形状 ——
-        let body = s7_fn_body(&prog, "pub fn fuse_cards(");
+        let body = s7_fn_body(&prog, "pub(crate) fn fuse_cards(");
         let intent = at(282);
         for (item, tr_cell, sk_cell) in &cmp {
             if item != "融合" {
@@ -3680,7 +3680,7 @@ mod anchor_tests {
         );
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let prog = std::fs::read_to_string(manifest.join("src/progress.rs")).unwrap();
-        let body = s7_fn_body(&prog, "pub fn fuse_cards(");
+        let body = s7_fn_body(&prog, "pub(crate) fn fuse_cards(");
         assert_eq!(
             body.matches("is_starter()").count(),
             2,
