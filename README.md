@@ -2,9 +2,11 @@
 
 《中线》核心规则引擎的命令行实现。Rust，**零外部依赖**（`Cargo.lock` 里只有 `midline` 自己）。
 
-**目前只有 CLI。** 这份代码是后续形态（TUI → 2D → 3D）的底座，画面层还没开始；规则文档里写的目标平台是
-Android + Godot，本仓库交付的是它的**可执行规则内核**，以及一整套能对着文档复核的机检。规则规格文档
-《中线》完整玩法方案（23 章）不随本仓库分发。
+**主体仍是 CLI；画面层刚起步。** TUI 已有**第一个验证帧**（第十四步·其一）：`--tui` 只放行**单关跳打**
+（`boss <id>`／`play --boss <id>`），逐帧重绘 + 行输入（本版不上 raw，无方向键/备用屏），驱动的是**同一台** `session::run_level` 阶段机
+⇒ 引擎零改动、默认文本路逐字节不变；整局爬梯与存档走 TUI 要先做 L3-d，带 `--tui` 撞上去**显式报错、不静默回退**。2D/3D 未开始。
+规则文档里写的目标平台是 Android + Godot，本仓库交付的是它的**可执行规则内核 + 一整套对文档复核的机检**。
+规则规格文档《中线》完整玩法方案（23 章）不随本仓库分发。
 
 ## 玩法一分钟版
 
@@ -52,6 +54,7 @@ cargo build --release     # 产物：target/release/midline
 | `progress recover [--save F]` | 把当前档改名留证 `.bad-N`，下次从空档开始 |
 | `auto [N] [--difficulty X]` | AI 托管模拟 N 局（默认 1，不落盘） |
 | `auto [N] --boss all\|<id>` | Boss 脚本冒烟：N 轮 × 5 个（或指定） |
+| `… --tui` | TUI 逐帧重绘 + 行输入；**本版仅单关跳打**（`boss <id>`／`play --boss <id>`），爬梯/存档/`auto` 带 `--tui` 显式报错（L3-d 前） |
 
 `--faction` 1＝烬火教团／2＝霜誓守卫／3＝幽影议会。不给 `--seed`／`--faction` 时＝种子 7·烬火；
 给了却读不懂会直接报错退出（`rc=2`），不会静默回退成别的值。
@@ -289,6 +292,21 @@ MIDLINE_DOC_SKIP=1 cargo test              # 明确跳过那几条推导器
 两个都不给时锚点推导器**报错退出**而不是静默通过——"文档不在"不该被读成"规则都已覆盖"。
 
 - **第十三步·其十三「跨侧同号自排除·判据改复合键」**落地 `cross-side-id-collision`（pool→working→**finished/done**）：`Battle::new` 每关从 `id=1` 重发号、继承牌又保留上一关的号 ⇒ **两侧可同号**；"按 id 自排除"的判据只判 id 不判 side ⇒ **跨侧同号同列**的敌牌被误当成"自己"免掉一发业火（或反向漏加）。这不是洁癖——它改逐帧结果。按池档"先有红样本才动代码"的红线**先证后修**：可达性经真实入口 `player_place`／`enemy_place` 双双 Ok 坐实（两侧同号牌真能落同一列），判定分歧**实测** `add_flame_col` 改前 `[0,0,2]`／改后 `[0,2,2]`——受害牌 +2 焰，红差坐实 ⇒ 才动码。**修法＝①复合键 `(SideK,u64)`**（不改发号、不破复现、不碰"载入不重排／不重编号"的存档纪律）：`add_flame_col` 的 `except` 由 `Option<u64>` 升为 `Option<(SideK,u64)>`，两处**跨侧**发火点跟随——`ThresholdSameColFlame2` 传 `Some((side,id))`、`ThresholdFullColDamage3` 的内联 `card.id == id` 加 `&& s == side`；同侧点（`ThresholdAllyColFlame2` 只单侧迭代、玩家单槽不可能同列同号）**不动**。**两把常驻锁**入 `mod rule_tests`（`cross_side_same_id_card_in_same_column_is_not_exempted…`／`threshold_burst_does_not_exempt_opposite_side_same_id…`，后者端到端走真实触发臂）。电池加 **M131**：把复合键退化成"只看 id 不看 side"，**实测 2 红**＝两把锁当场各自喊——正证它们咬的是复合键语义、不是碰巧绿。**五把尺现量**：`cargo test` **169→171 全绿**（+2 常驻锁）、clippy 停基线 **bin 7／all-targets 10**（无新增）、盘点尺生产面 **441 不变**／挂债 **36 不变**／有推导器章 **20**（本帧只动 battle.rs 跨侧点＋`#[cfg(test)]` 测，未碰 model.rs 面口径）、`byte-baseline` 10 场景逐字节**双臂 SAME** 且另扩逐关长梯×多种子亦全 SAME（贪心轨迹从不触发碰撞）、电池 **131→132 记录**（M0 171 绿、无 PATCH_FAIL／编译失败／no-op，盲区集仍＝M19＋六条 arity 降级）。**两处诚实边界（禁忌6/7）**：① 本修法只让**排除判据**带上 side，**不消除 id 物理重号** ⇒ 存档侧"禁加 id 唯一性校验"的纪律**不撤**（池档 §4 那句"①之后存档侧例外可撤"被证伪、已在池档更正）；② byte-baseline 与长梯 SAME 只说明这族 seed **从未触发**碰撞，"行为中性"是"未被这些读数触发"、**非**"每关每档证过"，正确性由两把常驻锁**独立固定**（镜像其十二 ai_value 的分工）。§2 三行反证全闭合（可达＝已测／改判定＝实测红差 +2／修①不破复现＝实测全 SAME）⇒ 本档 complete。
+
+- **第十四步·其一「TUI 套壳起步·验证帧」**按长期令「先上 TUI，然后 2D，最后 3D」启动套壳，本帧**只证缝、不做全屏**：
+  `session::run_level<H: Host>` 本就是 Host 泛型、不认识 meta ⇒ TUI **再实现一遍那 7 条接缝**即可驱动整台阶段机，**引擎零改动**。落地：新建 `src/tui.rs`
+  （`draw(&Battle)->String` 纯函数零 IO、只读 L1 `Board` 排布一帧；`TuiHost` 实现 `Host`：`board`→`\x1b[2J\x1b[H`+`draw`、`read`→`stdin().read_line` 行缓冲、
+  `snapshot_*`→空＝单关跳打不落盘、`new_battle`→`Battle::new_boss`；`run` 走 `run_level`、`Terminus::Quit` **不 `exit`** 只收尾）＋ `main.rs` 接线（`mod tui;`／
+  `BOOL_FLAGS` 加 `--tui`／USAGE 补行／`gate_tui` 照 `gate_save_flags` 形状：仅放行 `boss` 与 `play --boss`，其余带 `--tui` ⇒ 显式 `exit 2` 指向 L3-d **不静默回退**）。
+  **三条人锁定决策**：① 进入＝**仅显式 `--tui`**，默认一律文本；② 本版**不上 raw**（逐帧重绘＋回车提交，零新增终端控制依赖，方向键/备用屏推后）；
+  ③ 防绕过力度＝顺手把缝 `pub`→`pub(crate)`（session/view/command/progress，字段仍 pub、零行为）＋ **fail-loud 机检** `this_program_ships_no_reusable_api_surface`
+  （① 无 `src/lib.rs` ② Cargo 无 `[lib]`/无第二 `[[bin]]` ③ 编译面禁 `serde`/`--json`/`json!(`）；`probe` 本版不消费 ⇒ 其 `expect(dead_code)` 照旧未动。立场本体见 `pool/agpl-anti-circumvention-fused-shell.md`。
+  **五把尺现量**：`cargo test` **171→175 全绿**（+4：draw 读快照 3 条＋防绕过 1 条）、clippy 停基线 **bin 7／all-targets 10**（曾在 tui 测试引入一条 nested-`if-let` 警告，改 `strip_prefix().and_then()` 清回）、
+  盘点尺生产面 **441 不变**／挂债 **36**／推导器章 **20**（deriver 定位串同步全在 `#[cfg(test)]` 域，不碰生产面）、`byte-baseline` 10 场景逐字节**双臂 SAME**（before＝HEAD `5547fb3` 新建 worktree 现构建、after＝本改动）、
+  电池 **132 记录 exit 0** 无 PATCH_FAIL/编译失败/no-op。**负向自检测真撞响**：`touch src/lib.rs`⇒①当场红；往 `view.rs` 塞一行 `"serde json!("`⇒③列出该行号并红；撤销⇒1 passed。**一宗计划护栏缺口（诚实登记）**：`model.rs`
+  反向覆盖推导器按**字面 `pub fn fuse_cards`/`upgrade_card`/`collect_survivors`/`execute_settle`/`settle_listing`** 定位函数体，降 `pub(crate)` 会让定位串落空、推导器 panic（其文案本就写「⇒ 同步这里」）
+  ⇒ 同步那 **6 条 locator 串**（编辑在测试域、生产面 441 不动）；计划原只 grep 电池对 `pub` 的依赖、**没 grep 推导器**，通则入档：**降可见性＝改签名事件，凡按签名定位的尺子须同步**（§十 帧"追加旧牙点名的锚会撞旧牙"同族）。
+  边界照登：`TuiHost::snapshot_*` 空体非遗漏＝与 `boss_run` 同口径不落盘，L3-d 泛型化爬梯后才真填；draw 不写 `§` 锚（排布非规则真值）。收口三问详见 `working/presentation-interface-seam.md` 的「L3·第十四步·其一」。
 
 另外四把可复跑的尺也进了版本库：`scripts/byte-baseline.sh`（把 10 个场景跑成文本再比 md5，
 用来证明"只动注释、没动行为"；其中 p9＝每日挑战，种子按 UTC 日界算 ⇒ 跨天复跑它必然换 md5，
