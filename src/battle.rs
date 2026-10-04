@@ -1290,13 +1290,15 @@ impl Battle {
         }
     }
 
-    pub fn add_flame_col(&mut self, side: SideK, col: usize, amt: i32, except: Option<u64>) {
+    /// 同列（含对侧）发一发业火。`except` 是 `(side,id)` 复合键而非裸 id：每关 `Battle::new` 从 1 重发号，
+    /// 继承牌保留上关号 ⇒ 两侧可同号（见 cross-side-id-collision），只按 id 排除会让对侧同号牌被误当成"自己"免掉这一发。
+    pub fn add_flame_col(&mut self, side: SideK, col: usize, amt: i32, except: Option<(SideK, u64)>) {
         let pb = self.boost_for(SideK::Player);
         let eb = self.boost_for(SideK::Enemy);
         for s in [side, side.other()] {
             let bo = if s == SideK::Player { pb } else { eb };
             for c in self.col_cards_mut(s, col) {
-                if Some(c.id) == except {
+                if Some((s, c.id)) == except {
                     continue;
                 }
                 c.flame += (amt + bo).max(0);
@@ -1366,7 +1368,7 @@ impl Battle {
             let bo = self.boost_for(side);
             self.log.push(format!("🔥 {} 业火爆发 → {}", snap.def.name, tr.label())); // §十六:719 爆发步骤第5动作＝特性效果释放（下面那个 match 就是释放处）；§七:271 业火爆发＝业火值达阈值时触发特性（这句日志就是那个时刻）
             match tr {
-                TraitKind::ThresholdSameColFlame2 => self.add_flame_col(side, col, 2, Some(id)),
+                TraitKind::ThresholdSameColFlame2 => self.add_flame_col(side, col, 2, Some((side, id))),
                 TraitKind::ThresholdAllyColFlame2 => {
                     for a in self.col_cards_mut(side, col) {
                         if a.id != id {
@@ -1391,8 +1393,8 @@ impl Battle {
                         };
                         for r in srows {
                             if let Some(card) = self.slot_mut(s, r, col).as_mut() {
-                                if card.id == id {
-                                    continue;
+                                if card.id == id && s == side {
+                                    continue; // 只排除触发方自己那张；跨侧同号不误免（见 cross-side-id-collision）
                                 }
                                 card.hp -= 3;
                                 card.flame += 3 + sb; // 伤害即业火（三位一体）
@@ -4119,6 +4121,43 @@ mod rule_tests {
 
     fn fresh_battle() -> Battle {
         Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
+    }
+
+    /// cross-side-id-collision 常驻锁①：`add_flame_col` 的排除是 `(side,id)` 复合键。两侧同号同列时，
+    /// 只排除触发方那一张；对侧同号牌**不得**被当成"自己"误免。退回单 id 键 ⇒ `foe_same_id` 拿到 0，本测当场红。
+    #[test]
+    fn cross_side_same_id_card_in_same_column_is_not_exempted_from_col_flame() {
+        let def = *faction_cards(Faction::Ember).iter().find(|d| d.tr == TraitKind::ThresholdSameColFlame2).unwrap();
+        let mut b = Battle::new(4301, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 2);
+        let mut trig = CardInst::new(2, def);
+        trig.hp = def.power;
+        b.p_front[0] = Some(trig);
+        let mut foe_same_id = CardInst::new(2, def); // 跨侧重号：id 同为 2
+        foe_same_id.hp = 10;
+        b.e_front[0] = Some(foe_same_id);
+        let mut foe_control = CardInst::new(999, def); // 对照：不同号
+        foe_control.hp = 10;
+        b.e_back[0] = Some(foe_control);
+        b.add_flame_col(SideK::Player, 0, 2, Some((SideK::Player, 2)));
+        assert_eq!(b.p_front[0].as_ref().unwrap().flame, 0, "触发方自己该被排除");
+        assert_eq!(b.e_front[0].as_ref().unwrap().flame, 2, "对侧同号牌不该被误免——这里若为 0 就是退回单 id 键那个 bug");
+        assert_eq!(b.e_back[0].as_ref().unwrap().flame, 2, "不同号的对照本就吃 +2");
+    }
+
+    /// cross-side-id-collision 常驻锁②：真实触发臂（`ThresholdSameColFlame2` → battle.rs:1369）端到端也不跨侧误免。
+    #[test]
+    fn threshold_burst_does_not_exempt_opposite_side_same_id_card() {
+        let def = *faction_cards(Faction::Ember).iter().find(|d| d.tr == TraitKind::ThresholdSameColFlame2).unwrap();
+        let mut b = Battle::new(4301, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 2);
+        let mut trig = CardInst::new(2, def);
+        trig.hp = def.power;
+        trig.flame = def.threshold; // 达阈值即爆发
+        b.p_front[0] = Some(trig);
+        let mut foe = CardInst::new(2, def); // 敌同列同号
+        foe.hp = 10;
+        b.e_front[0] = Some(foe);
+        b.check_all_triggers();
+        assert_eq!(b.e_front[0].as_ref().unwrap().flame, 2, "玩家焚稿人(id2)爆发同列+2焰，敌同列同号(id2)牌须照吃——被免掉＝跨侧误排除复发");
     }
 
     #[test]

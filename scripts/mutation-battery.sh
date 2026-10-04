@@ -1096,3 +1096,10 @@ n='二十张表／章现在各自带推导器'
 assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n,'十九张表／章现在各自带推导器'))"
 run
+echo "### M131 把 add_flame_col 的 (side,id) 复合键退化成"只看 id、不看 side"（except.map(|(_,e)| e)==Some(c.id)，SideK 是 Copy 故循环内可反复读 except）⇒ 跨侧同号同列重新被误免；应红在 cross-side-id-collision 的两条常驻锁（cross_side_same_id_card_in_same_column_is_not_exempted…／threshold_burst_does_not_exempt_opposite_side_same_id…）——正证这两把锁真咬着复合键语义：退回单 id 键，那发业火当场少算给对侧同号牌，锁当场红"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='                if Some((s, c.id)) == except {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'                if except.map(|(_, e)| e) == Some(c.id) {'))"
+run
