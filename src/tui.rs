@@ -13,23 +13,23 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//! 套壳验证帧（第十四步·其一）：第一个**非-CLI 壳**——纯终端 TUI。
+//! 套壳画帧（第十四步·其二）：终端 TUI 的**帧生产者**——`draw` 把一帧 `Board` 快照排布成清屏重绘的字串。
 //!
 //! 存在理由不是"做个好看界面"，而是**证明那道缝接得住**：`session::run_level` 只认 `Host` 那七条接缝、
-//! 不认识 `meta`，所以只要再实现一遍 `Host`（这里＝`TuiHost`）就能驱动同一台阶段机，引擎一个字节都不改。
-//! 若这一帧成立，2D/3D 换的只是"怎么画、从哪读输入"，不再是"引擎要不要知道壳长什么样"。
+//! 不认识任何壳。其一用一个平行 `TuiHost` 证了"再实现一遍 Host 就能驱动同一台阶段机"；其二更进一步——
+//! **连平行 host 都不要了**：`meta::PlayHost` 加一个 `Frame` 档，`board`/`log_tail` 两处按档取上游
+//! （Text＝`render`、Tui＝本模块 `draw`），整局爬梯（play/mainline/daily/boss）与单关跳打从此走**同一台 host、
+//! 同一条落盘与遭遇逻辑**。2D/3D 换的只是"这一帧怎么画"，在 `Frame` 上加一臂，不再是"要不要再造一个壳"。
 //!
-//! 本版刻意受限（三条人锁决策）：
+//! 本版刻意受限（人锁决策，与其一一致）：
 //! - 只走 `--tui` 显式入口，默认一律文本路径（不自动探测、不误开）。
 //! - **不上 raw/方向键**：逐帧重绘 + 行输入（回车提交），天然复用 `Host::read`（本就是阻塞读一行）⇒ **零新增终端控制依赖**。
-//! - 只驱动**单关 Boss 跳打**（`has_next:false`、不落盘）：整局爬梯要先做 L3-d，见 `main.rs::gate_tui`。
+//!   延后项：alt-screen、退出时复位屏幕（`q` 走 `process::exit` 不抹回原屏）——见缝文档的诚实边界登记。
 //!
-//! 依赖方向同 `meta`：`tui → battle / boss / model / session / view`，不认识 CLI 参数解析。
-//! 呈现只经 `Battle::view()` 取 L1 快照（`view::Board`），不直读引擎字段——与 render 同一上游，不开第二真相源。
+//! 本模块是纯呈现：`draw` 只吃 `Battle::view()` 的 L1 快照（`view::Board`），不直读引擎字段、不碰 stdin/stdout——
+//! 与 `render` 同一上游，不开第二真相源。依赖方向因此收窄到 `tui → battle / view`。
 
-use crate::battle::{Battle, Outcome};
-use crate::boss::BossId;
-use crate::model::{CardInst, Faction};
+use crate::battle::Battle;
 use crate::view::CardView;
 
 /// 一格的可见简述——只用 `CardView` 的字段，不认引擎内部。
@@ -88,76 +88,12 @@ pub(crate) fn draw(b: &Battle) -> String {
     s
 }
 
-/// `session::Host` 的 TUI 实现——与 `CliHost` 驱动同一台阶段机，差别只在两处接缝：
-/// `board` 清屏后打 `draw`（而非逐帧追加的 ASCII），`snapshot_*` 空实现（单关跳打不落盘）。
-/// `write`／`read` 与 `CliHost` 口径一致：原样打印不补换行、读一行连行尾。
-/// 本结构体是全仓除 `CliHost` 外另一个被允许 `stdin().read_line()` 的地方（`process::exit` 不在此——Quit 只收尾不 exit）。
-pub(crate) struct TuiHost {
-    seed: u64,
-    faction: Faction,
-    /// 本关 Boss（单关跳打固定是一场 Boss 战）。
-    boss: BossId,
-}
-
-impl crate::session::Host for TuiHost {
-    fn write(&mut self, s: &str) {
-        use std::io::Write;
-        print!("{s}");
-        std::io::stdout().flush().ok();
-    }
-
-    fn board(&mut self, b: &Battle) {
-        use std::io::Write;
-        // 清屏 + 归位光标，再打这一帧。逐帧**重绘**（本版无 diff 刷新、无动画）。
-        print!("\x1b[2J\x1b[H{}", draw(b));
-        std::io::stdout().flush().ok();
-    }
-
-    fn log_tail(&mut self, b: &Battle) {
-        println!("{}", b.view().log_tail(12));
-    }
-
-    fn read(&mut self) -> Option<String> {
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 { None } else { Some(line) }
-    }
-
-    fn snapshot_entry(&mut self, _level: u32, _inherit: &[CardInst], _karma: i32) {}
-
-    fn snapshot_next(&mut self, _level: u32, _inherit: &[CardInst], _karma: i32) {}
-
-    fn new_battle(&mut self, inherit: &mut Vec<CardInst>, level: u32) -> Battle {
-        Battle::new_boss(self.seed, self.faction, self.boss, std::mem::take(inherit), level)
-    }
-}
-
-/// TUI 单关跳打入口：与 `meta::boss_run` 同一关隘构造，但把呈现与输入交给 `TuiHost`。
-/// `Terminus::Quit` 时**不 `process::exit`**、只收尾（TUI 不该把宿主进程半路截走，退出意图由最外层 main 决定）。
-pub(crate) fn run(seed: u64, faction: Faction, id: BossId) {
-    let level = id.chapter() * crate::boss::LEVELS_PER_CHAPTER;
-    let cfg = crate::session::LevelCfg { head: crate::meta::level_head(level, Some(id)), level, has_next: false };
-    let mut inherit: Vec<CardInst> = Vec::new();
-    let mut karma = 0;
-    let mut host = TuiHost { seed, faction, boss: id };
-    match crate::session::run_level(&mut host, &cfg, &mut inherit, &mut karma) {
-        crate::session::Terminus::Done(out) => match out {
-            Outcome::PlayerWin => println!("\n✓ 击败 Boss「{}」（第{}章）。seed={seed} 可复现。", id.name(), id.chapter()),
-            Outcome::Draw => println!("\n平局。Boss「{}」未被击败。", id.name()),
-            Outcome::PlayerLose => println!("\n✖ 败北。Boss「{}」未被击败。", id.name()),
-        },
-        crate::session::Terminus::Quit { msg } => {
-            if let Some(m) = msg {
-                println!("{m}");
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::battle::Difficulty;
-    use crate::model::{faction_cards, short_card};
+    use crate::boss::BossId;
+    use crate::model::{faction_cards, short_card, CardInst, Faction};
     use crate::view::HolderView;
 
     fn ember_card(i: usize) -> CardInst {

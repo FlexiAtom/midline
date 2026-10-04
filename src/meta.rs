@@ -20,6 +20,36 @@ use crate::model::{CardInst, Faction};
 use crate::save::{self, Progress};
 use std::path::PathBuf;
 
+/// 同一台阶段机的两种**画帧方式**——`PlayHost` 唯一认识的壳差别。
+/// 引擎、落盘、遭遇、head 全与它无关；它只决定 `board`/`log_tail` 这两处接缝从哪个上游取字串：
+/// `Text`＝逐帧追加的 ASCII（`render`），`Tui`＝清屏重绘的终端帧（`tui::draw`）。
+/// 之所以是一个枚举而非两个 host 结构：两者除这两处外**逐字节相同**，并行两套就是把"换壳只换画帧"这道缝的
+/// 证据拆成两份各抄一遍——改一处忘改另一处即失真。加一档（2D/3D）在此加一臂即可，不必再复制整台 host。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Frame {
+    Text,
+    Tui,
+}
+
+/// 一帧盘面的可见字串——**纯函数、按 `Frame` 分派上游**。
+/// Text 分支必须与改前 `print!("\n{}", render(b))` 的字节逐一对应（byte-baseline 靠这条不破）。
+/// Tui 分支＝清屏转义符 + `tui::draw`，与改前 `TuiHost::board` 同一串。
+fn board_str(frame: Frame, b: &Battle) -> String {
+    match frame {
+        Frame::Text => format!("\n{}", crate::render::render(b)),
+        Frame::Tui => format!("\x1b[2J\x1b[H{}", crate::tui::draw(b)),
+    }
+}
+
+/// 日志尾部的可见字串——同 `board_str`，两分支各取上游、都不补换行（换行由调用点的 `println!` 负责）。
+/// Tui 分支取 `view().log_tail`（与改前 `TuiHost::log_tail` 同一口径），Text 分支取 `render::log_tail`。
+fn tail_str(frame: Frame, b: &Battle) -> String {
+    match frame {
+        Frame::Text => crate::render::log_tail(b, 12),
+        Frame::Tui => b.view().log_tail(12),
+    }
+}
+
 /// §廿二:969 每日挑战＝本地种子，基于日期生成（`epoch秒/86400` ⇒ 日界是 UTC 零点，不是本地零点）。
 /// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，文档**一字未定义**两者，
 /// 所以当前 `daily` 只是"换日期种子的 play"，不是文档意义上的每日挑战（该缺口挂成显式债，见 model.rs 债表）。
@@ -157,7 +187,7 @@ impl SaveSlot {
 
 /// 主线 60 关＝5 章，章末 Boss。通关/终结即返回。落点由调用方定死（定不出位置时 `main.rs` 直接报错退出，
 /// 不存在"带着默认路径悄悄不落盘"这一条路）。
-pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf, resume: bool) {
+pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf, resume: bool, frame: Frame) {
     let mut st = RunState {
         inherit: Vec::new(),
         carry_karma: 0,
@@ -170,7 +200,7 @@ pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf
         st.carry_karma = s.progress.carry_karma;
     }
     loop {
-        let out = one_level(seed, faction, diff, level, &mut st, encounter_for);
+        let out = one_level(seed, faction, diff, level, &mut st, encounter_for, frame);
         match out {
             Outcome::PlayerWin if crate::boss::is_mainline_end(level) => {
                 println!("终影已灭 —— 主线通关（60/60）。seed={seed} 可复现整局。");
@@ -218,7 +248,7 @@ fn persist(slot: &mut SaveSlot, what: &str) -> bool {
 /// 每日挑战：文档要求「完成后记录日期，防止重复完成」（§廿一:926），但**从未定义"完成"的边界**
 /// （裁定29）。这里取最小可核读法——本局**第一次打赢一关**就算完成，只记 `daily_done`，不动主线进度。
 /// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，文档一字未定义 ⇒ 现在的 daily 只是"换日期种子的 play"。
-pub fn daily_run(path: PathBuf) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
+pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
     let seed = daily_seed();
     println!("每日挑战 seed={seed}");
     let save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::DailyDoneOnly);
@@ -226,15 +256,15 @@ pub fn daily_run(path: PathBuf) {  // §廿一:916 每日挑战模式入口（�
         println!("今天的每日挑战已经打过了（记录日种子={seed}）。想再来一局换个档就行：daily --save /tmp/another.kv");
         return;
     }
-    ladder(seed, Faction::Ember, Difficulty::Normal, Some(save));
+    ladder(seed, Faction::Ember, Difficulty::Normal, Some(save), frame);
 }
 
 /// 无 Boss、无 60 关上限的爬梯（`play` 与 `daily` 共用；`save=None` 时就是原来的纯跳打）。
-fn ladder(seed: u64, faction: Faction, diff: Difficulty, save: Option<SaveSlot>) {
+fn ladder(seed: u64, faction: Faction, diff: Difficulty, save: Option<SaveSlot>, frame: Frame) {
     let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true, save };
     let mut level = 1u32;
     loop {
-        let out = one_level(seed, faction, diff, level, &mut st, |l| (enemy_faction_for(l), None));
+        let out = one_level(seed, faction, diff, level, &mut st, |l| (enemy_faction_for(l), None), frame);
         match out {
             Outcome::PlayerWin => {
                 mark_daily_done(&mut st);
@@ -259,20 +289,20 @@ fn mark_daily_done(st: &mut RunState) {
 }
 
 /// `play`：无限爬梯、无 Boss、不落盘。`--save/--resume` 在这儿没有意义，由 `main.rs` 直接拒（裁定28）。
-pub fn play_run(seed: u64, faction: Faction, diff: Difficulty) {
-    ladder(seed, faction, diff, None);
+pub fn play_run(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
+    ladder(seed, faction, diff, None, frame);
 }
 
 /// `boss <id>` / `play --boss <id>`：单关跳打某章末 Boss。
 /// 跳打是"试一把"，不是"走一遍主线"：把它的 level/牌写进 `progress.kv`，就会凭空多出一段没人打过的进度，
 /// 而解锁本来就能由 level 推导（`boss.rs`），另存一份＝第二套真值。所以本函数**永远不落盘**。
-pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::BossId) {
+pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::BossId, frame: Frame) {
     use crate::boss::LEVELS_PER_CHAPTER;
     let level = id.chapter() * LEVELS_PER_CHAPTER;
     let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: None };
     let out = one_level(seed, faction, diff, level, &mut st, |_| {
         (id.profile().faction, Some(id))
-    });
+    }, frame);
     match out {
         Outcome::PlayerWin if id == crate::boss::BossId::ZhongYing => {
             println!("终影已灭 —— 主线通关（60/60）。seed={seed} 可复现整局。")
@@ -342,8 +372,9 @@ fn persist_next_entry(
     snapshot_entry(save, level + 1, faction, diff, inherit, karma);
 }
 
-/// 一关的外围＝**CLI 这块壳**：把会话层（`session::run_level`）的四个接缝落到 stdin/stdout/磁盘上，
-/// 再提供"本关怎么构造"（阵营轮转与 Boss 遭遇）。阶段机本身不在这儿，所以摘壳时只换这个函数与 `CliHost`。
+/// 一关的外围＝**这块壳**：把会话层（`session::run_level`）的四个接缝落到 stdin/stdout/磁盘上，
+/// 再提供"本关怎么构造"（阵营轮转与 Boss 遭遇）。阶段机本身不在这儿，所以摘壳时只换这个函数与 `PlayHost`。
+/// `frame` 决定画帧上游（Text/Tui），除此之外两条壳路径共用**同一个** host、同一条落盘与遭遇逻辑。
 fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     seed: u64,
     faction: Faction,
@@ -351,6 +382,7 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     level: u32,
     st: &mut RunState,
     enc: F,
+    frame: Frame,
 ) -> Outcome {
     // 解构而非整体借用：会话层要 `inherit`／`carry_karma`，落盘要 `save`，三条各走各的字段。
     let RunState { inherit, carry_karma, has_next, save } = st;
@@ -358,7 +390,7 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     // `enc` 是无状态查表，但"同一关两头各查一次"这种事，一旦哪天它有了副作用就是第二套真值。
     let (foe, boss) = enc(level);
     let cfg = crate::session::LevelCfg { head: level_head(level, boss), level, has_next: *has_next };
-    let mut host = CliHost { seed, faction, diff, foe, boss, save };
+    let mut host = PlayHost { seed, faction, diff, foe, boss, save, frame };
     match crate::session::run_level(&mut host, &cfg, inherit, carry_karma) {
         crate::session::Terminus::Done(out) => out,
         crate::session::Terminus::Quit { msg } => {
@@ -370,11 +402,12 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     }
 }
 
-/// `Host` 的 CLI 实现——全仓唯一还允许 `stdin().read_line()` 与 `process::exit()` 的地方。
-/// 逐字节口径：`write` 原样打印（会话层已经带好换行，这里不补），`board`/`log_tail` 与改前的
+/// `Host` 的实现——全仓唯一还允许 `stdin().read_line()` 与 `process::exit()` 的地方。
+/// `frame` 只改 `board`/`log_tail` 两处上游；其余接缝与改前的 `CliHost` 逐字节一致。
+/// 逐字节口径：`write` 原样打印（会话层已经带好换行，这里不补），Text 分支的 `board`/`log_tail` 与改前的
 /// `print!("\n{}", render(&b))`、`println!("{}", log_tail(&b, 12))` 一一对应。
 /// flush 只在 `write` 后做一次：改前是"打完提示符必 flush"，改成"任何输出之后 flush"，字节不变、终端不再吞行。
-struct CliHost<'a> {
+struct PlayHost<'a> {
     seed: u64,
     faction: Faction,
     diff: Difficulty,
@@ -382,9 +415,11 @@ struct CliHost<'a> {
     foe: Faction,
     boss: Option<crate::boss::BossId>,
     save: &'a mut Option<SaveSlot>,
+    /// 画帧上游：Text＝`render`，Tui＝`tui::draw`。除 `board`/`log_tail` 外没有任何接缝读它。
+    frame: Frame,
 }
 
-impl crate::session::Host for CliHost<'_> {
+impl crate::session::Host for PlayHost<'_> {
     fn write(&mut self, s: &str) {
         use std::io::Write;
         print!("{s}");
@@ -392,11 +427,11 @@ impl crate::session::Host for CliHost<'_> {
     }
 
     fn board(&mut self, b: &Battle) {
-        print!("\n{}", crate::render::render(b));
+        print!("{}", board_str(self.frame, b));
     }
 
     fn log_tail(&mut self, b: &Battle) {
-        println!("{}", crate::render::log_tail(b, 12));
+        println!("{}", tail_str(self.frame, b));
     }
 
     fn read(&mut self) -> Option<String> {
@@ -813,5 +848,23 @@ mod meta_tests {
             }
             std::fs::remove_file(&path).ok();
         }
+    }
+
+    /// L3-d 的分派核心：`board_str`/`tail_str` 两档各取**正确上游**，且 Text 档必须与改前逐字节一致
+    /// （byte-baseline 就靠这条：`--tui` 不在基线场景里，Text 分支一旦漂一个字节整批 SAME 就破）。
+    /// 断言用**全等**而非 contains——把"取 render / 取 tui::draw"钉成定义级，上游改了也不会误绿。
+    #[test]
+    fn frame_switch_selects_the_render_upstream_and_text_stays_byte_identical() {
+        let b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
+        // Text 档＝改前的 `"\n" + render`，Tui 档＝清屏转义 + `tui::draw`。
+        assert_eq!(board_str(Frame::Text, &b), format!("\n{}", crate::render::render(&b)));
+        assert_eq!(board_str(Frame::Tui, &b), format!("\x1b[2J\x1b[H{}", crate::tui::draw(&b)));
+        // 两档取的是**两个不同上游**：Tui 带清屏转义、Text 不带；内容源也不同（否则两档相等＝没分派）。
+        assert!(board_str(Frame::Tui, &b).starts_with("\x1b[2J"), "Tui 帧要以清屏转义开头");
+        assert!(!board_str(Frame::Text, &b).contains('\x1b'), "Text 帧不该含终端转义");
+        assert_ne!(board_str(Frame::Text, &b), board_str(Frame::Tui, &b), "两档必须真的走两条上游");
+        // 日志尾同理分派：Text 走 render::log_tail，Tui 走 view().log_tail，各自与改前同一口径。
+        assert_eq!(tail_str(Frame::Text, &b), crate::render::log_tail(&b, 12));
+        assert_eq!(tail_str(Frame::Tui, &b), b.view().log_tail(12));
     }
 }

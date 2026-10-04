@@ -60,7 +60,7 @@ const USAGE: &str = "\
   di|ds 抽继承堆/开端堆 | e 结束回合 | l 日志 | b Boss档案 | q 退出
 结算/准备阶段：fuse <主> <副> / up <idx> power|thr|skill / drop <idx> / move <从> <到> / go
 交互界面：
-  --tui               TUI 逐帧重绘 + 行输入（本版仅单关跳打 boss <id> / play --boss <id>；整局爬梯与存档待 L3-d）";
+  --tui               TUI 清屏重绘 + 行输入（对局命令全程可用：play / mainline / daily / boss；auto、progress 不适用）";
 
 /// 吃一个值的长选项（其值不算位置参数）。
 const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", "--save"];
@@ -113,7 +113,8 @@ fn main() {
     let cmd = if cmd.starts_with('-') { "play" } else { cmd };
     gate_save_flags(cmd, &args);
     gate_tui(cmd, &args);
-    let tui = has_flag(&args, "--tui");
+    // 画帧档：Text 是默认，`--tui` 只切这一档，其余（遭遇/落盘/阶段机）两条路共用同一台 host。
+    let frame = if has_flag(&args, "--tui") { meta::Frame::Tui } else { meta::Frame::Text };
     match cmd {
         "auto" => {
             let n: u32 = positionals(&args).first().and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -123,29 +124,15 @@ fn main() {
                 Flag::Missing => bad_boss_arg(),
             }
         }
-        "daily" => meta::daily_run(save_path(&args)),
-        "mainline" => meta::mainline_run(seed, faction, diff, save_path(&args), has_flag(&args, "--resume")),
+        "daily" => meta::daily_run(save_path(&args), frame),
+        "mainline" => meta::mainline_run(seed, faction, diff, save_path(&args), has_flag(&args, "--resume"), frame),
         "play" => match value_flag(&args, "--boss") {
-            Flag::Absent => meta::play_run(seed, faction, diff),
-            Flag::Value(raw) => {
-                let id = require_boss(raw);
-                if tui {
-                    tui::run(seed, faction, id)
-                } else {
-                    meta::boss_run(seed, faction, diff, id)
-                }
-            }
+            Flag::Absent => meta::play_run(seed, faction, diff, frame),
+            Flag::Value(raw) => meta::boss_run(seed, faction, diff, require_boss(raw), frame),
             Flag::Missing => bad_boss_arg(),
         },
         "boss" => match positionals(&args).first() {
-            Some(raw) => {
-                let id = require_boss(raw);
-                if tui {
-                    tui::run(seed, faction, id)
-                } else {
-                    meta::boss_run(seed, faction, diff, id)
-                }
-            }
+            Some(raw) => meta::boss_run(seed, faction, diff, require_boss(raw), frame),
             None => {
                 println!("✖ boss 需要一个参数：1-5 / luzhu xuejue yingzhang yanbing zhongying / 炉主 雪爵 影长 炎与冰 终影");
                 std::process::exit(2);
@@ -174,21 +161,16 @@ fn gate_save_flags(cmd: &str, args: &[String]) {
     }
 }
 
-/// `--tui` 的作用域：本版只驱动**单关 Boss 跳打**（`boss <id>` / `play --boss <id>`）。
-/// 整局爬梯（`play` 无限梯 / `mainline` / `daily`）与 `auto` 尚未接壳——那要先做 L3-d
-/// （`one_level`/`ladder` 把"关隘头报＋逐关推进＋落盘/exit"泛型化到壳可驱动）。
-/// 带着本版不认的 `--tui` 一律报错退出，**不静默回退成文本路**——"以为开了 TUI、其实没开"是最难查的失真。
+/// `--tui` 的作用域：切换到 **TUI 画帧**这一档，四条对局命令全程可用
+/// （`play` 无限梯 / `mainline` / `daily` / `boss`——L3-d 起整局爬梯已并入统一 host，不再局限单关跳打）。
+/// `auto`（无壳冒烟）与 `progress`（只读档）没有"一屏盘面"可重绘，带着 `--tui` 一律报错退出，
+/// **不静默回退成文本路**——"以为开了 TUI、其实没开"是最难查的失真。
 fn gate_tui(cmd: &str, args: &[String]) {
     if !has_flag(args, "--tui") {
         return;
     }
-    let ok = match cmd {
-        "boss" => true,
-        "play" => has_flag(args, "--boss"),
-        _ => false,
-    };
-    if !ok {
-        println!("✖ --tui 本版只支持单关跳打（boss <id> / play --boss <id>）：整局爬梯与存档要先做 L3-d。");
+    if !matches!(cmd, "play" | "mainline" | "daily" | "boss") {
+        println!("✖ --tui 只作用于对局命令（play / mainline / daily / boss）：「{cmd}」没有可逐帧重绘的对局。");
         std::process::exit(2);
     }
 }
