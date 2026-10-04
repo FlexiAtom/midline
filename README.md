@@ -2,9 +2,10 @@
 
 《中线》核心规则引擎的命令行实现。Rust，**零外部依赖**（`Cargo.lock` 里只有 `midline` 自己）。
 
-**主体仍是 CLI；画面层刚起步。** TUI 已有**第一个验证帧**（第十四步·其一）：`--tui` 只放行**单关跳打**
-（`boss <id>`／`play --boss <id>`），逐帧重绘 + 行输入（本版不上 raw，无方向键/备用屏），驱动的是**同一台** `session::run_level` 阶段机
-⇒ 引擎零改动、默认文本路逐字节不变；整局爬梯与存档走 TUI 要先做 L3-d，带 `--tui` 撞上去**显式报错、不静默回退**。2D/3D 未开始。
+**主体仍是 CLI；画面层已接上整局爬梯。** TUI 经第十四步·其一（验证帧）走到**其二**（L3-d）：`--tui` 现全程驱动四条对局命令
+（`play`／`mainline`／`daily`／`boss`），逐帧清屏重绘 + 行输入（本版不上 raw，无方向键/备用屏）。其一那个平行的 `TuiHost` 已被**删掉**——
+统一成 `meta::PlayHost` 加一个 `Frame{Text,Tui}` 档，`board`/`log_tail` 两处按档取上游（Text＝`render`、Tui＝`tui::draw`），
+**同一台 host、同一条落盘与遭遇逻辑**跑两种壳 ⇒ 引擎零改动、默认文本路逐字节不变（byte-baseline 双臂仍全 SAME）。2D/3D 未开始，即在 `Frame` 上再加一臂。
 规则文档里写的目标平台是 Android + Godot，本仓库交付的是它的**可执行规则内核 + 一整套对文档复核的机检**。
 规则规格文档《中线》完整玩法方案（23 章）不随本仓库分发。
 
@@ -54,7 +55,7 @@ cargo build --release     # 产物：target/release/midline
 | `progress recover [--save F]` | 把当前档改名留证 `.bad-N`，下次从空档开始 |
 | `auto [N] [--difficulty X]` | AI 托管模拟 N 局（默认 1，不落盘） |
 | `auto [N] --boss all\|<id>` | Boss 脚本冒烟：N 轮 × 5 个（或指定） |
-| `… --tui` | TUI 逐帧重绘 + 行输入；**本版仅单关跳打**（`boss <id>`／`play --boss <id>`），爬梯/存档/`auto` 带 `--tui` 显式报错（L3-d 前） |
+| `… --tui` | TUI 清屏重绘 + 行输入；四条对局命令**全程可用**（`play`／`mainline`／`daily`／`boss`），与文本路共用同一台 host 与落盘逻辑；`auto`／`progress` 无盘面可绘，带 `--tui` 显式报错 |
 
 `--faction` 1＝烬火教团／2＝霜誓守卫／3＝幽影议会。不给 `--seed`／`--faction` 时＝种子 7·烬火；
 给了却读不懂会直接报错退出（`rc=2`），不会静默回退成别的值。
@@ -307,6 +308,15 @@ MIDLINE_DOC_SKIP=1 cargo test              # 明确跳过那几条推导器
   反向覆盖推导器按**字面 `pub fn fuse_cards`/`upgrade_card`/`collect_survivors`/`execute_settle`/`settle_listing`** 定位函数体，降 `pub(crate)` 会让定位串落空、推导器 panic（其文案本就写「⇒ 同步这里」）
   ⇒ 同步那 **6 条 locator 串**（编辑在测试域、生产面 441 不动）；计划原只 grep 电池对 `pub` 的依赖、**没 grep 推导器**，通则入档：**降可见性＝改签名事件，凡按签名定位的尺子须同步**（§十 帧"追加旧牙点名的锚会撞旧牙"同族）。
   边界照登：`TuiHost::snapshot_*` 空体非遗漏＝与 `boss_run` 同口径不落盘，L3-d 泛型化爬梯后才真填；draw 不写 `§` 锚（排布非规则真值）。收口三问详见 `working/presentation-interface-seam.md` 的「L3·第十四步·其一」。
+
+- **第十四步·其二「整局爬梯走 TUI·L3-d」**把其一那个**平行 `TuiHost`** 删掉、收敛成**一台 host 两档画帧**：`meta::PlayHost` 加 `Frame{Text,Tui}` 一臂，
+  新增两个纯函数 `board_str`/`tail_str` 按档取上游（Text＝`render::render`/`render::log_tail`、Tui＝`tui::draw`/`view().log_tail`），其余五条接缝（write/read/new_battle/snapshot_*）两档**共用同一实现**。
+  `one_level` 与五条 run（`mainline`/`ladder`/`daily`/`play`/`boss`）各透传 `frame`；`main.rs` 把 `if tui { tui::run } else { … }` 的分叉收敛为单条 `meta::*_run(…, frame)`，`gate_tui` 从"仅 `boss`／`play --boss`"放宽到**四条对局命令全程可用**、`auto`／`progress` 带 `--tui` 仍显式 `exit 2`。
+  **为何这样切**：落盘/遭遇/head 早已是壳无关的 meta 逻辑、CliHost≈TuiHost 只差 board/log_tail 两处，保留两台平行 host 才是把"换壳只换画帧"这道缝的证据抄两遍；本帧**不碰 `snapshot_*`/`SaveSlot`/`persist` 一行** ⇒ 裁定27 落盘时机零风险。**其一登记的那条边界（`snapshot_*` 空体待 L3-d 填）随之闭合**——统一 host 直接复用落盘实现，`--tui mainline --save` 现真写档（实测入口快照 level/faction 落盘）。
+  **五把尺现量**：`cargo test` **175→176 全绿**（+1：`frame_switch_selects_the_render_upstream_and_text_stays_byte_identical` 用**全等**钉死两档各取正确上游、且 Text 档与改前逐字节一致）、clippy 停基线 **bin 7／all-targets 10**（无新增）、
+  盘点尺生产面 **441 不变**／挂债 **36**／推导器章 **20**（`Frame`/`board_str`/`tail_str` 无 `§` 锚，`§廿一:916/924` 原样在位）、`byte-baseline` 10 场景逐字节**双臂 SAME**（before＝HEAD `6a7a9d4` 新建 worktree 现构建、after＝本改动；无场景带 `--tui`，Text 天然中性）、
+  电池 **M0–M131 全 132 记录逐条红差复跑 exit 0**、无 PATCH_FAIL／编译失败／no-op（本帧动的是 meta 壳与 tui，未碰任何被电池咬住的引擎闸，牙数不变）。**手动全程实测**：`--tui` 下 boss／play／daily／mainline 均出清屏帧、`mainline --tui --save` 写档、`auto`／`progress --tui` 各 `rc=2` 拒。
+  **诚实边界（禁忌6/7）**：① raw／方向键／alt-screen／退出复位屏 仍延后（决策②未变）；② 级间与结论 `println!`（"第N章通关""本局终结""每日 seed="）仍直写 stdout、未走 `host.write`——真做"整屏只由 host 拥有"的纯净壳须再收敛它，本帧刻意不做、非回归；③ 2D/3D 未开始，即在 `Frame` 加臂。收口三问详见 `working/presentation-interface-seam.md` 的「L3·第十四步·其二」。
 
 另外四把可复跑的尺也进了版本库：`scripts/byte-baseline.sh`（把 10 个场景跑成文本再比 md5，
 用来证明"只动注释、没动行为"；其中 p9＝每日挑战，种子按 UTC 日界算 ⇒ 跨天复跑它必然换 md5，
