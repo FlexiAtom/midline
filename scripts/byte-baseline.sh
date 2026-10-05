@@ -34,5 +34,9 @@ p7() { printf 'fuse 1 2\ndrop 0\nmove 0 1\nup 1 power\nup 2 thr\ngo\nq\n' | "$B"
 p8() { printf 'go\ns P1\nsh 0\ndi\nds\np 0 P1\nx\n\nl\nb\ne\nq\n' | "$B" play --seed 7 > "$O/p8.txt" 2>&1; }
 p9() { "$B" daily --save "$O/daily.save" > "$O/p9.txt" 2>&1; }
 p10(){ printf 'go\np 0 P1\n' | "$B" play --seed 7 > "$O/p10.txt" 2>&1; }
-for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10; do $f; done
+# p11 影长 遭遇全程。p3/p4/p6 三条 Boss 场景都不落进 影长 的棋盘（p6 的 `--boss all` 只出一行摘要、
+# p3/p4 各钉 炎与冰／终影），改脚本在这三条上量不出来——本条是给 Boss 脚本层装的牙：
+# 开场脚本、暗影核心的随机附加技能、第一次暗渡挤压全在这条的字节里。
+p11(){ printf 'go\ne\ne\ne\nq\n' | "$B" play --boss 3 --seed 2026 > "$O/p11.txt" 2>&1; }
+for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11; do $f; done
 md5sum "$O"/p*.txt | sed "s#$O/##"

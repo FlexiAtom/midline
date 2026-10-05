@@ -19,7 +19,7 @@
 //! `BossRule` 派生，battle.rs 通过本模块的 hook 函数调用，普通对局（boss=None）永不进入。
 
 use crate::battle::{Battle, Outcome, Row};
-use crate::model::{CardInst, Faction, Skill, card_by_name};
+use crate::model::{CardDef, CardInst, Faction, Skill, card_by_name, TraitKind};
 
 /// §廿一 Boss 表 5 行——逐行锚点挂在下面各变体上（列头行不算规则行，由 §廿一 推导器按结构剔掉）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,20 +89,27 @@ pub enum Slot {
     AnyBackIn(Zone),
 }
 
-/// 脚本卡（按名从 model 卡表解析；技能由脚本显式声明，不随机、不消耗 Rng）。
+/// 脚本卡（按名从 model 卡表解析；技能由脚本显式声明，唯一豁免是下面的 `random_skill`）。
 #[derive(Clone, Copy, Debug)]
 pub struct BossCard {
     pub faction: Faction,
     pub name: &'static str,
     pub skills: &'static [Skill],
+    /// 入场时从技能池随机附加 1 个（走 `b.rng`，同种子同结果）。这是 I3「脚本不吃 rng」的唯一豁免，
+    /// 只给 影长 的【暗影核心】——设计把那张定成"普通卡牌"，而普通卡的技能本来就是随机附加的。
+    pub random_skill: bool,
 }
 
 const fn card(f: Faction, name: &'static str) -> BossCard {
-    BossCard { faction: f, name, skills: &[] }
+    BossCard { faction: f, name, skills: &[], random_skill: false }
 }
 
 const fn card_sk(f: Faction, name: &'static str, skills: &'static [Skill]) -> BossCard {
-    BossCard { faction: f, name, skills }
+    BossCard { faction: f, name, skills, random_skill: false }
+}
+
+const fn card_rand(f: Faction, name: &'static str) -> BossCard {
+    BossCard { faction: f, name, skills: &[], random_skill: true }
 }
 
 /// 脚本动作。`Sac` 显式指名（祭哪张是数据真值，不是运行时择优）。
@@ -146,10 +153,12 @@ use Faction::*;
 /// 每个 cycle 回合 = **先祭后放**（引擎 §四「每回合最多献祭1次」对脚本同样生效，不例外），
 /// 且祭掉的正是 `m` 回合前放进去的那张（FIFO 传送带，`m` = 该 Boss 场内常驻脚本卡数）。于是：
 /// - I1 棋盘不溢出：场内脚本卡数恒为 `m`（另加开端与至多一张常驻燃料卡）≤ 8 格；
+///   影长 另有暗影核心这张**常驻不回收**的开场卡（占 E5 一格，设计给的，不进传送带）；
 /// - I2 业力自我闭合：一个周期内 Σ献祭返还 = Σ放置费用 ⇒ 每回合发钱恒 0，
 ///   §三「业力不自动恢复」不被违反（Boss 烧自己的牌供能，与玩家同一条经济规则）；
 ///   影长是退化形：它不献祭，靠暗渡把前排挤越线拿死亡返还，故每回合只放一张（周期净额同样为 0）；
 /// - I3 可复现：脚本不走敌方手牌/双牌堆、不吃 rng，祭/放的名字全是数据真值。
+///   唯一豁免＝暗影核心的随机附加技能（设计口径"技能从池随机"），它吃 `b.rng`、同种子同结果，仍可复现。
 ///
 /// `intro` 的职责是**种下 cycle 前 m 个回合要祭的那些卡**——漏种就会在第 2 周期起 `无可献祭`。
 /// 反推 start_karma：intro 总花费 + 周期内最大下凹（下凹按回合中段的瞬时点算，不是按回合净额）。
@@ -268,6 +277,27 @@ const XUEJUE: BossProfile = BossProfile {
     holder_names: ["雪爵", ""],
 };
 
+/// 暗影核心（设计稿 修正 1.3）：影长 开场钉在 E5 的那张。费 3／数值 3／阈值 6／无固定特性、技能从池随机，
+/// 其余**全部按 Boss 普通卡牌走**（消耗业力部署、触发亡语、可被献祭、可被挤越线、攻击同列、业火累积）；
+/// 旧稿那两条"不可被献祭／不触发亡语"已被设计的"最小解释"覆盖作废。
+/// 它**不进阵营卡池**：不是可收集卡，只由 `script_def` 解析 ⇒ 卡池尺的分母不动。
+const SHADOW_CORE: CardDef = CardDef {
+    name: "暗影核心",
+    faction: Shadow,
+    cost: 3,
+    power: 3,
+    threshold: 6,
+    tr: TraitKind::None,
+};
+
+/// 脚本卡名解析＝阵营卡池 ＋ 少数几张 Boss 内嵌定义。
+fn script_def(f: Faction, name: &str) -> Option<CardDef> {
+    if f == Shadow && name == SHADOW_CORE.name {
+        return Some(SHADOW_CORE);
+    }
+    card_by_name(f, name)
+}
+
 const YINGZHANG: BossProfile = BossProfile {
     chapter: 3,
     name: "影长",
@@ -280,16 +310,17 @@ const YINGZHANG: BossProfile = BossProfile {
     // 场内卡数恒定（挤死一张才补上一张）；费用按"贵→影仆→贵→影仆"配对，一周期净 0。
     intro: &[
         turn(&[
-            BossAction::Place { card: card(Shadow, "开端"), slot: Slot::Back(0) },
-            BossAction::Place { card: card(Shadow, "影仆"), slot: Slot::Back(1) },
+            // 开局脚本（设计稿 修正 1.2）：10 点系统赏金＝下面那个 start_karma，第一回合花 3 费把
+            // 暗影核心放上 E5、再补一张影仆贴着我方 P2，成"核心＋随从"的双压场；开端 0 费放 E后3，
+            // 靠回合末推进抬上 E7，顺带把每关上限 2 次的回合末业力吃满。
+            BossAction::Place { card: card_rand(Shadow, "暗影核心"), slot: Slot::Front(0) },
+            BossAction::Place { card: card(Shadow, "影仆"), slot: Slot::Front(1) },
+            BossAction::Place { card: card(Shadow, "开端"), slot: Slot::Back(2) },
         ]),
         turn(&[
-            BossAction::Place { card: card(Shadow, "无痕"), slot: Slot::Back(2) },
-            BossAction::Place { card: card(Shadow, "低语"), slot: Slot::Back(3) },
-        ]),
-        turn(&[
-            // 第一手就当众演一遍暗渡：连自己的开端也挤越线（返还 2，脚本不认"自己人"）。
-            BossAction::Place { card: card(Shadow, "蚀"), slot: Slot::Front(0) },
+            // 蚀落在空着的 E8。旧版这一手压 E5 演示暗渡、挤掉的是自己的开端——现在 E5 归常驻核心，
+            // 2026-10-05 裁「换空格」⇒ 演示改由周期里那三手贵的来演（幽雷/引渡/夜行 各挤一张）。
+            BossAction::Place { card: card(Shadow, "蚀"), slot: Slot::Front(3) },
         ]),
     ],
     cycle: &[
@@ -312,7 +343,8 @@ const YINGZHANG: BossProfile = BossProfile {
             BossAction::Place { card: card(Shadow, "影仆"), slot: Slot::Front(3) },
         ]),
     ],
-    // intro 花 1+2+2+3=8 且挤开端只回 2；C1 一手要 4 费而前排只回 1 ⇒ 最低点 K-9。
+    // 开场花 3(暗影核心)+1(影仆)+3(蚀)=7（开端 0 费）；那 3 点全在 10 点系统赏金里，不另立额度。
+    // 开端回合末补 2 ⇒ 进周期时剩 5；cycle1 幽雷要 4 费而 E6 的影仆只回 1 ⇒ 最低点 K-1（余量 1）。
     start_karma: 10,
     holder_hp: 20,
     holder_hp2: None,
@@ -557,12 +589,17 @@ fn sac_target(b: &Battle, c: &BossCard) -> Option<(Row, usize)> {
     None
 }
 
-/// 脚本卡实例：按名解析 + 脚本声明的技能（不随机附加、不消耗 `b.rng`）。
+/// 脚本卡实例：按名解析 + 脚本声明的技能。`random_skill` 那一支援地抽 1 个（同种子同结果），
+/// 是"脚本不吃 rng"的唯一例外，只给 暗影核心。
 pub(crate) fn make_script_card(b: &mut Battle, c: BossCard) -> Option<CardInst> {
-    let def = card_by_name(c.faction, c.name)?;
+    let def = script_def(c.faction, c.name)?;
     let mut inst = CardInst::new(b.next_id, def);
     b.next_id += 1;
     inst.skills = c.skills.to_vec();
+    if c.random_skill {
+        let pool = Skill::list();
+        inst.skills.push(pool[b.rng.below(pool.len())]);
+    }
     Some(inst)
 }
 
@@ -604,7 +641,7 @@ fn run_sac(b: &mut Battle, c: &BossCard, turn: i64, seg: &str) -> Option<Skip> {
 }
 
 fn run_place(b: &mut Battle, c: &BossCard, slot: Slot, turn: i64, seg: &str) -> Option<Skip> {
-    let Some(def) = card_by_name(c.faction, c.name) else {
+    let Some(def) = script_def(c.faction, c.name) else {
         return Some(format!("无名卡 {}", c.name));
     };
     let cost = if def.tr == crate::model::TraitKind::Starter { 0 } else { def.cost };
@@ -774,7 +811,7 @@ mod boss_tests {
             for t in p.intro.iter().chain(p.cycle) {
                 for act in t.actions {
                     if let BossAction::Place { card, .. } = *act {
-                        let def = card_by_name(card.faction, card.name)
+                        let def = script_def(card.faction, card.name)
                             .unwrap_or_else(|| panic!("{} 脚本卡名解析失败：{}", p.name, card.name));
                         assert_eq!(def.name, card.name);
                         for s in card.skills {
@@ -784,6 +821,53 @@ mod boss_tests {
                 }
             }
         }
+    }
+
+    /// 开局脚本（设计稿 修正 1.2／1.3）：第一回合花 3 费把暗影核心钉在 E5，随从贴着它成双压场，
+    /// 核心是一张**普通卡**（有费／有数值／有阈值，技能从池随机）。
+    #[test]
+    fn yingzhang_opening_setup_deploys_shadow_core_at_e5() {
+        let b = sandbox(BossId::Yingzhang, 1);
+        let core = b.e_front[0].as_ref().expect("影长 第一回合该把暗影核心放上 E5");
+        assert_eq!(core.def.name, "暗影核心");
+        assert_eq!((core.def.cost, core.def.power, core.def.threshold), (3, 3, 6), "设计给数：费3／数值3／阈值6");
+        assert_eq!(core.def.tr, TraitKind::None, "无固定特性——旧稿那两条特性已被设计的「最小解释」覆盖作废");
+        assert_eq!(core.skills.len(), 1, "技能从池随机 ⇒ 恰一个附加技能");
+        assert!(Skill::list().contains(&core.skills[0]), "抽到的技能必须来自技能池");
+        assert!(b.e_front[1].is_some(), "暗影核心 + 随从 的双压场");
+        assert!(
+            !crate::model::faction_cards(Shadow).iter().any(|c| c.name == "暗影核心"),
+            "暗影核心不进阵营卡池（它不是可收集卡）"
+        );
+        let again = sandbox(BossId::Yingzhang, 1);
+        assert_eq!(
+            again.e_front[0].as_ref().unwrap().skills,
+            core.skills,
+            "随机附加走 b.rng ⇒ 同种子必须同结果（I3 可复现）"
+        );
+    }
+
+    /// 2026-10-05 裁「蚀改换到别的空格」的牙：核心占 E5 后，整条脚本只动 E6-E8，
+    /// 30 回合里 E5 一直是同一张暗影核心。挤它仍然合法（它是普通卡），只是脚本不再这么走。
+    #[test]
+    fn yingzhang_shadow_core_holds_e5_and_is_still_an_ordinary_card() {
+        let b = sandbox(BossId::Yingzhang, TURN_LIMIT);
+        let core = b.e_front[0].as_ref().expect("30 回合后 E5 仍是暗影核心");
+        assert_eq!(core.def.name, "暗影核心");
+        assert!(
+            !b.log.iter().any(|l| l.contains("挤压：") && l.contains("暗影核心")),
+            "E5 不许被自己的脚本挤越线"
+        );
+        // 普通卡规则照用：手动压一发，核心走越线死亡、按 3 费全额返还。
+        let mut b2 = sandbox(BossId::Yingzhang, 1);
+        let karma0 = b2.e_karma;
+        let push = make_script_card(&mut b2, card(Shadow, "影仆")).expect("影仆解析自阵营卡池");
+        b2.enemy_place_inst(push, 0, Row::Front).expect("暗渡放行压已占前排");
+        assert_eq!(b2.e_karma, karma0 - 1 + 3, "付影仆1费；核心是新实例首死 ⇒ 100% 返 3（裁定20 ④ 同一条）");
+        assert!(
+            b2.log.iter().any(|l| l.contains("挤压：") && l.contains("暗影核心")),
+            "被挤的是核心本人 ⇒ 它走的是所有卡那一条越线死亡路径"
+        );
     }
 
     #[test]
