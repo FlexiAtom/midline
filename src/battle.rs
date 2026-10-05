@@ -133,9 +133,10 @@ pub enum DailyRule {
     FlameTide,
     /// 规则2：开局双方各抽 1 张直接部署到中线前。
     Clash,
-    /// 规则3：献祭卡牌时"正常获得业力＋额外触发亡语＋不触发死亡返还递减"。**现况已成立，本帧不实现**——
-    /// 那三条里第 1、3 条是引擎现况的复述，第 2 条对场上献祭也已是现况（`on_death` 拿到的就是 `Some(col)`），
-    /// 只有手牌献祭不触发亡语而手牌没有"哪一列"可落点。三种读法产出不同东西 ⇒ 挂 Q-新9 待裁，见 md-revision-daily §9。
+    /// 规则3：献祭卡牌时"正常获得业力＋额外触发亡语＋不触发死亡返还递减"。**已实现**（D3·补）——
+    /// 三条里第 1、3 条本来就是引擎现况（业力那段 match 只加一次、`deaths` 只在 Battle/Cross 支推进），
+    /// 第 2 句「额外触发亡语」落在 `on_death` 的亡语块：献祭**场上**那张带亡语的牌时，它的亡语多结算一次。
+    /// 手牌献祭仍不触发——那条路传进来的 `col` 是 `None`，没有"哪一列"可落（见 daily-echo-karma-ruling 失效边界⑤）。
     SacrificeEcho,
     /// 规则4：敌方推进 E1-E4→E5-E8 每列耗 2 点敌方业力，不足则本列这次不推进。
     ViscidShadow,
@@ -162,13 +163,14 @@ impl DailyRule {
         }
     }
 
-    /// 入场行那半句：**这一场真的会发生什么**。待裁的那条照实说待裁，不许念一句引擎不兑现的口号。
+    /// 入场行那半句：**这一场真的会发生什么**。不许念一句引擎不兑现的口号——所以"场上"两个字要在，
+    /// 手牌献祭那条路引擎给不出亡语（没有列可落）。
     pub fn effect(self) -> &'static str {
         match self {
             DailyRule::None => "无",
             DailyRule::FlameTide => "阈值减半（向下取整）",
             DailyRule::Clash => "开局双方各抽 1 张直接部署到中线前",
-            DailyRule::SacrificeEcho => "待裁：现况已触发亡语",
+            DailyRule::SacrificeEcho => "场上献祭时亡语当场再结算一次",
             DailyRule::ViscidShadow => "敌方推进每列耗 2 业力",
         }
     }
@@ -1255,13 +1257,25 @@ impl Battle {
             short_card(&c),
             if side == SideK::Player { "我方" } else { "敌方" }
         ));
-        if let Some(col) = col {  // §十二:494 触发亡语（若有）；§四:169「触发亡语 → 主动献祭触发亡语效果」＝场上献祭传进来的正是 `Some(col)`，这一环照走（手牌献祭传 `None`，那条路没有"哪一列"可给，亡语因此不适用——文档只在 §四:169 给场上这一条许了亡语）
-            if c.def.tr == TraitKind::DeathRattleSameColFlame3 {
-                self.add_flame_col(side, col, 3, None);
-            }
-            for s in c.skills.clone() {
-                if s == Skill::DeathSameColFlame1 {  // §八:294 死亡时同列+1业火
-                    self.add_flame_col(side, col, 1, None);
+        // 【献祭余响】＝这张牌自己的亡语在献祭这一路上多结算一次。它只包下面那个块：业力在上面那段 match 里、
+        // 死亡返还档位只在 Battle/Cross 支推进，两者都不被这个因子碰（修正2.MD 3.3 规则3 第 1、3 句因此照旧）。
+        // 取 2 不写成 `amt * 2`：boost 非零时两次独立结算与一次大额不等价，见 daily-echo-karma-ruling 反证表 G 臂。
+        let echoes = if self.daily_rule == DailyRule::SacrificeEcho && cause == DeathCause::Sacrifice { 2 } else { 1 };
+        if let Some(col) = col {  // §十二:494 触发亡语（若有）；§四:169「触发亡语 → 主动献祭触发亡语效果」＝场上献祭传进来的正是 `Some(col)`（手牌献祭传 `None`，它拿不到"哪一列"，余响因此只可能发生在场上）
+            for echo in 0..echoes {
+                let mut resolved = false;  // 这张牌到底有没有亡语：没有的两趟都空手，第 2 趟就不许报一句没发生的余响
+                if c.def.tr == TraitKind::DeathRattleSameColFlame3 {
+                    self.add_flame_col(side, col, 3, None);
+                    resolved = true;
+                }
+                for s in c.skills.clone() {  // §八:294 死亡时同列+1业火
+                    if s == Skill::DeathSameColFlame1 {  // 技能池第 4 项也在这趟里：ai.rs 的 deathrattle_value 早把它计入「亡语价值」喂 §二十:871 献祭得分，同一份发布里"亡语"不能有第二个定义
+                        self.add_flame_col(side, col, 1, None);
+                        resolved = true;
+                    }
+                }
+                if echo > 0 && resolved {  // `add_flame_col` 不写日志，翻倍不报就只剩棋盘上一个反推得出的数
+                    self.log.push(format!("  亡语余响：第{}列再结算一次", col + 1));
                 }
             }
         }
@@ -6643,32 +6657,96 @@ mod daily_rule_tests {
         }
     }
 
-    // ---------- 规则3【献祭余响】：三条子句在基准引擎里已成立（Q-新9 待裁） ----------
+    // ---------- 规则3【献祭余响】：这张牌自己的亡语在献祭这一路上多结算一次 ----------
+    // 出处＝daily-echo-karma-ruling 裁定一（乙：包特性那一支也包技能那一支）。
+    // 见证格一律用初霜／火苗（`tr: None`）：它们不在「业火达阈值触发特性」那一族里，所以焰只在格上累积、
+    // 不会被爆发扣走，读回来的数就是结算次数本身——拿一张有阈值特性的牌当见证，数会被触发链改写过。
 
     #[test]
-    fn sacrifice_echo_clauses_are_already_the_baseline_so_the_rule_changes_nothing() {
-        // 帧文档 §9 的读法甲/乙/丙产出三种不同对局 ⇒ AI 不自决（Q-新9）。这里只把**现况**钉成证据：
-        // 场上献祭触发亡语（第 1 条）、不推进死亡返还递减（第 3 条）、手牌献祭没有"哪一列"可给亡语。
-        for (field, want_flame) in [(true, 3), (false, 0)] {
-            let mut b = fresh(7).with_daily_rule(DailyRule::SacrificeEcho);
+    fn sacrifice_echo_resolves_the_cards_own_deathrattle_twice() {
+        // 三档把两个条件各拆一次：有落点（场上）×有规则 ⇒ 两趟 6；有落点×无规则 ⇒ 一趟 3；
+        // 无落点（手牌）×有规则 ⇒ 0——`player_sacrifice_hand` 传的是 `col=None`，这一档就是提案登记的失效边界⑤。
+        // 业力与死亡返还档位那两句（修正2.MD 3.3 规则3 第 1、3 句）在三档都必须照旧：余响只包亡语那个块。
+        for (rule, field, want_flame, want_echo_logs) in [
+            (DailyRule::SacrificeEcho, true, 6, 1),
+            (DailyRule::None, true, 3, 0),
+            (DailyRule::SacrificeEcho, false, 0, 0),
+        ] {
+            let mut b = fresh(7).with_daily_rule(rule);
             put(&mut b, SideK::Enemy, Row::Front, 0, 960, def(Faction::Frost, "初霜"), &[]);
             let mut echo = CardInst::new(961, def(Faction::Ember, "回燃"));
             echo.seq = b.seq;
             b.seq += 1;
             echo.placed_turn = b.turn - 1;
-            let idx = if field {
+            let r = if field {
                 b.p_front[0] = Some(echo);
-                0
+                b.player_sacrifice_field(0)
             } else {
                 b.hand.push(echo);
-                b.hand.len() - 1
+                let idx = b.hand.len() - 1;
+                b.player_sacrifice_hand(idx)
             };
-            let r = if field { b.player_sacrifice_field(idx) } else { b.player_sacrifice_hand(idx) };
             assert!(r.is_ok(), "{r:?}");
-            assert_eq!(b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap().flame, want_flame, "场上那一列有位置⇒亡语+3；手牌没有位置⇒不适用");
-            assert_eq!(b.p_karma, 4, "第 1 条'正常获得业力'＝全额费用 4（§三:75 围栏1 第二行）");
+            assert_eq!(b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap().flame, want_flame, "{rule:?} 场上={field}");
+            let logs = b.log.iter().filter(|l| l.contains("亡语余响")).count();
+            assert_eq!(logs, want_echo_logs, "`add_flame_col` 不写日志：多结算那一趟不报，玩家在日志里看不见");
+            assert_eq!(b.p_karma, 4, "第 1 条「正常获得业力」＝全额费用 4（§三:75 围栏1 第二行），余响一分不多给");
             let dead = b.discard_pile.iter().find(|c| c.id == 961).expect("非自造牌该回收进弃牌堆");
-            assert_eq!(dead.deaths, 0, "第 3 条'不触发死亡返还递减'＝档位一格都没推进");
+            assert_eq!(dead.deaths, 0, "第 3 条「不触发死亡返还递减」＝档位一格都没推进");
         }
+    }
+
+    #[test]
+    fn sacrifice_echo_stays_quiet_when_the_card_has_no_deathrattle() {
+        // 规则原文带着「（若有）」两个字（修正2.MD 3.3 规则3 第 2 句）。没有亡语的牌两趟都空手，
+        // 第 2 趟就不许报一句没发生的余响——摘掉 `resolved` 那个旗会红在这里。
+        let mut b = fresh(7).with_daily_rule(DailyRule::SacrificeEcho);
+        put(&mut b, SideK::Enemy, Row::Front, 0, 970, def(Faction::Frost, "初霜"), &[]);
+        put(&mut b, SideK::Player, Row::Front, 0, 971, def(Faction::Ember, "火苗"), &[]);
+        assert!(b.player_sacrifice_field(0).is_ok());
+        assert_eq!(b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap().flame, 0, "无亡语 ⇒ 一趟也不发焰");
+        assert!(!b.log.iter().any(|l| l.contains("亡语余响")), "无亡语 ⇒ 不报余响");
+        assert_eq!(b.p_karma, 1, "空手那一趟也不多发业力：火苗全额＝费用 1");
+    }
+
+    #[test]
+    fn sacrifice_echo_doubles_the_death_skill_arm_as_well() {
+        // 「亡语」在码面是一个**类**，不是特性那一支的专名：ai.rs 的 `deathrattle_value` 早就把
+        // `DeathSameColFlame1`（§八:294 技能池第 4 项）计进「亡语价值」喂 §二十:871 的献祭得分，
+        // 同一份发布里不能一边按类算分、一边按专名结算。两档：有规则 2 趟，无规则 1 趟。
+        for (rule, want) in [(DailyRule::SacrificeEcho, 2), (DailyRule::None, 1)] {
+            let mut b = fresh(7).with_daily_rule(rule);
+            put(&mut b, SideK::Enemy, Row::Front, 1, 980, def(Faction::Frost, "初霜"), &[]);
+            put(&mut b, SideK::Player, Row::Front, 1, 981, def(Faction::Ember, "火苗"), &[Skill::DeathSameColFlame1]);
+            assert!(b.player_sacrifice_field(1).is_ok());
+            assert_eq!(b.slot(SideK::Enemy, Row::Front, 1).as_ref().unwrap().flame, want, "{rule:?}：+1 那一支同样按趟数走");
+        }
+    }
+
+    #[test]
+    fn sacrifice_echo_is_two_resolutions_not_one_double_amount() {
+        // 同列有 boost 时两种写法不等价：两次 `amt=3` 各自吃一次加成＝(3+1)×2=8，一次 `amt=6` 只吃一次＝7。
+        // 文档说的是「额外触发…亡语效果」，动作重复一次而不是一笔大数 ⇒ 钉 8（提案反证表 G 臂）。
+        let mut b = fresh(7).with_daily_rule(DailyRule::SacrificeEcho);
+        put(&mut b, SideK::Enemy, Row::Front, 2, 990, def(Faction::Frost, "初霜"), &[]);
+        put(&mut b, SideK::Player, Row::Front, 2, 991, def(Faction::Ember, "回燃"), &[]);
+        let turn = b.turn;
+        b.boosts.push((SideK::Enemy, turn, 1));
+        assert!(b.player_sacrifice_field(2).is_ok());
+        assert_eq!(b.slot(SideK::Enemy, Row::Front, 2).as_ref().unwrap().flame, 8, "两次独立结算 (3+1)×2＝8；写成一次 amt=6 会是 7");
+    }
+
+    #[test]
+    fn sacrifice_echo_is_symmetric_across_the_two_sides() {
+        // 规则文本没有主语（修正2.MD 3.3 规则3 全文未提"我方"），而 `on_death` 是两侧共用的入口 ⇒ 双面都响。
+        // 这一条同时钉住它的真实代价：亡语发的是**同列两侧**的焰，所以敌方献祭一张亡语牌会顺手喂我方那一格。
+        let mut b = fresh(7).with_daily_rule(DailyRule::SacrificeEcho);
+        put(&mut b, SideK::Player, Row::Front, 3, 995, def(Faction::Ember, "火苗"), &[]);
+        put(&mut b, SideK::Enemy, Row::Front, 3, 996, def(Faction::Frost, "霜葬"), &[]);
+        let karma_before = b.e_karma;
+        assert!(b.enemy_sacrifice_field(Row::Front, 3).is_ok());
+        assert_eq!(b.slot(SideK::Player, Row::Front, 3).as_ref().unwrap().flame, 6, "我方同列那格被敌方献祭的余响喂到 6");
+        assert!(b.log.iter().any(|l| l.contains("亡语余响：第4列")), "报的那一列要跟着变，不然日志指错地方");
+        assert_eq!(b.e_karma - karma_before, 4, "敌方那侧同样拿全额费用 4（霜葬 cost=4），余响不多给");
     }
 }
