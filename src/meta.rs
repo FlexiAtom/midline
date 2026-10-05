@@ -50,15 +50,78 @@ fn tail_str(frame: Frame, b: &Battle) -> String {
     }
 }
 
-/// §廿二:969 每日挑战＝本地种子，基于日期生成（`epoch秒/86400` ⇒ 日界是 UTC 零点，不是本地零点）。
-/// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，文档**一字未定义**两者，
-/// 所以当前 `daily` 只是"换日期种子的 play"，不是文档意义上的每日挑战（该缺口挂成显式债，见 model.rs 债表）。
-pub fn daily_seed() -> u64 {  // §廿一:921 每日挑战规则第 1 步＝本地种子，基于日期生成
-    let now = std::time::SystemTime::now()  // §廿一:925 改时间不可防：文档自己声明"不影响游戏平衡"⇒ 本实现不设闸，也不做服务器校时
+/// 日期串 `"YYYYMMDD"` → 种子的**位置加权求和**（2026-10-05 裁 Q-新7）。
+/// 设计 §3.4 那句是"简单求和"，但等权求和实测**撑不住每日 3 抽**：2026-01-01 起 731 天只产出
+/// 20 个不同值（值域 396..415，最挤一档 72 天共用同一条抽取序列）⇒ 每日挑战一年只变 20 张脸。
+/// 加权（`sum = sum*131 + byte`）仍是"逐字符相加"那一族的一次循环，实测 3653 天 → 3653 个不同种子。
+/// 溢出**回绕**（`wrapping`）：种子只要稳定可复现，不需要数学上的单射证明。
+fn date_seed(y: u32, m: u32, d: u32) -> u64 {
+    let text = format!("{y:04}{m:02}{d:02}");
+    let mut h: u64 = 0;
+    for b in text.as_bytes() {
+        h = h.wrapping_mul(131).wrapping_add(*b as u64);
+    }
+    h
+}
+
+/// 格里历年月日 ← 纪元日序号（UTC 口径，纯算术、零依赖；Hinnant 的 `days_from_civil` 逆运算）。
+/// 它是**回落路径**：非 unix，或 `localtime_r` 调用失败时，日界退到 UTC 零点（见 `daily_seed` 的诚实边界）。
+fn civil_from_unix_days(days: i64) -> (u32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 { month_prime + 3 } else { month_prime - 9 };
+    ((if month <= 2 { year + 1 } else { year }) as u32, month as u32, day as u32)
+}
+
+/// 机器本地日历上的"今天"＝ `(年, 月, 日)`。
+/// unix 走 libc 的 `localtime_r`：std 本来就静态链接 libc，这不新增依赖，只是本仓**第一次**直接调它。
+/// 取不到（非 unix／返回空指针／结构体不认）一律回落 UTC——**宁可日界差几小时，也不让每日挑战开不了**。
+fn local_today() -> (u32, u32, u32) {
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    now / 86_400
+        .as_secs() as i64;
+    #[cfg(unix)]
+    {
+        #[repr(C)]
+        struct Tm {
+            tm_sec: i32, tm_min: i32, tm_hour: i32, tm_mday: i32,
+            tm_mon: i32, tm_year: i32, tm_wday: i32, tm_yday: i32, tm_isdst: i32,
+            tm_gmtoff: i64, tm_zone: *const i8,
+        }
+        unsafe extern "C" {
+            fn tzset();
+            fn localtime_r(time: *const i64, result: *mut Tm) -> *mut Tm;
+        }
+        // SAFETY: `localtime_r` 是 POSIX 的重入版本，只要求第二个实参指向一块可写的 `struct tm`；
+        // 上面的 `#[repr(C)]` 镜像 glibc 的字段顺序，`zeroed` 出的整块内存都在本函数栈上。
+        let filled = unsafe {
+            let mut tm: Tm = std::mem::zeroed();
+            tzset();
+            if localtime_r(&now, &mut tm).is_null() { None } else { Some(tm) }
+        };
+        if let Some(tm) = filled {
+            // tm_year 是"自 1900 年起"、tm_mon 从 0 起——这两条换算是 C 的口径，不是本程序的日期口径。
+            return (tm.tm_year.max(0) as u32 + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32);
+        }
+    }
+    civil_from_unix_days(now.div_euclid(86_400))
+}
+
+/// §廿二:969 每日挑战＝本地种子，基于日期生成（日界＝**机器本地零点**，2026-10-05 裁 Q-新8；
+/// 非 unix 或取本地时区失败才回落 UTC 零点）。
+/// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，卡组名单文档**一字未给**；4 条特殊规则已按日
+/// 抽取、但只报幕不生效（生效在帧 D3）⇒ 现在的 `daily` 是"按日场次＋按日额度＋按日规则序列的单场生存战"，
+/// 仍不是文档意义上的每日挑战（该缺口挂成显式债，见 model.rs 债表）。
+pub fn daily_seed() -> u64 {  // §廿一:921 每日挑战规则第 1 步＝本地种子，基于日期生成
+    let (y, m, d) = local_today(); // §廿一:925 改时间不可防：文档自己声明"不影响游戏平衡"⇒ 本实现不设闸，也不做服务器校时
+    date_seed(y, m, d)             // 算法＝日期数字按位权 131 累乘（2026-10-05 裁 Q-新7），不是文档那句"简单求和"
 }
 
 pub fn enemy_faction_for(level: u32) -> Faction {
@@ -90,7 +153,7 @@ struct RunState {
 enum SaveUse {
     /// 主线：每次进关写「本关入口」快照（`裁定27`）。
     Progress,
-    /// 每日：只由调用方写**每日那三键**（日戳／额度／抽取 state），关卡与继承堆一个字节都不动——
+    /// 每日：只由调用方写**每日那五个键**（日戳／额度／抽取序列三键），关卡与继承堆一个字节都不动——
     /// 每日跑的是单场生存战，把它写进主线进度会凭空造出一条没人打过的"主线进度"。
     Daily,
 }
@@ -248,13 +311,51 @@ fn persist(slot: &mut SaveSlot, what: &str) -> bool {
 /// 每日挑战的免费额度（修正2.MD 3.5「每日免费次数：3」）。
 pub const DAILY_ATTEMPTS: u32 = 3;
 
+/// 特殊规则池（修正2.MD 3.3 的四条，顺序＝文档编号 1..4）。**本帧只抽不生效**，生效在帧 D3。
+const DAILY_RULES: [&str; 4] = ["业火狂潮", "短兵相接", "献祭余响", "粘稠暗影"];
+
+/// 规则号 → 名字（入场行与 `progress` 报告共用这一处口径，不再开第二张表；越界号报"无"而不是 panic）。
+pub fn daily_rule_name(rule: u32) -> &'static str {
+    DAILY_RULES.get(rule as usize).copied().unwrap_or("（今日无规则）")
+}
+
+/// pity 阈值——**AI 自决的实现常量**，设计只裁了"配保底、文案不明写"，一字未给数。
+/// 取 2 ＝ 同一条规则连抽两次是允许的，第三次强推他条。不取"永不连重"：保底是**下限触发**的兜底，
+/// 不是把 PRNG 的自由度全关掉（连重本身也是玩家会当成"今天就这么背"的合法局面）。
+const DAILY_PITY_RUN: u32 = 2;
+
+/// SplitMix64 走一步（种子驱动、纯算术、同种子必同序列——2026-10-04 裁「抽取应使用伪随机，避免真随机」）。
+fn split_mix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// 抽今天的下一条特殊规则，并把序列三键（state／last／run）往前推一格。
+/// 到 pity 阈值时是**强推他条**而不是重抽：重抽需要一个上限，而文档那条"重抽上限 3 次"（修正2.MD 3.3 规则2）
+/// 本来只在"抽到短兵相接且关卡是 Boss"时才走——每日永远是第 1 关，那个条件在这台机器上凑不出来。
+fn daily_draw(p: &mut Progress) -> u32 {
+    let pool = DAILY_RULES.len() as u32;
+    let mut rule = (split_mix64(&mut p.daily_draw_state) % pool as u64) as u32;
+    if rule == p.daily_rule_last && p.daily_rule_run >= DAILY_PITY_RUN {
+        rule = (rule + 1) % pool;
+    }
+    p.daily_rule_run = if rule == p.daily_rule_last { p.daily_rule_run.saturating_add(1) } else { 1 };
+    p.daily_rule_last = rule;
+    rule
+}
+
 /// 日界重置＋放行判据（纯函数：判据只在这一处，`daily_run` 与常驻测读同一条，不留第二份真值）。
-/// 返回 `false`＝今天的额度已经用完。日戳不是今天 ⇒ 当日计数作废、抽取序列 state 换成当日种子（额度重满）。
+/// 返回 `false`＝今天的额度已经用完。日戳不是今天 ⇒ 当日计数作废、抽取序列换成当日种子（额度重满）。
 fn daily_begin(p: &mut Progress, seed: u64) -> bool {  // §廿一:924 每日重置＝只比对**今天**的日种子：记过的是昨天，不挡今天重开
     if p.daily_done != seed {
         p.daily_done = seed;
         p.daily_attempts = 0;
-        p.daily_draw_state = seed; // 当日规则序列的起点；逐次抽取与 pity 的落在帧 D2
+        p.daily_draw_state = seed; // 当日规则序列的起点
+        p.daily_rule_last = 0;
+        p.daily_rule_run = 0;
     }
     p.daily_attempts < DAILY_ATTEMPTS
 }
@@ -273,10 +374,9 @@ fn daily_settle(p: &mut Progress, survived: i64) -> bool {
 
 /// 每日挑战：一天 3 次（`DAILY_ATTEMPTS`）、一次**一场单场生存战**（修正2.MD 3.5/3.6 ＋ 2026-10-05 裁）。
 /// 打完就结束——不再是"无尽爬梯到第一次败北"：额度与奖励都以"场"计，爬梯那场没有额度可对。
-/// 落盘只在通关那一刻：失败不扣次数 ⇒ 每日那三键一个都没变 ⇒ 没有理由做一次整文件重写
-/// （`daily_finish` 那条测记着它曾经抹掉过主线）。
-/// 诚实缺口：固定卡组与 4 条特殊规则仍未落（帧 D2/D3）⇒ 现在的 daily 还是"换日期种子的一局"，
-/// 只是场次、额度与通关口径已经按定稿走。
+/// 每次开场先抽一条当日特殊规则（`daily_draw`）；落盘在场次收束那一刻，通关再多记一次额度。
+/// 诚实缺口：固定卡组仍未落（帧 D3 才把抽中的规则接进引擎）⇒ 抽到的规则今天只报幕、不改对局，
+/// 但场次、额度、日界与抽取序列已经按定稿走。
 pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
     let seed = daily_seed();
     let mut save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::Daily);
@@ -285,7 +385,12 @@ pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模
         return;
     }
     let nth = save.progress.daily_attempts + 1;
-    println!("每日挑战 seed={seed} · 今日第 {nth}/{} 次", DAILY_ATTEMPTS);
+    let rule = daily_draw(&mut save.progress);
+    println!(
+        "每日挑战 seed={seed} · 今日第 {nth}/{} 次 · 本场规则：{}（帧 D3 前只报幕、不改对局）",
+        DAILY_ATTEMPTS,
+        daily_rule_name(rule)
+    );
     let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(save) };
     let (_, survived) = one_level(seed, Faction::Ember, Difficulty::Normal, 1, &mut st, |_| (enemy_faction_for(1), None), frame);
     let cleared = daily_finish(&mut st, survived);
@@ -316,16 +421,19 @@ fn ladder(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
     }
 }
 
-/// 每日收尾：记账（纯函数 `daily_settle`）＋只在记账真的改了东西时落盘。
-/// 落盘走的是**整文件重写**，所以槽里那份内存档必须是从盘上原样读回来的（`SaveSlot::try_open` 的
-/// `SaveUse::Daily` 分支保证）——这条不变量由 `daily_done_mark_preserves_an_existing_mainline_progress` 守着。
+/// 每日收尾：记账（纯函数 `daily_settle`）＋**每次收束都过一次落盘闸**。
+/// 为什么失败那次也要走这里：抽取序列必须跨进程前进（2026-10-05 裁 Q-新3 的耦合判据"失败不回滚 state"）。
+/// 但"过一次闸"不等于"重写一遍文件"——字节相同 `save_to` 就原地返回，所以**败局只在抽取序列真的换了一步时**
+/// 才落盘，主线那几键从此不再被每日的败局反复重写（落盘是整文件重写 tmp+rename）。
+/// 两条各钉一处：额度照旧不动（`daily_quota_resets_on_the_day_boundary_and_frees_on_failure`），
+/// 主线各键照不动（`daily_done_mark_preserves_an_existing_mainline_progress`，那条测记着这里
+/// 曾经真的抹掉过别人的 level 与继承堆）。
+/// 弃局走不到这里：`one_level` 的 Quit 臂直接结束进程 ⇒ 弃局既不占额度，也不消耗抽取序列。
 /// 返回是否通关。
 fn daily_finish(st: &mut RunState, survived: i64) -> bool {
     let Some(slot) = st.save.as_mut() else { return false };
     let cleared = daily_settle(&mut slot.progress, survived);
-    if cleared {
-        persist(slot, "每日额度");
-    }
+    persist(slot, if cleared { "每日额度" } else { "每日抽取序列" });
     cleared
 }
 
@@ -639,6 +747,58 @@ mod meta_tests {
     use crate::boss::BossId;
     use crate::model::faction_cards;
 
+    /// 纪元日序号 → 格里历年月日的已知向量。回落路径（非 unix／`localtime_r` 失败）的全部真值来源，逐条钉死。
+    /// 数是从 Python 的 `date` 独立算的，不是"跑一遍本实现再抄回来"。
+    #[test]
+    fn utc_civil_conversion_matches_the_stored_vectors() {
+        for (days, want) in [
+            (0, (1970, 1, 1)),
+            (-1, (1969, 12, 31)),
+            (11_016, (2000, 2, 29)),
+            (19_782, (2024, 2, 29)),
+            (20_454, (2026, 1, 1)),
+            (20_730, (2026, 10, 4)),
+            (20_731, (2026, 10, 5)),
+            (20_818, (2026, 12, 31)),
+            (20_819, (2027, 1, 1)),
+            (84_005, (2199, 12, 31)),
+        ] {
+            assert_eq!(civil_from_unix_days(days), want, "纪元日 {days} 该换成 {want:?}");
+        }
+    }
+
+    /// 位置加权求和：先钉一个**外部算出**的具体号（常数 131 与"逐字节"这条口径不许悄悄换），
+    /// 再钉十年逐日一号一个——等权"简单求和"实测 731 天只有 20 个不同值，那样的日种子撑不住每日 3 抽。
+    #[test]
+    fn date_seed_is_pinned_and_one_to_one_with_the_day() {
+        assert_eq!(date_seed(2026, 10, 5), 33_347_663_914_430_850, "20261005 的日种子号换了就是算法换了");
+        assert_eq!(date_seed(2026, 10, 4), 33_347_663_914_430_849, "相邻两天该差一号，不是差一坨");
+        let mut seen = std::collections::HashSet::new();
+        for day in 20_454..20_454 + 3653 {
+            let (y, m, d) = civil_from_unix_days(day);
+            assert!(seen.insert(date_seed(y, m, d)), "纪元日 {day}（{y}-{m:02}-{d:02}）与前面某天撞了种子");
+        }
+        assert_eq!(seen.len(), 3653, "十年逐日不该有一个重号");
+    }
+
+    /// 本地那一格的**接线**检查：给的必须是一个真日期，且与 UTC 口径至多差一天。
+    /// 它不证"时区算对了"——那要靠换 `TZ` 复跑（帧档记了实测：`TZ=Etc/GMT+11` 时号退到 20261004 那一档）。
+    /// 这条只钉：`struct tm` 字段顺序读错、`tm_year+1900`／`tm_mon+1` 的 C 口径漏掉，当场红。
+    #[test]
+    fn local_today_is_a_real_date_within_a_day_of_the_utc_reading() {
+        let (y, m, d) = local_today();
+        assert!((2024..2200).contains(&y), "年 {y} 离谱：tm_year 的 +1900 大概漏了");
+        assert!((1..=12).contains(&m), "月 {m} 越界：tm_mon 的 +1 大概漏了");
+        assert!((1..=31).contains(&d), "日 {d} 越界：tm 字段大概读串了");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let day = (now as i64).div_euclid(86_400);
+        let nearby = [-1i64, 0, 1].map(|k| {
+            let (uy, um, ud) = civil_from_unix_days(day + k);
+            date_seed(uy, um, ud)
+        });
+        assert!(nearby.contains(&daily_seed()), "本地日种子与 UTC 口径差出三天以上：FFI 那条路读错了字段");
+    }
+
     #[test]
     fn encounter_for_mounts_boss_only_on_chapter_ends() {
         // 普通关：三阵营轮转、无 Boss（与既有 enemy_faction_for 同一套真值，不开第二套）
@@ -751,7 +911,7 @@ mod meta_tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// 每日槽只许动**每日那三键**。让它顺手写进度就等于凭空造出一条没人打过的"主线进度"——
+    /// 每日槽只许动**每日那五个键**。让它顺手写进度就等于凭空造出一条没人打过的"主线进度"——
     /// 这个门禁是纯字段判断，一旦有人把 `daily` 改成共用 `Progress` 槽，全靠这条响。
     /// 注意它**只**管得住 `snapshot_entry` 这一侧；"记一次每日反而抹掉主线"是另一条路，
     /// 由 `daily_done_mark_preserves_an_existing_mainline_progress` 管（那条曾经真的漏了）。
@@ -792,14 +952,75 @@ mod meta_tests {
         assert_eq!(got.carry_karma, 3, "结转业力不该被抹平");
         assert_eq!(got.daily_done, daily_seed(), "每日记录本身要写上");
         assert_eq!(got.daily_attempts, 1, "通关扣一次额度，且只扣一次");
-        // 中途败那一次**不写盘**：额度没变、日戳没变，整文件重写没有理由发生。
-        let st2 = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
+        // 中途败那一次：额度照旧不动，但**抽取序列必须落盘**。失败不回滚 state 是 Q-新3 定的耦合判据；
+        // `save_to` 那道"字节相同就不重写"的闸在这里挡不住——序列确实前进了一步，落盘是真改动。
+        let mut opened2 = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
             .expect("合法档应能开出每日槽");
-        let before = std::fs::read(&path).unwrap();
-        let mut run2 = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(st2) };
+        assert!(daily_begin(&mut opened2.progress, daily_seed()), "额度还剩就该继续放行");
+        let drawn = daily_draw(&mut opened2.progress);
+        let advanced_state = opened2.progress.daily_draw_state;
+        let mut run2 = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened2) };
         assert!(!daily_finish(&mut run2, TURN_LIMIT - 1), "差一个回合就是没活满");
-        assert_eq!(std::fs::read(&path).unwrap(), before, "失败那次一个字节都不该动（失败不扣次数）");
+        let after = Progress::load_from(&path).expect("失败那次落盘的档仍应能读回");
+        assert_eq!(after.daily_attempts, 1, "失败不扣次数：额度还停在通关那一次");
+        assert_eq!(after.daily_draw_state, advanced_state, "抽过一步的序列必须活着落盘，否则下一场重抽同一条");
+        assert_eq!(after.daily_rule_last, drawn, "pity 的\"上一条\"要跟着走");
+        assert_eq!(after.level, 5, "失败那次同样不许碰主线关卡");
+        assert_eq!(after.inherit.len(), 2, "…继承堆也不许");
+        assert_eq!(after.carry_karma, 3, "…结转业力也不许");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// 抽取机件本身：同一天种子 ⇒ 同一条序列（可复现），跨进程接着走（Q-新3），pity 挡死三连同（Q-新4）。
+    #[test]
+    fn the_daily_draw_replays_the_same_sequence_and_pity_caps_the_run() {
+        let seed = date_seed(2026, 10, 5);
+        let mut a = Progress::new(Faction::Ember, Difficulty::Normal);
+        let mut b = Progress::new(Faction::Ember, Difficulty::Normal);
+        assert!(daily_begin(&mut a, seed) && daily_begin(&mut b, seed));
+        let mut runs = [0u32; 4];
+        let mut max_run = 0u32;
+        let mut seen = std::collections::HashSet::new();
+        for k in 0..400 {
+            let drawn = daily_draw(&mut a);
+            assert!(drawn < 4, "抽出的规则号 {drawn} 越界（规则池就 4 条）");
+            assert_eq!(a.daily_rule_last, drawn, "\"上一条\"就该是刚抽的那条");
+            if k == 2 {
+                // 第三场之前先"重启"一次：把内存档写回去再读回来，序列必须接着走而不是从头再来
+                let back = Progress::from_kv(&a.to_kv()).expect("自产档必须能读回");
+                assert_eq!(back.daily_rule_last, a.daily_rule_last, "跨进程：上一条得记得");
+                assert_eq!(back.daily_rule_run, a.daily_rule_run, "跨进程：连中次数得记得");
+                assert_eq!(back.daily_draw_state, a.daily_draw_state, "跨进程：PRNG state 得记得");
+            }
+            if k < 4 {
+                // 头几场拿两条独立实现的序列对撞：同种子必须同一条（SplitMix64 的每一步都是纯函数）
+                assert_eq!(drawn, daily_draw(&mut b), "同一日种子的序列不该分叉");
+            }
+            max_run = max_run.max(a.daily_rule_run);
+            runs[drawn as usize] += 1;
+            seen.insert(drawn);
+        }
+        assert!(max_run <= 2, "pity 该把连中挡在 2，实测连中 {max_run} 次");
+        assert_eq!(seen.len(), 4, "四条规则一条都没抽到，抽取面就有死角：{seen:?}");
+        assert!(runs.iter().all(|n| *n > 0), "四条都该有出场：{runs:?}");
+    }
+
+    /// 旧日戳（帧 D1 之前那版程序记的 `epoch/86400` 日号）与新算法的种子必然不等 ⇒ 当日额度重满、序列换起点。
+    /// 这不是 bug 而是**部署日的既有后果**，所以把它钉成一条测：谁改了种子算法而忘了这条，这里当场红。
+    #[test]
+    fn an_old_epoch_day_stamp_rolls_over_to_today_and_refills_the_quota() {
+        let seed = daily_seed();
+        let mut p = Progress::new(Faction::Ember, Difficulty::Normal);
+        p.daily_done = 20_731; // D1 那版的口径：今天的 epoch 日号（旧算法留下的档面）
+        p.daily_attempts = 3;
+        p.daily_rule_last = 2;
+        p.daily_rule_run = 2;
+        assert!(daily_begin(&mut p, seed), "旧日戳不等于今天 ⇒ 放行");
+        assert_eq!(p.daily_attempts, 0, "跨日：额度重满");
+        assert_eq!(p.daily_done, seed, "日戳换成新算法的号");
+        assert_eq!((p.daily_rule_last, p.daily_rule_run), (0, 0), "pity 计数随日作废");
+        assert_eq!(p.daily_draw_state, seed, "抽取序列从当日种子重新起头");
+        assert!(seed > 1_000_000, "新日种子是日期串的加权号，量级掉回日号就说明算法又换回去了：{seed}");
     }
 
     /// 每日额度的三条判据钉在一起：跨日重开、同日三次用满、失败不扣。判据是纯函数，
@@ -813,7 +1034,11 @@ mod meta_tests {
         p.daily_attempts = DAILY_ATTEMPTS;
         p.daily_draw_state = 999;
         assert!(daily_begin(&mut p, seed), "跨日必须放行");
-        assert_eq!((p.daily_done, p.daily_attempts, p.daily_draw_state), (seed, 0, seed), "重置要三键一起换，少一个就是第二套真值");
+        assert_eq!(
+            (p.daily_done, p.daily_attempts, p.daily_draw_state, p.daily_rule_last, p.daily_rule_run),
+            (seed, 0, seed, 0, 0),
+            "重置要五个键一起换，少一个就是第二套真值（pity 计数留在昨天＝今天第一场可能被误判成连中）"
+        );
         // 今天打满三次 ⇒ 用完；用完之后同一天再进来必须被挡住。
         for _ in 0..DAILY_ATTEMPTS {
             assert!(daily_settle(&mut p, TURN_LIMIT));

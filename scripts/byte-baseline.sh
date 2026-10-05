@@ -41,15 +41,26 @@ p11(){ printf 'go\ne\ne\ne\nq\n' | "$B" play --boss 3 --seed 2026 > "$O/p11.txt"
 # p12..p14 是每日挑战的三条出口。p9 只有 EOF 一条路（它连一场仗都没打开），所以"场次形状／额度闸／日界重置"
 # 三件事在 p9 上**全都量不出来**——改这三处而只有 p9 在跑，就等于把"10/11 条 SAME"当成绿灯。
 # 手工造的档面（`daily_kv`）不是测试夹具的作弊：它就是本程序自己的 to_kv 形状，只有日戳与额度两个数被人按过。
+# **日戳不许在 shell 里再算一遍哈希**：种子算法（帧 D2＝位置加权求和＋机器本地零点）住在 `meta.rs::daily_seed`，
+# 脚本里另写一份就成了第二套真值——它会"永远正确"，因为它从不与程序对撞。现取：先让二进制把今天的种子**印出来**
+# （prep 阶段 `q` 弃局，一行输出都不落盘），再拿那个数去造"今天已用完"的档面。
+today_seed() { printf 'q\n' | "$B" daily --save "$O/.seed.probe" 2>&1 | sed -n 's/.*seed=\([0-9]\{1,\}\).*/\1/p' | head -1; }
 daily_kv() { # $1=日戳 $2=已用额度 $3=落盘路径
-    printf 'schema=2\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=%s\ndaily_attempts=%s\ndaily_draw_state=%s\n' "$1" "$2" "$1" > "$3"; }
-# p12 一天里的第一场（空档起手）：入口那行报"今日第 1/3 次"，打三回合后 `q` 弃局——弃局不落盘，
+    printf 'schema=3\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=%s\ndaily_attempts=%s\ndaily_draw_state=%s\ndaily_rule_last=1\ndaily_rule_run=2\n' "$1" "$2" "$1" > "$3"; }
+# p12 一天里的第一场（空档起手）：入口那行报"今日第 1/3 次 ＋ 本场规则"，打三回合后 `q` 弃局——弃局不落盘，
 # 所以这条同时钉住"额度只在通关那刻扣"。
 p12(){ printf 'go\ne\ne\ne\nq\n' | "$B" daily --save "$O/d12.save" > "$O/p12.txt" 2>&1; }
-# p13 今日 3 次已用完 ⇒ 第二次进来该被挡住，且**一场都不许开**。日界按 UTC 算（同 p9 的跨天换 md5 口径）。
-p13(){ local s=$(( $(date +%s) / 86400 )); daily_kv "$s" 3 "$O/d13.save"; "$B" daily --save "$O/d13.save" > "$O/p13.txt" 2>&1; }
+# p13 今日 3 次已用完 ⇒ 第二次进来该被挡住，且**一场都不许开**。日戳取二进制自己印出的今日种子（见 `today_seed`），
+# 所以这条的输出**随日历换 md5**（与 p9 同一口径，那是日历在走、不是行为漂）。
+p13(){ local s; s="$(today_seed)"; [ -n "$s" ] || { echo "p13：二进制没报出今日种子 ⇒ 造不出「今天已用完」的档面（别拿一份读不懂的档冒充额度闸）" >&2; exit 1; }
+       daily_kv "$s" 3 "$O/d13.save"; "$B" daily --save "$O/d13.save" > "$O/p13.txt" 2>&1; }
 # p14 昨天用满、今天该重开：日戳与今天不符 ⇒ 额度作废归零，照常开局。这条**不随日期漂**（日戳钉死为 1），
 # 是 p13 的反面——只钉"用完挡得住"不钉"跨日放得开"，把重置判据写成 `==` 也照样全绿。
 p14(){ daily_kv 1 3 "$O/d14.save"; printf 'go\nq\n' | "$B" daily --save "$O/d14.save" > "$O/p14.txt" 2>&1; }
-for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14; do $f; done
+# p15 帧 D2 的兼容面：一份**旧档**（schema=2，抽取序列只有 state、没有 pity 那两键）交给新二进制读。
+# 报告行里那三个数是这条的全部断言——`上一条 0（连中 0 次）`＝缺的键取了默认值而不是拒载，
+# `schema=3（接受 1..=3）`＝读宽写窄（读进来不就地改写文件，`progress` 从不落盘）。
+p15(){ printf 'schema=2\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=1\ndaily_attempts=2\ndaily_draw_state=777\n' > "$O/v2.save";
+       "$B" progress --save "$O/v2.save" > "$O/p15.txt" 2>&1; }
+for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15; do $f; done
 md5sum "$O"/p*.txt | sed "s#$O/##"
