@@ -121,6 +121,62 @@ pub enum Row {
     Back,
 }
 
+/// 每日挑战的特殊规则叠加（修正2.MD 3.3 的四条，顺序＝文档编号 1..4）。**全仓只此一张表**——
+/// 规则号（存档与抽取序列用的 0..=3）、名字、效果说明都从这里出，`meta::DAILY_RULES` 那份旧表已并进来。
+/// 与 `crate::boss::BossRule` 同族：都是盖在普通对局上的一层，`None` ⇒ 引擎行为与改前逐字节相同。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum DailyRule {
+    /// 不是每日场（主线／爬梯／跳打 Boss），或每日之外的一切对局。
+    #[default]
+    None,
+    /// 规则1：所有卡牌阈值减半（向下取整）。
+    FlameTide,
+    /// 规则2：开局双方各抽 1 张直接部署到中线前。
+    Clash,
+    /// 规则3：献祭卡牌时"正常获得业力＋额外触发亡语＋不触发死亡返还递减"。**现况已成立，本帧不实现**——
+    /// 那三条里第 1、3 条是引擎现况的复述，第 2 条对场上献祭也已是现况（`on_death` 拿到的就是 `Some(col)`），
+    /// 只有手牌献祭不触发亡语而手牌没有"哪一列"可落点。三种读法产出不同东西 ⇒ 挂 Q-新9 待裁，见 md-revision-daily §9。
+    SacrificeEcho,
+    /// 规则4：敌方推进 E1-E4→E5-E8 每列耗 2 点敌方业力，不足则本列这次不推进。
+    ViscidShadow,
+}
+
+impl DailyRule {
+    /// 抽取池＝四条规则本体（`None` 不入池：每日每场必有一条）。
+    pub const POOL: [DailyRule; 4] =
+        [DailyRule::FlameTide, DailyRule::Clash, DailyRule::SacrificeEcho, DailyRule::ViscidShadow];
+
+    /// 规则号 → 规则。越界号是**坏档**（手改的、或未来版本写出来的），不当成任何一条规则。
+    pub fn from_index(i: u32) -> Option<DailyRule> {
+        DailyRule::POOL.get(i as usize).copied()
+    }
+
+    /// 规则名（入场行与 `progress` 报告共用）。
+    pub fn name(self) -> &'static str {
+        match self {
+            DailyRule::None => "无",
+            DailyRule::FlameTide => "业火狂潮",
+            DailyRule::Clash => "短兵相接",
+            DailyRule::SacrificeEcho => "献祭余响",
+            DailyRule::ViscidShadow => "粘稠暗影",
+        }
+    }
+
+    /// 入场行那半句：**这一场真的会发生什么**。待裁的那条照实说待裁，不许念一句引擎不兑现的口号。
+    pub fn effect(self) -> &'static str {
+        match self {
+            DailyRule::None => "无",
+            DailyRule::FlameTide => "阈值减半（向下取整）",
+            DailyRule::Clash => "开局双方各抽 1 张直接部署到中线前",
+            DailyRule::SacrificeEcho => "待裁：现况已触发亡语",
+            DailyRule::ViscidShadow => "敌方推进每列耗 2 业力",
+        }
+    }
+}
+
+/// 【粘稠暗影】那一跨的价钱（修正2.MD 3.3 规则4 第 1 句「需消耗 2 点业力」）。
+const STICKY_ADVANCE_COST: i32 = 2;
+
 #[derive(Clone)]
 pub struct Battle {
     pub rng: Rng,
@@ -178,6 +234,9 @@ pub struct Battle {
     pub holder_names: [&'static str; 2],
     /// 回合上限（默认 30；字段留给后续模式，Boss 不改）。
     pub turn_limit: i64,
+    /// 每日挑战的特殊规则叠加（与难度档、Boss 遭遇轴三者两两正交）。`None` ⇒ 本帧新增的每一处钩子
+    /// 都走改前的路，普通对局一个字节都不变；它**只由 `with_daily_rule` 写**，不经任何构造参数。
+    pub daily_rule: DailyRule,
 }
 
 
@@ -287,6 +346,7 @@ impl Battle {
             boosts: Vec::new(),
             attack_order: Vec::new(),
             pending_candle_d: 0,
+            daily_rule: DailyRule::None,
             pending_card_d: Vec::new(),
             boss: None,
             e_candle2: None,
@@ -391,6 +451,43 @@ impl Battle {
         let mut b = Self::new(rng_seed, player_faction, enemy_faction, difficulty, inherit, level);
         b.apply_chapter_strengthening(level);
         b
+    }
+
+    /// 给这一场盖上每日特殊规则。**唯一写 `daily_rule` 的入口**（构造参数里不加那一位 ⇒ 主线／爬梯／跳打
+    /// 三条路的既有调用点一个都不改，也不会哪天有人"顺手"给普通关传进来一条规则）。
+    /// 时序：`new` 里那次「回合1·自动抽牌」已经发生过了，所以【短兵相接】拿走的是**当下**的堆顶／敌堆随机一张，
+    /// 不是替掉那次抽牌——文档只说"开局各抽 1 张直接部署"，没说它跟回合抽牌谁在前，这里取"构造之后"这条
+    /// 唯一不需要改 `new` 的路（作用点记在 md-revision-daily §9）。
+    pub fn with_daily_rule(mut self, rule: DailyRule) -> Self {
+        self.daily_rule = rule;
+        if rule == DailyRule::Clash {
+            self.clash_opening();
+        }
+        self
+    }
+
+    /// 【短兵相接】的开局部署（修正2.MD 3.3 规则2 第 1 条）。**规则 2 真正新增的只有这一件事**：
+    /// 文档另外那六条在这台引擎里本来就成立——第一回合即可攻击（`player_attack_phase` 按前排 seq 序遍历、
+    /// 没有 `placed_turn` 闸）、部署后不移动（`enemy_advance` 只搬"后排→空前排"，落在 E5-E8 自然不再动）、
+    /// 挤压与献祭走的就是既有 `place_side`／`on_death` 那两条路、P1/E5 定义不动。逐条各钉一条测守住"没被改坏"。
+    /// 抽法照两侧各自的开局口径：我方取堆顶（裁定11 的堆顶序），敌方随机下标（同 `new` 里那三次敌方抽牌）。
+    /// **不扣业力**：开局两侧业力恒 0，按费用收会把业力打成负数（那是别处明确当坏读数防的形状），文档也没给这笔预算。
+    fn clash_opening(&mut self) {
+        if self.boss.is_some() {
+            return; // 文档明写「若关卡为 Boss 关卡 → 不触发【短兵相接】」；每日路径恒非 Boss，这道闸今天拦不到东西
+        }
+        self.log.push("— 特殊规则【短兵相接】：开局双方各部署 1 张 —".to_string());
+        let pcol = self.rng.below(4);
+        if !self.draw_pile.is_empty() {
+            let c = self.draw_pile.remove(0);
+            self.place_side(SideK::Player, c, pcol, Row::Front, false);
+        }
+        let ecol = self.rng.below(4);
+        if !self.enemy_pile.is_empty() {
+            let i = self.rng.below(self.enemy_pile.len());
+            let c = self.enemy_pile.remove(i);
+            self.place_side(SideK::Enemy, c, ecol, Row::Front, false);
+        }
     }
 
     fn make_card(&mut self, def: CardDef, with_skill: bool) -> CardInst {
@@ -597,8 +694,11 @@ impl Battle {
     /// 通用放置核心（我方/敌方共用）。压上已占用格 → 原占位卡越线死亡；
     /// 谁能压由 `enemy_place_legal` / `player_place` 的格位检查决定（影长「暗渡」是敌方唯一放行方）。
     /// §廿二:944 越线死亡统一走 `on_death(.., DeathCause::Cross)`：触发亡语、按死亡返还递减获得业力。
-    fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row) {
-        let cost = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力；§五:198 开端放到 P1＝0 费、不消耗业力；§三:116 围栏4 第三行「开端 → 放置不消耗业力」＝那个 0
+    /// `charge` ＝这一次放置收不收业力。三处正常放置全是 `true`；唯一的 `false` 是【短兵相接】的开局部署
+    /// （开局两侧业力恒 0，收费会把业力打成负数），开不收费**只**由那一个调用点决定，不在此处再判一次规则。
+    fn place_side(&mut self, side: SideK, card: CardInst, col: usize, row: Row, charge: bool) {
+        let fee = if card.is_starter() { 0 } else { card.def.cost };  // §十二:433 放置消耗业力＝卡牌费用（开端 0）；§廿三:987 业力消耗之一：放置；§七:264 费用＝卡牌消耗的业力；§五:198 开端放到 P1＝0 费、不消耗业力；§三:116 围栏4 第三行「开端 → 放置不消耗业力」＝那个 0
+        let cost = if charge { fee } else { 0 };  // 免不免**只**由调用点定（见上），这里不再判一次规则
         match side {
             SideK::Player => self.p_karma -= cost,  // §三:114 围栏4 第一行「放置卡牌 → 消耗业力 = 卡牌费用」与 §三:68 表1「用途」那格前半句的共同落点
             SideK::Enemy => self.e_karma -= cost,
@@ -668,7 +768,7 @@ impl Battle {
             return Err(format!("业力不足：需{cost}，当前{}", self.p_karma));
         }
         let c = self.hand.remove(hand_idx);
-        self.place_side(SideK::Player, c, col, Row::Front);
+        self.place_side(SideK::Player, c, col, Row::Front, true);
         Ok(())
     }
 
@@ -702,14 +802,14 @@ impl Battle {
         }
         self.enemy_place_legal(&self.enemy_hand[hand_idx], col, row)?;
         let c = self.enemy_hand.remove(hand_idx);
-        self.place_side(SideK::Enemy, c, col, row);
+        self.place_side(SideK::Enemy, c, col, row, true);
         Ok(())
     }
 
     /// 放置一个现成实例（Boss 脚本直放：不经敌方手牌/牌堆、技能由脚本声明）。
     pub fn enemy_place_inst(&mut self, c: CardInst, col: usize, row: Row) -> Result<(), String> {
         self.enemy_place_legal(&c, col, row)?;
-        self.place_side(SideK::Enemy, c, col, row);
+        self.place_side(SideK::Enemy, c, col, row, true);
         Ok(())
     }
 
@@ -1058,10 +1158,21 @@ impl Battle {
 
     /// §廿二:963 推进＝单卡、按列独立：只有前排空的列才把该列后排顶上来，每列每次至多1张。§十二:482 单卡推进按列独立结算；§十二:483 每列各判一次；§十七:740 同一条（敌方回合结束推进，按列独立）。
     fn enemy_advance(&mut self) {
+        // 【粘稠暗影】＝"E1-E4 推进到 E5-E8 需消耗 2 点业力"，花的是敌方 AI 的业力，玩家业力一个字节不碰。
+        // 价钱按**列**计（这一跨本身就是按列独立结算的，§十二:483 每列各判一次），付不起的那一列本次不推进。
+        // 闸落在推进这一处而不是抽取端：抽取端拿不到"本局是不是 Boss 关"，而文档那句"Boss 关卡不触发"要的就是它。
+        let sticky = self.daily_rule == DailyRule::ViscidShadow && self.boss.is_none();
         for col in 0..4 {  // §十七:741 「每列：」＝这条循环体，四列各判一次，列与列之间不传状态
+            if sticky && self.e_karma < STICKY_ADVANCE_COST {  // 先判付得起，别把牌 take 出来再塞回去
+                continue;
+            }
             if self.e_front[col].is_none() {  // §十二:484 前排空→后排推进；§十二:485 前排有卡→不推进；§十七:742 后有新、前空→推进；§十七:743 前后都有→不推进
                 if let Some(c) = self.e_back[col].take() {  // §十二:486 后排空→不推进；§十二:487 推进后 E1-E4 空出；§十二:489 每列后排仅 1 格⇒天然只推最靠近前排的那张；§十七:744 后排空→不推进；§十七:745 推进后 E1-E4 空出（`take` 走的就是这一格）；§十七:747 「多张只推最靠近前排」在本棋盘结构下天然成立（每列后排单格），无第四档可推
                     self.log.push(format!("敌方推进：第{}列后排 {} → 前排", col + 1, c.def.name));
+                    if sticky {
+                        self.e_karma -= STICKY_ADVANCE_COST;
+                        self.log.push(format!("粘稠暗影：第{}列推进耗 {} 业力（敌方剩 {}）", col + 1, STICKY_ADVANCE_COST, self.e_karma));
+                    }
                     self.e_front[col] = Some(c);  // §十二:491 落到 E5-E8 即紧贴中线，没有再往前一步的路径；§十七:749 推进后 E5-E8 紧贴中线、停在这里
                 }
             }
@@ -1313,7 +1424,15 @@ impl Battle {
         let allies: Vec<&CardInst> = self.col_cards(side, col).into_iter().filter(|a| a.id != c.id).collect();
         thr -= Self::skill_count(&allies, Skill::AllyColThreshM1);  // §八:301 同列友方阈值-1
         thr += Self::skill_count(&self.col_cards(side.other(), col), Skill::EnemyColThreshP1);  // §八:302 同列敌方阈值+1
-        thr.max(1)
+        let thr = thr.max(1);
+        // 【业火狂潮】＝"所有卡牌阈值减半（向下取整）"。减半作用在**上面那两条修正之后的生效值**上，不是先减半
+        // 再吃 ±1：后者会让同一枚同列技能在减半前后各算一遍、产出两种读数，而文档一字未提这族交互。
+        // 下限 1 沿用 `base_threshold` 与章强化那两处既有家规——阈值 1 减半得 0 会让"业火≥阈值"当场成立，那不是减半是取消门槛。
+        if self.daily_rule == DailyRule::FlameTide {
+            (thr / 2).max(1)
+        } else {
+            thr
+        }
     }
 
     /// 阵营本回合的"友方累积+N"增益（守夜人窗口，裁定5 literal 化）。
@@ -6273,6 +6392,283 @@ mod chapter_strength_tests {
                 id.name(),
                 id.chapter()
             );
+        }
+    }
+}
+
+/// 帧 D3（修正2.MD 3.3）：每日挑战四条特殊规则落在引擎上的位置。
+/// 每条规则各一组测，外加"文档那六条本来就成立"的回归钉——那六条没有新代码，所以它们要的是**没被改坏**
+/// 的证据，而不是"实现了"的证据（前者与后者在断言上长得不一样，混了就等于拿回归冒充功能）。
+#[cfg(test)]
+mod daily_rule_tests {
+    use super::*;
+    use crate::boss::BossId;
+
+    fn fresh(seed: u64) -> Battle {
+        Battle::new(seed, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
+    }
+
+    fn def(f: Faction, name: &str) -> CardDef {
+        *faction_cards(f).iter().find(|d| d.name == name).unwrap_or_else(|| panic!("{name} 不在 {f:?} 卡表里"))
+    }
+
+    /// 手工摆一张卡到某一格：号自己发、seq 从战斗计数器取（撞号会让同列判定串到别的卡上去）。
+    /// `placed_turn` 一律给"上一回合"，即默认让开在场闸——要测那道闸的用例自己改回去。
+    fn put(b: &mut Battle, side: SideK, row: Row, col: usize, id: u64, d: CardDef, skills: &[Skill]) {
+        let mut c = CardInst::new(id, d);
+        c.skills = skills.to_vec();
+        c.seq = b.seq;
+        b.seq += 1;
+        c.placed_turn = b.turn - 1;
+        *b.slot_mut(side, row, col) = Some(c);
+    }
+
+    fn front_of(b: &Battle, side: SideK) -> Vec<usize> {
+        (0..4).filter(|i| b.slot(side, Row::Front, *i).is_some()).collect()
+    }
+
+    // ---------- 规则1【业火狂潮】：所有卡牌阈值减半（向下取整） ----------
+
+    #[test]
+    fn flame_tide_halves_with_rounding_down_and_never_below_one() {
+        // 四张卡把三种情形各钉一次：整除（余温 4→2）、向下取整（雷烬 7→3）、大数（山火 10→5）、
+        // 取整后落到 1 以下（续炭 3→1）。第四档同时是"减半不该取消门槛"的那条下限。
+        for (name, want) in [("余温", 2), ("雷烬", 3), ("山火", 5), ("续炭", 1)] {
+            let mut b = fresh(7).with_daily_rule(DailyRule::FlameTide);
+            put(&mut b, SideK::Player, Row::Front, 0, 900, def(Faction::Ember, name), &[]);
+            let c = b.slot(SideK::Player, Row::Front, 0).as_ref().unwrap();
+            assert_eq!(b.effective_threshold(SideK::Player, 0, c), want, "{name} 基准阈值 {}", c.def.threshold);
+        }
+        let mut plain = fresh(7);
+        put(&mut plain, SideK::Player, Row::Front, 0, 900, def(Faction::Ember, "续炭"), &[]);
+        let c = plain.slot(SideK::Player, Row::Front, 0).as_ref().unwrap();
+        assert_eq!(plain.effective_threshold(SideK::Player, 0, c), 3, "反向对照：没有狂潮时同一张牌还是 3（防空实现假绿）");
+    }
+
+    #[test]
+    fn flame_tide_halves_the_value_after_the_column_modifiers() {
+        // 作用点：减半吃的是"同列友方阈值-1 之后"的生效值，不是先减半再吃修正。
+        // 雷烬 7 带一枚 -1 ⇒ 本读法 (7-1)/2=3；先减半再修正 7/2-1=2。两个数不同 ⇒ 这条断言分得开两读法。
+        let mut b = fresh(7).with_daily_rule(DailyRule::FlameTide);
+        put(&mut b, SideK::Enemy, Row::Front, 0, 901, def(Faction::Ember, "雷烬"), &[]);
+        put(&mut b, SideK::Enemy, Row::Back, 0, 902, def(Faction::Ember, "火苗"), &[Skill::AllyColThreshM1]);
+        let c = b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap();
+        assert_eq!(b.effective_threshold(SideK::Enemy, 0, c), 3, "减半在修正之后：(7-1)/2；若读成 7/2-1 会是 2");
+    }
+
+    #[test]
+    fn flame_tide_floor_survives_a_modifier_that_would_zero_the_threshold() {
+        // 修正先把 3 压到 1（`base_threshold` 与章强化那两处的下限），再减半得 0 —— 那已是"取消门槛"。
+        // 下限 1 收在这里：业火 0 也不该当场爆发。
+        // 两档都落到 1，但走的是两条路：一枚 -1 是 3-1=2 → 减半 1（正常的向下取整），
+        // 三枚 -1 是 3-3=0 → 生效值先被钉回 1 → 减半 0 → 再被下限钉回 1。
+        // 少第二档，"下限"这句就没人量；少第一档，摘掉减半也不会红（两档都读 1 的假绿）。
+        for (mods, want) in [(&[Skill::AllyColThreshM1; 3][..], 1), (&[Skill::AllyColThreshM1][..], 1)] {
+            let mut b = fresh(7).with_daily_rule(DailyRule::FlameTide);
+            put(&mut b, SideK::Enemy, Row::Front, 0, 903, def(Faction::Ember, "续炭"), &[]);
+            put(&mut b, SideK::Enemy, Row::Back, 0, 904, def(Faction::Ember, "火苗"), mods);
+            let c = b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap();
+            assert_eq!(b.effective_threshold(SideK::Enemy, 0, c), want, "{} 枚 -1 后生效值 {}", mods.len(), c.def.threshold - mods.len() as i32);
+        }
+        // 反向对照：同一份配置没有狂潮时是 2 ⇒ 上面那档 1 真的是减半减出来的，不是本来就读 1。
+        let mut plain = fresh(7);
+        put(&mut plain, SideK::Enemy, Row::Front, 0, 903, def(Faction::Ember, "续炭"), &[]);
+        put(&mut plain, SideK::Enemy, Row::Back, 0, 904, def(Faction::Ember, "火苗"), &[Skill::AllyColThreshM1]);
+        let c = plain.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap();
+        assert_eq!(plain.effective_threshold(SideK::Enemy, 0, c), 2, "基准局该是 2");
+    }
+
+    #[test]
+    fn flame_tide_makes_a_burst_fire_that_the_baseline_cannot() {
+        // 端到端：焚稿人（阈值6，特性＝同列+2业火）业火 3 —— 基准局差一半，狂潮局正好过 3。
+        // 判据取"对面那张的业火"而不是日志里有没有那行字：日志能靠别处补，业火只有真爆发了才会动。
+        for rule in [DailyRule::None, DailyRule::FlameTide] {
+            let mut b = fresh(7).with_daily_rule(rule);
+            put(&mut b, SideK::Player, Row::Front, 0, 910, def(Faction::Ember, "焚稿人"), &[]);
+            put(&mut b, SideK::Enemy, Row::Front, 0, 911, def(Faction::Frost, "初霜"), &[]);
+            b.slot_mut(SideK::Player, Row::Front, 0).as_mut().unwrap().flame = 3;
+            let mark = b.log.len();
+            b.check_all_triggers();
+            let fired = b.log[mark..].iter().any(|l| l.contains("业火爆发"));
+            let foe_flame = b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap().flame;
+            assert_eq!(fired, rule == DailyRule::FlameTide, "{rule:?} 该不该爆发量出来不对：{:?}", &b.log[mark..]);
+            assert_eq!(foe_flame, if rule == DailyRule::FlameTide { 2 } else { 0 }, "{rule:?} 爆发那发的 +2 要落到同列对面");
+        }
+    }
+
+    // ---------- 规则2【短兵相接】：开局双方各抽 1 张直接部署到中线前 ----------
+
+    #[test]
+    fn clash_deploys_one_card_per_side_onto_the_front_row_charging_nothing() {
+        let base = fresh(7);
+        let b = fresh(7).with_daily_rule(DailyRule::Clash);
+        assert!(front_of(&base, SideK::Player).is_empty() && front_of(&base, SideK::Enemy).is_empty(), "对照：基准局场上空");
+        assert_eq!(front_of(&b, SideK::Player).len(), 1, "我方前排恰 1 张（文档第 1 条的『各抽 1 张』）");
+        assert_eq!(front_of(&b, SideK::Enemy).len(), 1);
+        assert!(b.e_back.iter().all(Option::is_none), "文档第 1 条后半句：后排 E1-E4 为空");
+        let pc = front_of(&b, SideK::Player)[0];
+        assert_eq!(
+            b.p_front[pc].as_ref().unwrap().id,
+            base.draw_pile[0].id,
+            "我方走的是自己那侧的开局口径＝堆顶那张（裁定11），不是随机下标"
+        );
+        assert_eq!((b.hand.len(), b.enemy_hand.len()), (base.hand.len(), base.enemy_hand.len()), "部署不动手牌");
+        assert_eq!((b.draw_pile.len(), b.enemy_pile.len()), (base.draw_pile.len() - 1, base.enemy_pile.len() - 1));
+        assert_eq!((b.p_karma, b.e_karma), (0, 0), "开局部署不收业力：两侧业力恒 0，收钱会把业力打成负数");
+        assert_eq!(b.p_front[pc].as_ref().unwrap().placed_turn, b.turn, "部署发生在构造这一回合");
+        assert!(b.log.iter().any(|l| l.contains("短兵相接")), "开局要有幕次说明，静默部署玩家看不出今天换了规则");
+    }
+
+    #[test]
+    fn clash_landing_spots_come_from_the_seed() {
+        let shot = |seed: u64| {
+            let b = fresh(seed).with_daily_rule(DailyRule::Clash);
+            let pc = front_of(&b, SideK::Player)[0];
+            let ec = front_of(&b, SideK::Enemy)[0];
+            (
+                pc,
+                b.p_front[pc].as_ref().unwrap().def.name,
+                ec,
+                b.e_front[ec].as_ref().unwrap().def.name,
+            )
+        };
+        assert_eq!(shot(7), shot(7), "同 seed 必同落点（每日挑战整场可复现的前提）");
+        assert_eq!(shot(2026), shot(2026));
+        assert_ne!(shot(7), shot(8), "换 seed 要换得出落点，否则上面两条同绿只说明落点是写死的");
+    }
+
+    #[test]
+    fn clash_card_attacks_in_the_very_first_attack_phase() {
+        // 文档第 2 条"第一回合即可攻击"。这台引擎本来就如此（`player_attack_phase` 按 seq 遍历、没有
+        // `placed_turn` 闸），本测钉的是"叠上短兵相接之后仍然如此"。
+        let mut b = fresh(7).with_daily_rule(DailyRule::Clash);
+        let pc = front_of(&b, SideK::Player)[0];
+        assert_eq!(b.p_front[pc].as_ref().unwrap().placed_turn, b.turn, "输入条件要坐实：这张就是本回合放的");
+        put(&mut b, SideK::Enemy, Row::Front, pc, 920, def(Faction::Frost, "壁"), &[]);
+        let before = b.e_front[pc].as_ref().unwrap().hp;
+        b.s9_run_player_attack_phase();
+        let after = b.e_front[pc].as_ref().map(|c| c.hp);
+        assert!(after.is_none_or(|h| h < before), "刚部署那张要在第一回合攻击阶段真打出伤害，实到 {after:?}");
+    }
+
+    #[test]
+    fn clash_card_does_not_move_on_later_advances() {
+        // 文档第 3 条"部署后不移动"：既有推进只搬"后排→空前排"，落在 E5-E8 的牌天然不在被搬的那一格。
+        let mut b = fresh(7).with_daily_rule(DailyRule::Clash);
+        let ec = front_of(&b, SideK::Enemy)[0];
+        let id = b.e_front[ec].as_ref().unwrap().id;
+        put(&mut b, SideK::Enemy, Row::Back, ec, 930, def(Faction::Frost, "初霜"), &[]);
+        b.enemy_advance();
+        assert_eq!(b.e_front[ec].as_ref().unwrap().id, id, "前排有卡 ⇒ 该列不推进，落点那张不换人");
+        assert!(b.e_back[ec].is_some(), "后排那张也还在原地，没被搬走也没被丢掉");
+    }
+
+    #[test]
+    fn clash_card_squeezes_and_is_squeezed_by_the_existing_rules() {
+        // 文档第 4 条"挤压遵循原有规则"：往它那一格再放一张 ⇒ 它越线死亡，且正常放置照旧收业力。
+        let mut b = fresh(7).with_daily_rule(DailyRule::Clash);
+        let pc = front_of(&b, SideK::Player)[0];
+        let cost = b.p_front[pc].as_ref().unwrap().def.cost;
+        b.p_karma = 10;
+        let spare = CardInst::new(940, def(Faction::Ember, "火苗"));
+        b.place_side(SideK::Player, spare, pc, Row::Front, true);
+        assert_eq!(b.p_front[pc].as_ref().unwrap().id, 940, "新卡占位");
+        assert!(b.log.iter().any(|l| l.contains("挤压")), "旧卡要走越线那条路，不然它是凭空消失的");
+        assert_eq!(b.p_karma, 10 - 1 + cost, "放火苗扣 1、旧卡越线按费用全额返还＝既有那条链，规则2 没有改价");
+    }
+
+    #[test]
+    fn clash_card_still_needs_one_turn_in_play_before_sacrifice() {
+        // 文档第 5 条"献祭遵循原有规则"＝在场不足 1 回合那道闸照吃。满一回合后放行也要量出来，
+        // 否则"永远拒绝"与"闸门在"在这条断言里长得一样。
+        let mut b = fresh(7).with_daily_rule(DailyRule::Clash);
+        let pc = front_of(&b, SideK::Player)[0];
+        assert!(b.player_sacrifice_field(pc).is_err(), "本回合刚放的牌不该能献祭");
+        assert!(b.p_front[pc].is_some(), "拒绝要把牌放回原位，take 走再返还是丢牌");
+        b.turn += 1;
+        assert!(b.player_sacrifice_field(pc).is_ok(), "满 1 回合后同一格该放行");
+    }
+
+    #[test]
+    fn clash_stands_down_on_every_boss_level() {
+        // 文档「若关卡为 Boss 关卡 → 不触发【短兵相接】」。闸在应用点，Boss 关是唯一能把闸按上的输入
+        // （每日那一场恒为第 1 关、恒无 Boss，见 meta 的 daily_encounter）。
+        for id in BossId::all() {
+            let level = id.chapter() * crate::boss::LEVELS_PER_CHAPTER;
+            let b = Battle::new_boss(7, Faction::Ember, id, Vec::new(), level).with_daily_rule(DailyRule::Clash);
+            assert!(front_of(&b, SideK::Player).is_empty() && front_of(&b, SideK::Enemy).is_empty(), "{} 的 Boss 关该整场不部署", id.name());
+            assert!(!b.log.iter().any(|l| l.contains("短兵相接")), "{} 幕次也不该报这条规则：Boss 关不触发", id.name());
+        }
+    }
+
+    // ---------- 规则4【粘稠暗影】：E1-E4 → E5-E8 每列消耗敌方 2 点业力 ----------
+
+    fn two_back_cols(b: &mut Battle) {
+        for col in 0..2 {
+            put(b, SideK::Enemy, Row::Back, col, 950 + col as u64, def(Faction::Frost, "初霜"), &[]);
+        }
+    }
+
+    #[test]
+    fn viscid_shadow_prices_each_column_and_the_column_that_cannot_pay_stays() {
+        let mut b = fresh(3).with_daily_rule(DailyRule::ViscidShadow);
+        two_back_cols(&mut b);
+        b.e_karma = 3;
+        b.p_karma = 5;
+        b.enemy_advance();
+        assert!(b.e_front[0].is_some(), "第 1 列付得起 2 ⇒ 推进");
+        assert!(b.e_front[1].is_none() && b.e_back[1].is_some(), "第 2 列只剩 1 业力 ⇒ 本次不推进，牌留原地");
+        assert_eq!(b.e_karma, 1, "价钱按列各算一次（§十二:483 每列各判一次），只有真推进那一列出钱");
+        assert_eq!(b.p_karma, 5, "文档第 4 条：玩家业力不受影响");
+        assert!(b.log.iter().any(|l| l.contains("粘稠暗影")), "推进要看得见钱花在哪");
+    }
+
+    #[test]
+    fn viscid_shadow_frees_the_advance_without_the_rule_and_on_a_boss_level() {
+        // 上一条给的是"规则生效 ⇒ 收钱、付不起就不推"。这一条补另两档，三档合起来才分得开
+        // "闸在"与"闸永远关着"：没这条规则 ⇒ 本来就不收钱；Boss 关 ⇒ 文档明写不触发。
+        for (rule, boss) in [(DailyRule::None, false), (DailyRule::ViscidShadow, true)] {
+            let b = if boss {
+                let level = BossId::all()[0].chapter() * crate::boss::LEVELS_PER_CHAPTER;
+                Battle::new_boss(3, Faction::Ember, BossId::all()[0], Vec::new(), level)
+            } else {
+                fresh(3)
+            };
+            let mut b = b.with_daily_rule(rule);
+            two_back_cols(&mut b);
+            b.e_karma = 1;
+            b.enemy_advance();
+            assert!(b.e_front[0].is_some() && b.e_front[1].is_some(), "{rule:?} boss={boss}：这一档不该拦住推进");
+            assert_eq!(b.e_karma, 1, "{rule:?} boss={boss}：不收钱那一档业力必须一分不动");
+        }
+    }
+
+    // ---------- 规则3【献祭余响】：三条子句在基准引擎里已成立（Q-新9 待裁） ----------
+
+    #[test]
+    fn sacrifice_echo_clauses_are_already_the_baseline_so_the_rule_changes_nothing() {
+        // 帧文档 §9 的读法甲/乙/丙产出三种不同对局 ⇒ AI 不自决（Q-新9）。这里只把**现况**钉成证据：
+        // 场上献祭触发亡语（第 1 条）、不推进死亡返还递减（第 3 条）、手牌献祭没有"哪一列"可给亡语。
+        for (field, want_flame) in [(true, 3), (false, 0)] {
+            let mut b = fresh(7).with_daily_rule(DailyRule::SacrificeEcho);
+            put(&mut b, SideK::Enemy, Row::Front, 0, 960, def(Faction::Frost, "初霜"), &[]);
+            let mut echo = CardInst::new(961, def(Faction::Ember, "回燃"));
+            echo.seq = b.seq;
+            b.seq += 1;
+            echo.placed_turn = b.turn - 1;
+            let idx = if field {
+                b.p_front[0] = Some(echo);
+                0
+            } else {
+                b.hand.push(echo);
+                b.hand.len() - 1
+            };
+            let r = if field { b.player_sacrifice_field(idx) } else { b.player_sacrifice_hand(idx) };
+            assert!(r.is_ok(), "{r:?}");
+            assert_eq!(b.slot(SideK::Enemy, Row::Front, 0).as_ref().unwrap().flame, want_flame, "场上那一列有位置⇒亡语+3；手牌没有位置⇒不适用");
+            assert_eq!(b.p_karma, 4, "第 1 条'正常获得业力'＝全额费用 4（§三:75 围栏1 第二行）");
+            let dead = b.discard_pile.iter().find(|c| c.id == 961).expect("非自造牌该回收进弃牌堆");
+            assert_eq!(dead.deaths, 0, "第 3 条'不触发死亡返还递减'＝档位一格都没推进");
         }
     }
 }

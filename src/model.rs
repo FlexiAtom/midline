@@ -4498,6 +4498,9 @@ mod anchor_tests {
             "self.p_karma = (self.p_karma - self.karma_penalty_next).max(0);".to_string(),
             "SideK::Player => self.p_karma -= cost,".to_string(),
             "SideK::Enemy => self.e_karma -= cost,".to_string(),
+            // 【粘稠暗影】＝每日挑战特殊规则给敌方新立的一类消耗：**推进**。它的出处不在 §三 而在修正2.MD 3.3 规则4，
+            // 所以这条不是"有人绕开名单自花钱"，而是名单本身只登了放置／融合两类用途。登记在此并挂 Q-新10（改文档那半的口径待人给）。
+            "self.e_karma -= STICKY_ADVANCE_COST;".to_string(),
             "self.p_karma += 1;".to_string(),
             "self.e_karma += 1;".to_string(),
             "SideK::Player => self.p_karma += gain,".to_string(),
@@ -4507,7 +4510,7 @@ mod anchor_tests {
         assert_eq!(
             s3_karma_writes(),
             want_writes,
-            "md:64／65／66／68 合起来在码面的形式＝这份**封闭的业力写点名单**：两笔声明、两笔从零起、一笔 Boss 预算、一笔回滚代价、两支放置扣减、两支 `+= 1`（开端在场，出处在速查:990，比 md:66 那句「两种获取方式」多出一支——同一份文档内部的口径分家，如实登记）、两支 `+= gain`（`on_death` 那一个 match）。实测多一条＝有人新起了给业力或扣业力的地方，而本章只登记了死亡／献祭两种来源与放置／融合两类用途；少一条＝那条路被摘了（连「不自动恢复」一起被摘时，md:65 就没人兑现了）"
+            "md:64／65／66／68 合起来在码面的形式＝这份**封闭的业力写点名单**：两笔声明、两笔从零起、一笔 Boss 预算、一笔回滚代价、两支放置扣减、一支【粘稠暗影】推进扣减（出处＝修正2.MD 3.3 规则4，不是本章——本章那份「用途」名单只登了放置／融合两类，多出来的这一支如实挂着，见 Q-新10）、两支 `+= 1`（开端在场，出处在速查:990，比 md:66 那句「两种获取方式」多出一支——同一份文档内部的口径分家，如实登记）、两支 `+= gain`（`on_death` 那一个 match）。实测多一条＝有人新起了给业力或扣业力的地方，而本章只登记了死亡／献祭两种来源与放置／融合两类用途；少一条＝那条路被摘了（连「不自动恢复」一起被摘时，md:65 就没人兑现了）"
         );
         assert_eq!(
             s3_free_starter_quota_writes(),
@@ -5602,8 +5605,8 @@ mod anchor_tests {
             section: 21,
             row: "2. 固定卡组+特殊规则",
             tier: Tier::Mode,
-            evidence: "由 §廿一 推导器列出：md-revision-daily 帧 D1/D2 已把「场次形状＋按日抽取」落地（`daily_run` 自开一场单场生存战、不再借 `ladder`；种子驱动 PRNG 每场抽 1 条规则、带 pity），但**抽到的规则号只走到 `println!` 报幕**——引擎里没有任何一处读它，4 条特殊规则对局内零生效；起手仍是 §六 的常规开局（开端＋继承堆顶 3 张），没有按日固定的卡组表。文档对「固定卡组」是哪副一字未给 ⇒ 那一半没有可实现口径",
-            dest: "特殊规则那半归 `~/.Athena/projects/midline/working/md-revision-daily.md` 帧 D3（4 条逐条落进引擎、各带端到端测）；固定卡组这半待人给 10 张名单（同档「待策划」）。开工点 meta.rs::daily_run 把 `daily_draw` 的返回值从「只报幕」接进 battle 输入，卡组表落在 model.rs 侧的一张按日取用的名单",
+            evidence: "由 §廿一 推导器列出：帧 D1/D2 落了「场次形状＋按日抽取」，帧 D3 把规则号真接进引擎（`RunState::daily_rule` → `PlayHost::new_battle` → `Battle::with_daily_rule`）——4 条里【业火狂潮】【短兵相接】【粘稠暗影】3 条对局内生效（各带端到端测，CLI 侧 p9/p12/p14 的字节看得到开局部署那张）。仍欠两样：① 固定卡组——起手仍是 §六 的常规开局（开端＋继承堆顶 3 张），没有按日固定的卡组表，文档对「固定卡组」是哪副一字未给 ⇒ 那一半没有可实现口径；② 【献祭余响】三条子句经核对已是引擎现况，但三种读法产出不同对局 ⇒ 不自决，抽中它这一场不改对局",
+            dest: "剩余三件事各挂一处，都不在本帧：固定卡组 10 张名单待策划给（同档「待策划」，开工点＝model.rs 侧一张按日取用的名单＋`Battle::new` 按表发牌）；【献祭余响】取哪种读法待裁（`~/.Athena/projects/midline/working/md-revision-daily.md` Q-新9）；D3 新立的第三个业力消耗点「推进」还没进 §三:68 那份「用途」名单，改文档那半的口径待人给（同档 Q-新10）",
         },
         Debt {
             doc: 923,

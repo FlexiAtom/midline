@@ -15,7 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //! 元游戏：跨关继承堆、融合/升级/弃置（准备·结算阶段）、每日种子、自动对局冒烟。
 
-use crate::battle::{Battle, Difficulty, Outcome, TURN_LIMIT};
+use crate::battle::{Battle, DailyRule, Difficulty, Outcome, TURN_LIMIT};
 use crate::model::{CardInst, Faction};
 use crate::save::{self, Progress};
 use std::path::PathBuf;
@@ -146,6 +146,9 @@ struct RunState {
     carry_karma: i32,
     has_next: bool,
     save: Option<SaveSlot>,
+    /// 这一局盖的每日特殊规则。只有 `daily_run` 会给它非 `None` 值，其余三条路（主线／爬梯／跳打 Boss）恒 `None`
+    /// ⇒ `new_battle` 里那次 `with_daily_rule` 是空操作，普通对局逐字节照旧。
+    daily_rule: DailyRule,
 }
 
 /// `one_level` 唯一认识的存档形态：它不需要知道这是主线还是每日，只需要知道**要不要按关写快照**。
@@ -256,6 +259,7 @@ pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf
         carry_karma: 0,
         has_next: true,
         save: Some(SaveSlot::open(path, faction, diff, resume, SaveUse::Progress)),
+        daily_rule: DailyRule::None,
     };
     let mut level = st.save.as_ref().map_or(1, |s| s.progress.level);
     if let Some(s) = st.save.as_ref() {
@@ -311,12 +315,10 @@ fn persist(slot: &mut SaveSlot, what: &str) -> bool {
 /// 每日挑战的免费额度（修正2.MD 3.5「每日免费次数：3」）。
 pub const DAILY_ATTEMPTS: u32 = 3;
 
-/// 特殊规则池（修正2.MD 3.3 的四条，顺序＝文档编号 1..4）。**本帧只抽不生效**，生效在帧 D3。
-const DAILY_RULES: [&str; 4] = ["业火狂潮", "短兵相接", "献祭余响", "粘稠暗影"];
-
-/// 规则号 → 名字（入场行与 `progress` 报告共用这一处口径，不再开第二张表；越界号报"无"而不是 panic）。
+/// 规则号 → 名字。**名单本身在 `battle::DailyRule`**（引擎要按它分支，名单再留一份 meta 侧的就成两处真值）；
+/// 这里只留"越界号报『今日无规则』而不是 panic"这一条存档口径。
 pub fn daily_rule_name(rule: u32) -> &'static str {
-    DAILY_RULES.get(rule as usize).copied().unwrap_or("（今日无规则）")
+    DailyRule::from_index(rule).map_or("（今日无规则）", DailyRule::name)
 }
 
 /// pity 阈值——**AI 自决的实现常量**，设计只裁了"配保底、文案不明写"，一字未给数。
@@ -337,7 +339,7 @@ fn split_mix64(state: &mut u64) -> u64 {
 /// 到 pity 阈值时是**强推他条**而不是重抽：重抽需要一个上限，而文档那条"重抽上限 3 次"（修正2.MD 3.3 规则2）
 /// 本来只在"抽到短兵相接且关卡是 Boss"时才走——每日永远是第 1 关，那个条件在这台机器上凑不出来。
 fn daily_draw(p: &mut Progress) -> u32 {
-    let pool = DAILY_RULES.len() as u32;
+    let pool = DailyRule::POOL.len() as u32;
     let mut rule = (split_mix64(&mut p.daily_draw_state) % pool as u64) as u32;
     if rule == p.daily_rule_last && p.daily_rule_run >= DAILY_PITY_RUN {
         rule = (rule + 1) % pool;
@@ -372,11 +374,21 @@ fn daily_settle(p: &mut Progress, survived: i64) -> bool {
     true
 }
 
+/// 每日挑战那一场的遭遇：**恒第 1 关、恒无 Boss**。
+/// 文档给【短兵相接】【粘稠暗影】各写了一句「若关卡为 Boss 关卡 → 不触发」（修正2.MD 3.3），闸落在引擎
+/// 应用点；这条遭遇函数是那两句"凑不出输入"的正面说法——每日这条路压根没有 Boss，所以重抽分支不写。
+/// 单独成函数就是为了这件事**可断言**（`daily_encounter_never_raises_a_boss`），而不是留在注释里信一句。
+fn daily_encounter(_level: u32) -> (Faction, Option<crate::boss::BossId>) {
+    (enemy_faction_for(1), None)
+}
+
 /// 每日挑战：一天 3 次（`DAILY_ATTEMPTS`）、一次**一场单场生存战**（修正2.MD 3.5/3.6 ＋ 2026-10-05 裁）。
 /// 打完就结束——不再是"无尽爬梯到第一次败北"：额度与奖励都以"场"计，爬梯那场没有额度可对。
-/// 每次开场先抽一条当日特殊规则（`daily_draw`）；落盘在场次收束那一刻，通关再多记一次额度。
-/// 诚实缺口：固定卡组仍未落（帧 D3 才把抽中的规则接进引擎）⇒ 抽到的规则今天只报幕、不改对局，
-/// 但场次、额度、日界与抽取序列已经按定稿走。
+/// 每次开场先抽一条当日特殊规则（`daily_draw`），并把它经 `RunState::daily_rule` 交给这一局的战斗
+/// （`with_daily_rule`）；落盘在场次收束那一刻，通关再多记一次额度。
+/// 诚实缺口（两条，各挂各的）：① 固定卡组仍未落——修正2.MD 3.2 那条"占位算法"要的是**10 张卡的名字**，
+/// 名单待人给（挂在每日挑战规则第 2 步那条债上）；② 【献祭余响】那一条现况已成立、三种读法产出不同东西 ⇒ 挂 Q-新9 待裁，
+/// 抽中它这一场不改对局（`DailyRule::effect` 里照实写着"待裁"，不念引擎不兑现的口号）。
 pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
     let seed = daily_seed();
     let mut save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::Daily);
@@ -386,13 +398,15 @@ pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模
     }
     let nth = save.progress.daily_attempts + 1;
     let rule = daily_draw(&mut save.progress);
+    let daily = DailyRule::from_index(rule).unwrap_or_default();
     println!(
-        "每日挑战 seed={seed} · 今日第 {nth}/{} 次 · 本场规则：{}（帧 D3 前只报幕、不改对局）",
+        "每日挑战 seed={seed} · 今日第 {nth}/{} 次 · 本场规则：{}——{}",
         DAILY_ATTEMPTS,
-        daily_rule_name(rule)
+        daily.name(),
+        daily.effect()
     );
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(save) };
-    let (_, survived) = one_level(seed, Faction::Ember, Difficulty::Normal, 1, &mut st, |_| (enemy_faction_for(1), None), frame);
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(save), daily_rule: daily };
+    let (_, survived) = one_level(seed, Faction::Ember, Difficulty::Normal, 1, &mut st, daily_encounter, frame);
     let cleared = daily_finish(&mut st, survived);
     let verdict = if cleared {
         format!("通关（活满 {TURN_LIMIT} 回合）⇒ 本次额度已用掉。")
@@ -405,7 +419,7 @@ pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模
 /// 无 Boss、无 60 关上限的纯跳打爬梯（`play` 专用；它**从不**落盘，`save` 恒为 `None`）。
 /// 每日挑战不再走这里——一次挑战是一场单局生存战，额度、通关与奖励都以"场"为单位计（`daily_run`）。
 fn ladder(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true, save: None };
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true, save: None, daily_rule: DailyRule::None };
     let mut level = 1u32;
     loop {
         let (out, _) = one_level(seed, faction, diff, level, &mut st, |l| (enemy_faction_for(l), None), frame);
@@ -448,7 +462,7 @@ pub fn play_run(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
 pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::BossId, frame: Frame) {
     use crate::boss::LEVELS_PER_CHAPTER;
     let level = id.chapter() * LEVELS_PER_CHAPTER;
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: None };
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: None, daily_rule: DailyRule::None };
     let (out, _) = one_level(seed, faction, diff, level, &mut st, |_| {
         (id.profile().faction, Some(id))
     }, frame);
@@ -536,12 +550,12 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     frame: Frame,
 ) -> (Outcome, i64) {
     // 解构而非整体借用：会话层要 `inherit`／`carry_karma`，落盘要 `save`，三条各走各的字段。
-    let RunState { inherit, carry_karma, has_next, save } = st;
+    let RunState { inherit, carry_karma, has_next, save, daily_rule } = st;
     // 遭遇**只算一次**（改前也是"先定遭遇、再拿去两头用"）。存成值而不是把闭包 `enc` 留着再调一遍：
     // `enc` 是无状态查表，但"同一关两头各查一次"这种事，一旦哪天它有了副作用就是第二套真值。
     let (foe, boss) = enc(level);
     let cfg = crate::session::LevelCfg { head: level_head(level, boss), level, has_next: *has_next };
-    let mut host = PlayHost { seed, faction, diff, foe, boss, save, frame };
+    let mut host = PlayHost { seed, faction, diff, foe, boss, save, frame, daily_rule: *daily_rule };
     match crate::session::run_level(&mut host, &cfg, inherit, carry_karma) {
         crate::session::Terminus::Done { out, survived } => (out, survived),
         crate::session::Terminus::Quit { msg } => {
@@ -568,6 +582,9 @@ struct PlayHost<'a> {
     save: &'a mut Option<SaveSlot>,
     /// 画帧上游：Text＝`render`，Tui＝`tui::draw`。除 `board`/`log_tail` 外没有任何接缝读它。
     frame: Frame,
+    /// 本关盖的每日特殊规则（`None`＝普通对局）。与 `foe`/`boss` 同类：由 `one_level` 算好一次存这儿，
+    /// 只有 `new_battle` 读它，所以 trait 那五个接缝一个字都不改。
+    daily_rule: DailyRule,
 }
 
 impl crate::session::Host for PlayHost<'_> {
@@ -604,7 +621,8 @@ impl crate::session::Host for PlayHost<'_> {
     fn new_battle(&mut self, inherit: &mut Vec<CardInst>, level: u32) -> Battle {
         match self.boss {
             Some(id) => Battle::new_boss(self.seed, self.faction, id, std::mem::take(inherit), level),
-            None => Battle::new_mainline(self.seed, self.faction, self.foe, self.diff, std::mem::take(inherit), level),
+            None => Battle::new_mainline(self.seed, self.faction, self.foe, self.diff, std::mem::take(inherit), level)
+                .with_daily_rule(self.daily_rule),
         }
     }
 }
@@ -942,7 +960,7 @@ mod meta_tests {
         let mut opened = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
             .expect("合法档应能开出每日槽");
         assert!(daily_begin(&mut opened.progress, daily_seed()), "今天第一次进来必须放行");
-        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened) };
+        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened), daily_rule: DailyRule::None };
         assert!(daily_finish(&mut st, TURN_LIMIT), "活满回合上限就是通关，这条出口不该是假阴性");
 
         let got = Progress::load_from(&path).expect("写入后档仍应能被自己的校验器读回");
@@ -959,7 +977,7 @@ mod meta_tests {
         assert!(daily_begin(&mut opened2.progress, daily_seed()), "额度还剩就该继续放行");
         let drawn = daily_draw(&mut opened2.progress);
         let advanced_state = opened2.progress.daily_draw_state;
-        let mut run2 = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened2) };
+        let mut run2 = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened2), daily_rule: DailyRule::None };
         assert!(!daily_finish(&mut run2, TURN_LIMIT - 1), "差一个回合就是没活满");
         let after = Progress::load_from(&path).expect("失败那次落盘的档仍应能读回");
         assert_eq!(after.daily_attempts, 1, "失败不扣次数：额度还停在通关那一次");
@@ -1056,13 +1074,43 @@ mod meta_tests {
         }
     }
 
+    /// 【短兵相接】【粘稠暗影】各带一句「若关卡为 Boss 关卡 → 不触发」，后面还跟一句"重抽上限 3 次"。
+    /// 那句在这个模式下**凑不出输入**：每日那一场恒第 1 关、恒无 Boss ⇒ 引擎只留应用点的闸，不写防御分支。
+    /// 本条量的就是"凑不出输入"这件事本身（帧文档 §9：条款留在文档、不可达写成可断言的形）。
+    #[test]
+    fn daily_encounter_never_raises_a_boss() {
+        for level in [1, 12, 13, 60, 999] {
+            let (foe, boss) = daily_encounter(level);
+            assert!(boss.is_none(), "第{level}关的输入也一样：每日这条路压根没有 Boss");
+            assert_eq!(foe, enemy_faction_for(1), "遭遇只认第 1 关——传进来的关号不许把它领到别章的阵营轮上去");
+        }
+    }
+
+    /// 规则号来自存档（人手可改、旧档缺键取默认 0），越界号不得 panic。
+    /// 池顺序也是被钉的：`种子 % 池大小` 这张表一旦换序，历史上每一天抽到的规则都会换一条。
+    #[test]
+    fn the_rule_pool_order_is_the_truth_and_an_out_of_range_number_reads_as_no_rule() {
+        assert_eq!(
+            DailyRule::POOL.iter().map(|r| r.name()).collect::<Vec<_>>(),
+            vec!["业火狂潮", "短兵相接", "献祭余响", "粘稠暗影"],
+            "池顺序＝修正2.MD 3.3 那条规则池的书写顺序，换序等于改历"
+        );
+        assert_eq!(DailyRule::from_index(0), Some(DailyRule::FlameTide), "0 是池内第一条，不是「没规则」");
+        assert_eq!(DailyRule::from_index(3), Some(DailyRule::ViscidShadow), "末位取得到");
+        for i in 4..9 {
+            assert_eq!(DailyRule::from_index(i), None, "{i} 越界该报 None 而不是 panic");
+        }
+        assert_eq!(DailyRule::default(), DailyRule::None, "抽取端那句 `unwrap_or_default()` 落在这里");
+        assert_eq!(daily_rule_name(9), "（今日无规则）", "报幕口径：坏号照读，读成「今天没有规则」");
+    }
+
     /// 通关只翻标记，绝不写"第61关"：`is_mainline_end` 是 `>=`，越界 level 会让下一次续档赢一关就再报一次通关。
     #[test]
     fn mark_completed_flips_the_flag_without_faking_a_level_beyond_sixty() {
         let path = snap_path("completed");
         let mut save = slot(path.clone(), SaveUse::Progress);
         snapshot_entry(&mut save, 60, Faction::Ember, Difficulty::Normal, &[], 4);
-        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save };
+        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save, daily_rule: DailyRule::None };
         mark_completed(&mut st);
         let got = Progress::load_from(&path).expect("通关标记写入后仍须可载");
         assert!(got.completed, "通关历史要落盘：它是不依赖 level 推不倒的那一个字段");
