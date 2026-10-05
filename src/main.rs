@@ -42,7 +42,7 @@ const USAGE: &str = "\
   mainline [--seed N] [--faction 1|2|3] [--difficulty X]     主线 60 关（5 章，章末 Boss，自动存档）
   mainline --resume [--save F] [--faction 1|2|3]            从存档的「本关入口」续打；不给 --resume 则从第1关重开（档上已有进度会先警告再覆盖）
   boss <id> [--seed N] [--faction 1|2|3]                    单关跳打 Boss
-  daily [--save F]                                          每日挑战（日期为种子；打赢一关即记当天已做，不动主线进度）
+  daily [--save F]                                          每日挑战（日期为种子；一天 3 次，一次一场 30 回合生存战；只有通关扣额度，不动主线进度）
   progress [--save F]                                       看当前存档（只读：不写、不修、不猜；档读不懂则 rc=2）
   progress recover [--save F]                               把当前档改名留证 .bad-N，下次从空档开始
   auto [N] [--difficulty X]                                 AI 托管模拟 N 局（默认 1，不落盘）

@@ -15,7 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //! 元游戏：跨关继承堆、融合/升级/弃置（准备·结算阶段）、每日种子、自动对局冒烟。
 
-use crate::battle::{Battle, Difficulty, Outcome};
+use crate::battle::{Battle, Difficulty, Outcome, TURN_LIMIT};
 use crate::model::{CardInst, Faction};
 use crate::save::{self, Progress};
 use std::path::PathBuf;
@@ -90,9 +90,9 @@ struct RunState {
 enum SaveUse {
     /// 主线：每次进关写「本关入口」快照（`裁定27`）。
     Progress,
-    /// 每日：只由调用方写 `daily_done`，关卡与继承堆一个字节都不动——每日挑战跑的是无 Boss 无限爬梯，
-    /// 把它写进主线进度会凭空造出一条没人打过的"主线进度"。
-    DailyDoneOnly,
+    /// 每日：只由调用方写**每日那三键**（日戳／额度／抽取 state），关卡与继承堆一个字节都不动——
+    /// 每日跑的是单场生存战，把它写进主线进度会凭空造出一条没人打过的"主线进度"。
+    Daily,
 }
 
 /// 落盘槽：路径 + 内存里的档。内存档在战斗期间可能落后于现实，所以写入一律以当场的 `inherit` 为准。
@@ -129,10 +129,10 @@ impl SaveSlot {
             return Ok(SaveSlot { path, progress: Progress::new(faction, diff), kind });
         };
         if !resume {
-            // 每日槽原样保留盘上那份：它只由 `mark_daily_done` 写，而写是**整文件重写**——
+            // 每日槽原样保留盘上那份：它只由 `daily_finish` 写，而写是**整文件重写**——
             // 换成 `Progress::new()` 就等于把别人的 level 与继承堆一起抹回第1关（曾经真抹了）。
             // 也不给它下面那条覆盖警告：说"会覆盖你的进度"对它是假话。
-            if kind == SaveUse::DailyDoneOnly {
+            if kind == SaveUse::Daily {
                 return Ok(SaveSlot { path, progress: loaded, kind });
             }
             // 冷启动只接历史（通关标记/每日记录），不接进度：接了就是玩家没要求的续关。
@@ -200,7 +200,7 @@ pub fn mainline_run(seed: u64, faction: Faction, diff: Difficulty, path: PathBuf
         st.carry_karma = s.progress.carry_karma;
     }
     loop {
-        let out = one_level(seed, faction, diff, level, &mut st, encounter_for, frame);
+        let (out, _) = one_level(seed, faction, diff, level, &mut st, encounter_for, frame);
         match out {
             Outcome::PlayerWin if crate::boss::is_mainline_end(level) => {
                 println!("终影已灭 —— 主线通关（60/60）。seed={seed} 可复现整局。");
@@ -245,29 +245,67 @@ fn persist(slot: &mut SaveSlot, what: &str) -> bool {
     }
 }
 
-/// 每日挑战：文档要求「完成后记录日期，防止重复完成」（§廿一:926），但**从未定义"完成"的边界**
-/// （裁定29）。这里取最小可核读法——本局**第一次打赢一关**就算完成，只记 `daily_done`，不动主线进度。
-/// 诚实缺口：每日挑战规则第 2 步还要「固定卡组+特殊规则」，文档一字未定义 ⇒ 现在的 daily 只是"换日期种子的 play"。
-pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
-    let seed = daily_seed();
-    println!("每日挑战 seed={seed}");
-    let save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::DailyDoneOnly);
-    if save.progress.daily_done == seed {  // §廿一:924 每日重置＝只比对**今天**的日种子：记过的是昨天，不挡今天重开
-        println!("今天的每日挑战已经打过了（记录日种子={seed}）。想再来一局换个档就行：daily --save /tmp/another.kv");
-        return;
+/// 每日挑战的免费额度（修正2.MD 3.5「每日免费次数：3」）。
+pub const DAILY_ATTEMPTS: u32 = 3;
+
+/// 日界重置＋放行判据（纯函数：判据只在这一处，`daily_run` 与常驻测读同一条，不留第二份真值）。
+/// 返回 `false`＝今天的额度已经用完。日戳不是今天 ⇒ 当日计数作废、抽取序列 state 换成当日种子（额度重满）。
+fn daily_begin(p: &mut Progress, seed: u64) -> bool {  // §廿一:924 每日重置＝只比对**今天**的日种子：记过的是昨天，不挡今天重开
+    if p.daily_done != seed {
+        p.daily_done = seed;
+        p.daily_attempts = 0;
+        p.daily_draw_state = seed; // 当日规则序列的起点；逐次抽取与 pity 的落在帧 D2
     }
-    ladder(seed, Faction::Ember, Difficulty::Normal, Some(save), frame);
+    p.daily_attempts < DAILY_ATTEMPTS
 }
 
-/// 无 Boss、无 60 关上限的爬梯（`play` 与 `daily` 共用；`save=None` 时就是原来的纯跳打）。
-fn ladder(seed: u64, faction: Faction, diff: Difficulty, save: Option<SaveSlot>, frame: Frame) {
-    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true, save };
+/// 一场打完的记账（纯函数）。通关判据＝**活满回合上限**（2026-10-05 裁「一次挑战＝单场 30 回合生存战」）：
+/// 通关扣一次额度，中途败不扣（修正2.MD 3.5「失败不扣挑战次数」）。抽取序列 state 不在这里回滚——
+/// 回滚就等于允许同一局面无限重抽同一条规则（2026-10-05 裁 Q-新3 的耦合判据）。
+fn daily_settle(p: &mut Progress, survived: i64) -> bool {
+    if survived < TURN_LIMIT {
+        return false;
+    }
+    // saturating：额度是 u32，手改成 42 亿的档不该让程序在这行 panic（那是"读得懂的档"，不是坏档）。
+    p.daily_attempts = p.daily_attempts.saturating_add(1);
+    true
+}
+
+/// 每日挑战：一天 {DAILY_ATTEMPTS} 次、一次**一场单场生存战**（修正2.MD 3.5/3.6 ＋ 2026-10-05 裁）。
+/// 打完就结束——不再是"无尽爬梯到第一次败北"：额度与奖励都以"场"计，爬梯那场没有额度可对。
+/// 落盘只在通关那一刻：失败不扣次数 ⇒ 每日那三键一个都没变 ⇒ 没有理由做一次整文件重写
+/// （`daily_finish` 那条测记着它曾经抹掉过主线）。
+/// 诚实缺口：固定卡组与 4 条特殊规则仍未落（帧 D2/D3）⇒ 现在的 daily 还是"换日期种子的一局"，
+/// 只是场次、额度与通关口径已经按定稿走。
+pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模式入口（复合行：本地种子已落，「固定规则」那半欠在每日挑战规则第 2 步的债上）
+    let seed = daily_seed();
+    let mut save = SaveSlot::open(path, Faction::Ember, Difficulty::Normal, false, SaveUse::Daily);
+    if !daily_begin(&mut save.progress, seed) {
+        println!("每日挑战 seed={seed}：今天的 {} 次已经用完（日戳={seed}）。每日 0 点后重来；想现在就再来一局，换个 --save 文件就行。", DAILY_ATTEMPTS);
+        return;
+    }
+    let nth = save.progress.daily_attempts + 1;
+    println!("每日挑战 seed={seed} · 今日第 {nth}/{} 次", DAILY_ATTEMPTS);
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(save) };
+    let (_, survived) = one_level(seed, Faction::Ember, Difficulty::Normal, 1, &mut st, |_| (enemy_faction_for(1), None), frame);
+    let cleared = daily_finish(&mut st, survived);
+    let verdict = if cleared {
+        format!("通关（活满 {TURN_LIMIT} 回合）⇒ 本次额度已用掉。")
+    } else {
+        format!("未活满 {TURN_LIMIT} 回合 ⇒ 不扣额度，今天还能再来。")
+    };
+    println!("本场存活 {survived} 回合：{verdict} seed={seed} 可复现整场。");
+}
+
+/// 无 Boss、无 60 关上限的纯跳打爬梯（`play` 专用；它**从不**落盘，`save` 恒为 `None`）。
+/// 每日挑战不再走这里——一次挑战是一场单局生存战，额度、通关与奖励都以"场"为单位计（`daily_run`）。
+fn ladder(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
+    let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: true, save: None };
     let mut level = 1u32;
     loop {
-        let out = one_level(seed, faction, diff, level, &mut st, |l| (enemy_faction_for(l), None), frame);
+        let (out, _) = one_level(seed, faction, diff, level, &mut st, |l| (enemy_faction_for(l), None), frame);
         match out {
             Outcome::PlayerWin => {
-                mark_daily_done(&mut st);
                 level += 1;
             }
             _ => {
@@ -278,19 +316,22 @@ fn ladder(seed: u64, faction: Faction, diff: Difficulty, save: Option<SaveSlot>,
     }
 }
 
-/// 每日完成标记（§廿一:926）。只在 `DailyDoneOnly` 槽上生效；已记过就不再重写盘。
-fn mark_daily_done(st: &mut RunState) {
-    let Some(slot) = st.save.as_mut() else { return };
-    if slot.kind != SaveUse::DailyDoneOnly || slot.progress.daily_done == daily_seed() {
-        return;
+/// 每日收尾：记账（纯函数 `daily_settle`）＋只在记账真的改了东西时落盘。
+/// 落盘走的是**整文件重写**，所以槽里那份内存档必须是从盘上原样读回来的（`SaveSlot::try_open` 的
+/// `SaveUse::Daily` 分支保证）——这条不变量由 `daily_done_mark_preserves_an_existing_mainline_progress` 守着。
+/// 返回是否通关。
+fn daily_finish(st: &mut RunState, survived: i64) -> bool {
+    let Some(slot) = st.save.as_mut() else { return false };
+    let cleared = daily_settle(&mut slot.progress, survived);
+    if cleared {
+        persist(slot, "每日额度");
     }
-    slot.progress.daily_done = daily_seed();
-    persist(slot, "每日完成记录");
+    cleared
 }
 
 /// `play`：无限爬梯、无 Boss、不落盘。`--save/--resume` 在这儿没有意义，由 `main.rs` 直接拒（裁定28）。
 pub fn play_run(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
-    ladder(seed, faction, diff, None, frame);
+    ladder(seed, faction, diff, frame);
 }
 
 /// `boss <id>` / `play --boss <id>`：单关跳打某章末 Boss。
@@ -300,7 +341,7 @@ pub fn boss_run(seed: u64, faction: Faction, diff: Difficulty, id: crate::boss::
     use crate::boss::LEVELS_PER_CHAPTER;
     let level = id.chapter() * LEVELS_PER_CHAPTER;
     let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: None };
-    let out = one_level(seed, faction, diff, level, &mut st, |_| {
+    let (out, _) = one_level(seed, faction, diff, level, &mut st, |_| {
         (id.profile().faction, Some(id))
     }, frame);
     match out {
@@ -375,6 +416,8 @@ fn persist_next_entry(
 /// 一关的外围＝**这块壳**：把会话层（`session::run_level`）的四个接缝落到 stdin/stdout/磁盘上，
 /// 再提供"本关怎么构造"（阵营轮转与 Boss 遭遇）。阶段机本身不在这儿，所以摘壳时只换这个函数与 `PlayHost`。
 /// `frame` 决定画帧上游（Text/Tui），除此之外两条壳路径共用**同一个** host、同一条落盘与遭遇逻辑。
+/// 交回来的是 `(胜负, 存活回合数)`：主线只认前者，每日两者都要——它的唯一结算标准是回合数（修正2.MD 3.6），
+/// 而"胜负"分不出"第12回合烛尽"与"打满30回合但蜡烛短一格"。
 fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     seed: u64,
     faction: Faction,
@@ -383,7 +426,7 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     st: &mut RunState,
     enc: F,
     frame: Frame,
-) -> Outcome {
+) -> (Outcome, i64) {
     // 解构而非整体借用：会话层要 `inherit`／`carry_karma`，落盘要 `save`，三条各走各的字段。
     let RunState { inherit, carry_karma, has_next, save } = st;
     // 遭遇**只算一次**（改前也是"先定遭遇、再拿去两头用"）。存成值而不是把闭包 `enc` 留着再调一遍：
@@ -392,7 +435,7 @@ fn one_level<F: Fn(u32) -> (Faction, Option<crate::boss::BossId>)>(
     let cfg = crate::session::LevelCfg { head: level_head(level, boss), level, has_next: *has_next };
     let mut host = PlayHost { seed, faction, diff, foe, boss, save, frame };
     match crate::session::run_level(&mut host, &cfg, inherit, carry_karma) {
-        crate::session::Terminus::Done(out) => out,
+        crate::session::Terminus::Done { out, survived } => (out, survived),
         crate::session::Terminus::Quit { msg } => {
             if let Some(m) = msg {
                 println!("{m}");
@@ -708,22 +751,22 @@ mod meta_tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// 每日槽只许动 `daily_done`。让它顺手写进度就等于凭空造出一条没人打过的"主线进度"——
+    /// 每日槽只许动**每日那三键**。让它顺手写进度就等于凭空造出一条没人打过的"主线进度"——
     /// 这个门禁是纯字段判断，一旦有人把 `daily` 改成共用 `Progress` 槽，全靠这条响。
     /// 注意它**只**管得住 `snapshot_entry` 这一侧；"记一次每日反而抹掉主线"是另一条路，
     /// 由 `daily_done_mark_preserves_an_existing_mainline_progress` 管（那条曾经真的漏了）。
     #[test]
     fn daily_slot_never_records_progress() {
         let path = snap_path("daily");
-        let mut save = slot(path.clone(), SaveUse::DailyDoneOnly);
+        let mut save = slot(path.clone(), SaveUse::Daily);
         snapshot_entry(&mut save, 5, Faction::Ember, Difficulty::Normal, &[], 9);
         assert!(!path.exists(), "每日槽不该建主线档");
         assert_eq!(save.unwrap().progress.level, 1, "内存档也不该被推进");
     }
 
-    /// 每日记一次"今天打过"，走的是**整文件重写**——所以它不能顺带把主线档抹回第1关。
+    /// 每日记一次通关，走的是**整文件重写**——所以它不能顺带把主线档抹回第1关。
     /// 危险在于 `daily_run` 用 `resume=false` 开槽，而冷启动分支把内存档换成 `Progress::new()`，
-    /// 于是 `mark_daily_done` 写回的是"第1关+空堆"。开槽和写入都走真实函数，不手工构造中间态。
+    /// 于是 `daily_finish` 写回的是"第1关+空堆"。开槽和写入都走真实函数，不手工构造中间态。
     #[test]
     fn daily_done_mark_preserves_an_existing_mainline_progress() {
         let path = snap_path("daily-keeps-progress");
@@ -734,10 +777,13 @@ mod meta_tests {
         ];
         snapshot_entry(&mut pre, 5, Faction::Ember, Difficulty::Normal, &pile, 3);
 
-        let opened = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::DailyDoneOnly)
+        // 开槽与写入之间隔着的正是 `daily_run` 里那步开局判据：日戳由它换，额度由 `daily_finish` 记。
+        // 两步都走真实函数，不手工构造中间态——手工设日戳就等于把"谁负责日戳"这条又写一遍。
+        let mut opened = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
             .expect("合法档应能开出每日槽");
+        assert!(daily_begin(&mut opened.progress, daily_seed()), "今天第一次进来必须放行");
         let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened) };
-        mark_daily_done(&mut st);
+        assert!(daily_finish(&mut st, TURN_LIMIT), "活满回合上限就是通关，这条出口不该是假阴性");
 
         let got = Progress::load_from(&path).expect("写入后档仍应能被自己的校验器读回");
         assert_eq!(got.level, 5, "打一次每日不该把主线进度抹回第1关");
@@ -745,7 +791,44 @@ mod meta_tests {
         assert_eq!(got.inherit[0].id, 3, "id 是战斗输入，重写不得重编号");
         assert_eq!(got.carry_karma, 3, "结转业力不该被抹平");
         assert_eq!(got.daily_done, daily_seed(), "每日记录本身要写上");
+        assert_eq!(got.daily_attempts, 1, "通关扣一次额度，且只扣一次");
+        // 中途败那一次**不写盘**：额度没变、日戳没变，整文件重写没有理由发生。
+        let st2 = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
+            .expect("合法档应能开出每日槽");
+        let before = std::fs::read(&path).unwrap();
+        let mut run2 = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(st2) };
+        assert!(!daily_finish(&mut run2, TURN_LIMIT - 1), "差一个回合就是没活满");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "失败那次一个字节都不该动（失败不扣次数）");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// 每日额度的三条判据钉在一起：跨日重开、同日三次用满、失败不扣。判据是纯函数，
+    /// 所以这里量的是**规则本身**，不是"壳有没有调它"（壳那条路由 byte-baseline 的每日场景量）。
+    #[test]
+    fn daily_quota_resets_on_the_day_boundary_and_frees_on_failure() {
+        let seed = daily_seed();
+        let mut p = Progress::new(Faction::Ember, Difficulty::Normal);
+        // 昨天用满过：日戳不是今天 ⇒ 计数作废、抽取 state 换成当日种子、额度重满。
+        p.daily_done = seed.saturating_sub(1);
+        p.daily_attempts = DAILY_ATTEMPTS;
+        p.daily_draw_state = 999;
+        assert!(daily_begin(&mut p, seed), "跨日必须放行");
+        assert_eq!((p.daily_done, p.daily_attempts, p.daily_draw_state), (seed, 0, seed), "重置要三键一起换，少一个就是第二套真值");
+        // 今天打满三次 ⇒ 用完；用完之后同一天再进来必须被挡住。
+        for _ in 0..DAILY_ATTEMPTS {
+            assert!(daily_settle(&mut p, TURN_LIMIT));
+        }
+        assert_eq!(p.daily_attempts, DAILY_ATTEMPTS);
+        assert!(!daily_begin(&mut p, seed), "额度用完当天不许再来");
+        assert!(daily_begin(&mut p, seed + 1), "但到明天必须又是满格");
+        // 失败不扣：29 回合与 0 回合都是"没活满"，且抽取 state 不回滚（回滚＝同一局面可无限重抽同一条）。
+        let mut q = Progress::new(Faction::Ember, Difficulty::Normal);
+        daily_begin(&mut q, seed);
+        for t in [TURN_LIMIT - 1, 0] {
+            assert!(!daily_settle(&mut q, t), "survived={t} 不该被读成通关");
+            assert_eq!(q.daily_attempts, 0, "失败不扣次数");
+            assert_eq!(q.daily_draw_state, seed, "失败也不回滚抽取 state");
+        }
     }
 
     /// 通关只翻标记，绝不写"第61关"：`is_mainline_end` 是 `>=`，越界 level 会让下一次续档赢一关就再报一次通关。

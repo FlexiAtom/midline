@@ -60,8 +60,10 @@ pub(crate) struct LevelCfg {
 /// 一关是怎么结束的。
 #[derive(Debug)]
 pub(crate) enum Terminus {
-    /// 打完，带战斗结果——关卡推进（level+1／终结文案）归调用方。
-    Done(Outcome),
+    /// 打完，带战斗结果与**存活回合数**（＝战斗结束时 `Battle.turn`）——关卡推进（level+1／终结文案）归调用方。
+    /// 存活回合数是每日挑战唯一的结算标准（修正2.MD 3.6），所以它必须从阶段机里出来，而不是让调用方
+    /// 去猜"这局是怎么结束的"：`Outcome` 分不出"第12回合我方烛尽"与"打满30回合但蜡烛比对面短"。
+    Done { out: Outcome, survived: i64 },
     /// 玩家要求离开这一局。`msg` 是走之前该打的那一行；`None`＝一个字节都不打
     /// （结算阶段 `q` 的改前口径：直接 `process::exit(0)`，"没有文案"也是行为的一部分）。
     Quit { msg: Option<String> },
@@ -120,6 +122,9 @@ fn after_battle<H: Host>(
     karma: &mut i32,
     out: Outcome,
 ) -> Terminus {
+    // 存活回合数在**尾报之前**定格：它描述的是"这场打到哪儿"，后面那些收尸/结算动作不许再改它，
+    // 也不该让"记得在 return 前取一下"这种会漏的步骤有地方漏。
+    let finished = Terminus::Done { out, survived: b.turn };
     host.log_tail(b);  // §十二:499 查看战果
     match out {
         Outcome::PlayerWin => host.write("胜：敌方烛尽（或蜡烛优势）。\n"),
@@ -130,7 +135,7 @@ fn after_battle<H: Host>(
         Outcome::Draw => host.write("平局（30回合蜡烛判定/双烛尽）。\n"),
     }
     if !cfg.has_next {
-        return Terminus::Done(out);
+        return finished;
     }
     for l in crate::progress::collect_survivors(b, inherit) {  // §十二:503 自造牌带入下一关
         host.write(&format!("{l}\n"));
@@ -145,7 +150,7 @@ fn after_battle<H: Host>(
         }
         host.snapshot_next(cfg.level, inherit, *karma);
     }
-    Terminus::Done(out)
+    finished
 }
 
 /// 准备/结算阶段的命令循环。词表、语义、文案都在 `command`/`progress`，这里只剩"打一帧清单＋要一行输入"。
@@ -195,6 +200,8 @@ mod tests {
         /// 打尾报那一刻的战斗业力——`after_battle` 里"结转业力"那行读的就是这个值，
         /// 从接缝处取样才能核对它搬得对不对，光看出口数字只是自己跟自己对账。
         seen_karma: Option<i32>,
+        /// 强制战斗结果那一刻的回合数——用来验出口带的 `survived` 是不是从战斗里取的（0＝开局即结束）。
+        force_turn: i64,
     }
 
     impl Probe {
@@ -206,6 +213,7 @@ mod tests {
                 trace: Vec::new(),
                 force: None,
                 seen_karma: None,
+                force_turn: 0,
             }
         }
         fn saw(&self, tag: &str) -> bool {
@@ -257,6 +265,7 @@ mod tests {
             let mut b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, std::mem::take(inherit), level);
             if let Some(o) = self.force {
                 b.over = Some(o);
+                b.turn = self.force_turn;
             }
             b
         }
@@ -289,7 +298,7 @@ mod tests {
         let mut k2 = 0;
         // 准备阶段 EOF 先放行，随后开局即胜 ⇒ 进结算阶段，那里的 EOF 才是本条要测的。
         let out = match run_level(&mut p2, &cfg(3, true), &mut inherit2, &mut k2) {
-            Terminus::Done(o) => o,
+            Terminus::Done { out, .. } => out,
             Terminus::Quit { .. } => panic!("结算阶段的 EOF 不该退出"),
         };
         assert_eq!(out, Outcome::PlayerWin);
@@ -324,6 +333,26 @@ mod tests {
         assert!(p.out.contains("弃置 "), "弃置要有可见行（永久消失，静默＝丢档无凭据）：{}", p.out);
     }
 
+    /// 2026-10-05 裁「一次挑战＝单场 30 回合生存战」的**接缝**：通关判据读的是"打到第几回合"，
+    /// 而 `Outcome` 分不出"第12回合我方烛尽"与"打满30回合但蜡烛比对面短"⇒ 回合数必须由阶段机交出来。
+    /// 探针把 `b.turn` 设成 12 再让它结束：验的是出口取的是战斗那个字段，不是壳自己数的数。
+    #[test]
+    fn the_terminus_hands_back_the_turn_the_battle_stopped_on() {
+        for (turn, out, has_next) in [(12i64, Outcome::PlayerLose, true), (30, Outcome::Draw, false)] {
+            let mut p = Probe::new(&[]);
+            p.force = Some(out);
+            p.force_turn = turn;
+            let mut inherit = pile(1);
+            let mut k = 0;
+            match run_level(&mut p, &cfg(2, has_next), &mut inherit, &mut k) {
+                Terminus::Done { out: o, survived } => {
+                    assert_eq!((o, survived), (out, turn), "胜败与回合数要一起交出来，少一个都结不了算");
+                }
+                t => panic!("该走 Done，实到 {t:?}"),
+            }
+        }
+    }
+
     #[test]
     fn has_next_switches_only_the_loss_wording_and_a_loss_never_reaches_the_settle_leg() {
         // 跳打 Boss（has_next=false）没有收尸、没有结算阶段、没有下一关入口快照；
@@ -333,7 +362,7 @@ mod tests {
         let mut inherit = pile(1);
         let mut k = 0;
         let out = run_level(&mut t, &cfg(2, true), &mut inherit, &mut k);
-        assert!(matches!(out, Terminus::Done(Outcome::PlayerLose)), "败局该原样交回调用方");
+        assert!(matches!(out, Terminus::Done { out: Outcome::PlayerLose, .. }), "败局该原样交回调用方");
         assert!(t.out.contains("败：我方烛尽，人亡。阵亡自造牌永久消失。\n"), "{}", t.out);
         assert!(!t.trace.iter().any(|x| x.starts_with("next")), "输了不该有下一关快照：{}", t.order());
 

@@ -38,5 +38,18 @@ p10(){ printf 'go\np 0 P1\n' | "$B" play --seed 7 > "$O/p10.txt" 2>&1; }
 # p3/p4 各钉 炎与冰／终影），改脚本在这三条上量不出来——本条是给 Boss 脚本层装的牙：
 # 开场脚本、暗影核心的随机附加技能、第一次暗渡挤压全在这条的字节里。
 p11(){ printf 'go\ne\ne\ne\nq\n' | "$B" play --boss 3 --seed 2026 > "$O/p11.txt" 2>&1; }
-for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11; do $f; done
+# p12..p14 是每日挑战的三条出口。p9 只有 EOF 一条路（它连一场仗都没打开），所以"场次形状／额度闸／日界重置"
+# 三件事在 p9 上**全都量不出来**——改这三处而只有 p9 在跑，就等于把"10/11 条 SAME"当成绿灯。
+# 手工造的档面（`daily_kv`）不是测试夹具的作弊：它就是本程序自己的 to_kv 形状，只有日戳与额度两个数被人按过。
+daily_kv() { # $1=日戳 $2=已用额度 $3=落盘路径
+    printf 'schema=2\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=%s\ndaily_attempts=%s\ndaily_draw_state=%s\n' "$1" "$2" "$1" > "$3"; }
+# p12 一天里的第一场（空档起手）：入口那行报"今日第 1/3 次"，打三回合后 `q` 弃局——弃局不落盘，
+# 所以这条同时钉住"额度只在通关那刻扣"。
+p12(){ printf 'go\ne\ne\ne\nq\n' | "$B" daily --save "$O/d12.save" > "$O/p12.txt" 2>&1; }
+# p13 今日 3 次已用完 ⇒ 第二次进来该被挡住，且**一场都不许开**。日界按 UTC 算（同 p9 的跨天换 md5 口径）。
+p13(){ local s=$(( $(date +%s) / 86400 )); daily_kv "$s" 3 "$O/d13.save"; "$B" daily --save "$O/d13.save" > "$O/p13.txt" 2>&1; }
+# p14 昨天用满、今天该重开：日戳与今天不符 ⇒ 额度作废归零，照常开局。这条**不随日期漂**（日戳钉死为 1），
+# 是 p13 的反面——只钉"用完挡得住"不钉"跨日放得开"，把重置判据写成 `==` 也照样全绿。
+p14(){ daily_kv 1 3 "$O/d14.save"; printf 'go\nq\n' | "$B" daily --save "$O/d14.save" > "$O/p14.txt" 2>&1; }
+for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14; do $f; done
 md5sum "$O"/p*.txt | sed "s#$O/##"

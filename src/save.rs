@@ -26,8 +26,14 @@ use crate::boss::MAINLINE_LEVELS;
 use crate::model::{CardInst, Faction, Skill, card_by_name};
 use std::path::{Path, PathBuf};
 
-/// 档格式版本。改格式必须 +1 且不自动迁移：自动迁移＝替人改战斗输入，旧档一律由人显式 `progress recover` 处置。
-pub const SCHEMA: u32 = 1;
+/// 档格式版本（写盘只用这一个数）。改格式必须 +1。
+/// **"不自动迁移"的范围**：迁移指**替人改战斗输入**（level／继承堆／牌面数值）——那种事旧档一律由人显式
+/// `progress recover` 处置。2026-10-05 的裁决定的是另一头：解析端同时接受 `SCHEMA_MIN..=SCHEMA`，
+/// 旧档**缺失的新键取默认值**。那两条不冲突——每日那三个键没有一个是战斗输入，
+/// 读旧档时给它们填 0 不会把任何人从第17关搬回第1关，也不会动一张牌。
+pub const SCHEMA: u32 = 2;
+/// 解析端接受的最旧格式（2026-10-05 裁「解析端同时接受 1 与 2」：旧档不作废、进度不丢）。
+pub const SCHEMA_MIN: u32 = 1;
 /// 默认档名（放在 `pick_path` 解析出的目录里）。
 pub const FILE: &str = "progress.kv";
 /// 单张牌死亡计数的防回绕上限（语义边界是 §三:85 的"第四次起10%保底"，到 3 就不再生效；
@@ -80,8 +86,16 @@ pub struct Progress {
     pub carry_karma: i32,
     /// 主线 60 关打过没有。不是 `level` 的函数（level 会退回 1 重打），是历史凭据，一旦为真不再抹掉。
     pub completed: bool,
-    /// 每日挑战已完成的日种子（0＝从没记过）。§廿一:926「完成后记录日期，防止重复完成」。
+    /// 每日那一档**属于哪一天**（0＝从没记过）。§廿一:926「完成后记录日期」那半句仍在兑现——记的就是日期；
+    /// "防止重复完成"那半句已被 修正2.MD 3.5「每日免费次数：3」覆盖 ⇒ 它不再是"今天打过了"的布尔位，
+    /// 而是下面两个每日计数的**日戳**：日戳不等于今天 ⇒ 计数作废、重开。
     pub daily_done: u64,
+    /// 今日已用掉的额度（通关一次扣一次；中途败不扣——修正2.MD 3.5「失败不扣挑战次数」）。
+    /// 上限与重置判据在 `meta::daily_run`，这里只负责持久化。
+    pub daily_attempts: u32,
+    /// 当日规则抽取序列的 PRNG state，跨次持久（2026-10-05 裁「需每日抽取序列状态跨次持久」）。
+    /// 存储与日界重置在这里，**取规则的消费点在帧 D2**；失败不回滚它，否则同一局面可无限重抽同一条。
+    pub daily_draw_state: u64,
     pub inherit: Vec<CardInst>,
 }
 
@@ -189,6 +203,8 @@ impl Progress {
             carry_karma: 0,
             completed: false,
             daily_done: 0,
+            daily_attempts: 0,
+            daily_draw_state: 0,
             inherit: Vec::new(),
         }
     }
@@ -197,13 +213,15 @@ impl Progress {
     /// power/threshold 两个字段会被运行时改写），hp 之类瞬态写进去只会说谎——`Battle::new` 无条件重置它们。
     pub fn to_kv(&self) -> String {
         let mut s = format!(
-            "schema={SCHEMA}\nfaction={}\ndifficulty={}\nlevel={}\ncarry_karma={}\ncompleted={}\ndaily_done={}\n",
+            "schema={SCHEMA}\nfaction={}\ndifficulty={}\nlevel={}\ncarry_karma={}\ncompleted={}\ndaily_done={}\ndaily_attempts={}\ndaily_draw_state={}\n",
             faction_token(self.faction),
             diff_token(self.diff),
             self.level,
             self.carry_karma,
             self.completed as u8,
-            self.daily_done
+            self.daily_done,
+            self.daily_attempts,
+            self.daily_draw_state
         );
         for c in &self.inherit {
             let sk: Vec<&str> = c.skills.iter().map(|k| skill_token(*k)).collect();
@@ -222,12 +240,16 @@ impl Progress {
         s
     }
 
-    /// 解析 + 校验。策略＝严格拒绝（裁定28）：任何解析失败、未知 schema、越界 level 一律 `Err`，
+    /// 解析 + 校验。策略＝严格拒绝（裁定28）：任何解析失败、版本出格、越界 level 一律 `Err`，
     /// 调用方 `exit 2` 且不写不删——"读不懂就当空档"会静默触发 `Battle::new` 的基础牌堆回落分支。
     /// 未知**键**忽略（前向兼容：新字段不该让旧程序把整份档判成损坏）。
+    /// 版本闸是**区间**不是等号（2026-10-05 裁）：`SCHEMA_MIN..=SCHEMA` 都收，旧档缺的**新键取默认值**——
+    /// 但默认值只许给非战斗输入。区间下界以上的那些字段（level／继承堆）照旧一律 `required`，
+    /// 少一个就是坏档，不给自己"猜一份牌序"的口子。
     pub fn from_kv(text: &str) -> Result<Progress, String> {
         let (mut schema, mut faction, mut diff, mut level, mut karma, mut completed, mut daily) =
             (None, None, None, None, None, None, None);
+        let (mut attempts, mut draw) = (None, None);
         let mut cards: Vec<(usize, String)> = Vec::new();
         for (i, raw) in text.lines().enumerate() {
             let no = i + 1;
@@ -259,14 +281,16 @@ impl Progress {
                 "carry_karma" => set_once(&mut karma, num::<i32>(v, k, no)?, k)?,
                 "completed" => set_once(&mut completed, boolean(v, k, no)?, k)?,
                 "daily_done" => set_once(&mut daily, num::<u64>(v, k, no)?, k)?,
+                "daily_attempts" => set_once(&mut attempts, num::<u32>(v, k, no)?, k)?,
+                "daily_draw_state" => set_once(&mut draw, num::<u64>(v, k, no)?, k)?,
                 "card" => cards.push((no, v.trim().to_string())),
                 _ => {}
             }
         }
-        if required(&schema, "schema")? != SCHEMA {
+        let ver = required(&schema, "schema")?;
+        if !(SCHEMA_MIN..=SCHEMA).contains(&ver) {
             return Err(format!(
-                "存档版本 schema={} 与本程序（SCHEMA={SCHEMA}）不符 ⇒ 不自动迁移；请人处置（progress recover 会留证）",
-                required(&schema, "schema")?
+                "存档版本 schema={ver} 不在本程序接受的 {SCHEMA_MIN}..={SCHEMA} 之内 ⇒ 不自动迁移；请人处置（progress recover 会留证）"
             ));
         }
         let faction = required(&faction, "faction")?;
@@ -283,6 +307,8 @@ impl Progress {
             carry_karma: required(&karma, "carry_karma")?,
             completed: required(&completed, "completed")?,
             daily_done: required(&daily, "daily_done")?,
+            daily_attempts: attempts.unwrap_or_default(),
+            daily_draw_state: draw.unwrap_or_default(),
             inherit: Vec::new(),
         };
         if p.carry_karma < 0 {
@@ -480,7 +506,7 @@ pub fn describe(path: &Path) -> (String, bool) {
             let ch = crate::boss::chapter_of(p.level);
             let (foe, boss) = crate::meta::encounter_for(p.level);
             out.push_str(&format!(
-                "schema={SCHEMA} · 我方{} · 难度{} · 进度第{}/{}关（第{ch}章·遭遇{}）\n",
+                "schema={SCHEMA}（接受 {SCHEMA_MIN}..={SCHEMA}）· 我方{} · 难度{} · 进度第{}/{}关（第{ch}章·遭遇{}）\n",
                 p.faction.name(),
                 p.diff.label(),
                 p.level,
@@ -488,11 +514,13 @@ pub fn describe(path: &Path) -> (String, bool) {
                 boss.map_or(foe.name().to_string(), |b| format!("Boss「{}」", b.name()))
             ));
             out.push_str(&format!(
-                "结转业力={} · 主线通关标记={} · 每日已完成日种子={}（今日种子 {}）\n",
+                "结转业力={} · 主线通关标记={} · 每日：日戳{}（今日种子 {}）· 今日已用 {}/{} 次\n",
                 p.carry_karma,
                 if p.completed { "是" } else { "否" },
                 p.daily_done,
-                crate::meta::daily_seed()
+                crate::meta::daily_seed(),
+                p.daily_attempts,
+                crate::meta::DAILY_ATTEMPTS
             ));
             if let Some(w) = p.load_warning() {
                 out.push_str(&format!("⚠ {w}\n"));
@@ -546,6 +574,8 @@ mod save_tests {
             carry_karma: 6,
             completed: false,
             daily_done: 20_454,
+            daily_attempts: 2,
+            daily_draw_state: 0x5EED_0000_0001,
             inherit: vec![a, b, c],
         }
     }
@@ -559,6 +589,8 @@ mod save_tests {
         assert_eq!(back.diff, Difficulty::Hard);
         assert_eq!(back.carry_karma, 6);
         assert_eq!(back.daily_done, 20_454);
+        assert_eq!(back.daily_attempts, 2, "今日额度计数是每日挑战的输入，丢了就等于白送一次");
+        assert_eq!(back.daily_draw_state, 0x5EED_0000_0001, "抽取序列 state 跨次持久＝它必须活着回来");
         assert!(!back.completed);
         assert_eq!(back.inherit.len(), 3);
         assert_eq!(back.inherit[0].id, 2, "id 逐位原样");
@@ -586,7 +618,25 @@ mod save_tests {
         assert_eq!(back.level, 1);
         assert!(back.inherit.is_empty());
         assert_eq!(back.faction, Faction::Shadow);
+        assert_eq!((back.daily_done, back.daily_attempts, back.daily_draw_state), (0, 0, 0), "新键的默认值＝从没打过、额度满格");
         assert!(!p.to_kv().contains("card="));
+    }
+
+    /// 2026-10-05 裁「解析端同时接受 1 与 2」：旧档不作废、缺的新键取默认、**战斗输入一个都不许多改**。
+    /// 下面这份文本是**当年那版程序的落盘形状**（schema=1，没有两条 daily 新键），不是"今天的落盘少写两行"——
+    /// 测的是真旧档，不是新档的一个子集。
+    #[test]
+    fn legacy_schema_one_loads_with_defaults_and_keeps_the_battle_inputs() {
+        let v1 = "schema=1\nfaction=1\ndifficulty=hard\nlevel=17\ncarry_karma=6\ncompleted=0\ndaily_done=20454\ncard=火苗:2:5:4:2:3:0:AtkSelfFlame1+AtkSelfFlame1\n";
+        let p = Progress::from_kv(v1).expect("schema=1 的旧档必须还能读");
+        assert_eq!(p.level, 17, "旧档的关卡不许被默认成第1关");
+        assert_eq!(p.inherit.len(), 1, "旧档的继承堆一张都不许少");
+        assert_eq!(p.inherit[0].def.power, 5, "牌面数值照旧从档里读，不从卡表补");
+        assert_eq!(p.daily_done, 20_454);
+        assert_eq!(p.daily_attempts, 0, "缺 daily_attempts ⇒ 默认 0＝今天还没用过额度");
+        assert_eq!(p.daily_draw_state, 0, "缺 daily_draw_state ⇒ 默认 0；日界重置会把它换成当日种子");
+        // 读宽写窄是**故意的**：读接受两版，写只写最新一版 ⇒ 旧档读进来再落盘就升上去了。
+        assert!(p.to_kv().starts_with("schema=2\n"), "落盘一律写 SCHEMA");
     }
 
     #[test]
@@ -613,7 +663,8 @@ mod save_tests {
     fn each_corruption_is_refused_not_guessed() {
         let good = sample().to_kv();
         let cases: Vec<(&str, String)> = vec![
-            ("版本不符", good.replace("schema=1", "schema=2")),
+            ("版本过新（超出 SCHEMA）", good.replace("schema=2\n", "schema=3\n")),
+            ("版本过旧（低于 SCHEMA_MIN）", good.replace("schema=2\n", "schema=0\n")),
             ("缺键", good.replace("level=17\n", "")),
             ("重复键", format!("{good}level=3\n")),
             ("非 kv 行", format!("{good}手改的一行说明\n")),
@@ -623,6 +674,9 @@ mod save_tests {
             ("负业力", good.replace("carry_karma=6", "carry_karma=-1")),
             ("completed 非布尔", good.replace("completed=0", "completed=2")),
             ("daily_done 负", good.replace("daily_done=20454", "daily_done=-1")),
+            ("daily_attempts 非数", good.replace("daily_attempts=2", "daily_attempts=两次")),
+            ("daily_attempts 负", good.replace("daily_attempts=2", "daily_attempts=-1")),
+            ("daily_draw_state 负", good.replace("daily_draw_state=", "daily_draw_state=-")),
             ("未知卡名", good.replace("card=火苗", "card=不存在的卡")),
             ("跨阵营卡名", good.replace("card=火苗", "card=初霜")),
             ("开端入堆 §十:382", good.replace("card=火苗", "card=开端")),
