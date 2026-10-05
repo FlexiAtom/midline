@@ -69,9 +69,9 @@ fn expand_home(s: &str, home: Option<&str>) -> PathBuf {
 }
 
 /// 一次主线运行的可持久进度。字段全部是**关隘入口**那一刻的真值；战斗内的瞬态（hp/flame/seq/…）一个不存。
-/// 不建金币/成就/收集字段：文档给了金币一条获取路径（每日挑战规则第 3 步「每日完成获得金币，用于解锁新卡」），
-/// 但**数额、卡池、解锁价格一字未给** ⇒ 没有可实现口径，建了就是没有真值源的第二套壳。
-/// （措辞更正：本行旧版写的是"从未给获取条件"，被文档那句直接证伪；该缺口现挂成显式债，见 model.rs 债表。）
+/// 不建代币/成就/收集字段：文档给了一条获取路径（每日挑战完成有奖），设计侧也已裁定货币改称「代币」并给出数额与价目
+/// （存活回合数×3＋通关 15、升级 10/次上限 3、重掷 3/次），但**代币能换什么的卡池名单一字未给** ⇒ 没有可实现口径，建了就是没有真值源的第二套壳。
+/// （措辞更正：本行旧版写的是"数额、卡池、解锁价格一字未给"，数额与价目已被设计回执清掉、只剩卡池；剩余缺口仍挂显式债，见 model.rs 债表，扩字段须单独一帧过裁定 27。）
 #[derive(Clone, Debug)]
 pub struct Progress {
     pub faction: Faction,
@@ -592,7 +592,7 @@ mod save_tests {
     #[test]
     fn unknown_keys_are_ignored_for_forward_compatibility() {
         let text = sample().to_kv() + "coins=99\nfuture_thing=abc\n";
-        let p = Progress::from_kv(&text).expect("未知键必须忽略（金币/成就没有可实现口径⇒不建字段，但旧程序要能读新档）");
+        let p = Progress::from_kv(&text).expect("未知键必须忽略（代币/成就没有可实现口径⇒不建字段，但旧程序要能读新档）");
         assert_eq!(p.level, 17);
     }
 
