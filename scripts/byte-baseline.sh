@@ -46,7 +46,7 @@ p11(){ printf 'go\ne\ne\ne\nq\n' | "$B" play --boss 3 --seed 2026 > "$O/p11.txt"
 # （prep 阶段 `q` 弃局，一行输出都不落盘），再拿那个数去造"今天已用完"的档面。
 today_seed() { printf 'q\n' | "$B" daily --save "$O/.seed.probe" 2>&1 | sed -n 's/.*seed=\([0-9]\{1,\}\).*/\1/p' | head -1; }
 daily_kv() { # $1=日戳 $2=已用额度 $3=落盘路径
-    printf 'schema=3\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=%s\ndaily_attempts=%s\ndaily_draw_state=%s\ndaily_rule_last=1\ndaily_rule_run=2\n' "$1" "$2" "$1" > "$3"; }
+    printf 'schema=4\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=%s\ndaily_attempts=%s\ndaily_draw_state=%s\ndaily_rule_last=1\ndaily_rule_run=2\ntokens=0\n' "$1" "$2" "$1" > "$3"; }
 # p12 一天里的第一场（空档起手）：入口那行报"今日第 1/3 次 ＋ 本场规则"，打三回合后 `q` 弃局——弃局不落盘，
 # 所以这条同时钉住"额度只在通关那刻扣"。
 p12(){ printf 'go\ne\ne\ne\nq\n' | "$B" daily --save "$O/d12.save" > "$O/p12.txt" 2>&1; }
@@ -57,10 +57,18 @@ p13(){ local s; s="$(today_seed)"; [ -n "$s" ] || { echo "p13：二进制没报�
 # p14 昨天用满、今天该重开：日戳与今天不符 ⇒ 额度作废归零，照常开局。这条**不随日期漂**（日戳钉死为 1），
 # 是 p13 的反面——只钉"用完挡得住"不钉"跨日放得开"，把重置判据写成 `==` 也照样全绿。
 p14(){ daily_kv 1 3 "$O/d14.save"; printf 'go\nq\n' | "$B" daily --save "$O/d14.save" > "$O/p14.txt" 2>&1; }
-# p15 帧 D2 的兼容面：一份**旧档**（schema=2，抽取序列只有 state、没有 pity 那两键）交给新二进制读。
-# 报告行里那三个数是这条的全部断言——`上一条 0（连中 0 次）`＝缺的键取了默认值而不是拒载，
-# `schema=3（接受 1..=3）`＝读宽写窄（读进来不就地改写文件，`progress` 从不落盘）。
+# p15 帧 D2 的兼容面：一份**旧档**（schema=2，抽取序列只有 state、没有 pity 那两键，也没有代币）交给新二进制读。
+# 报告行里那几个数是这条的全部断言——`上一条 0（连中 0 次）`与`代币=0`＝缺的键取了默认值而不是拒载，
+# `schema=4（接受 1..=4）`＝读宽写窄（读进来不就地改写文件，`progress` 从不落盘）。
 p15(){ printf 'schema=2\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\ncompleted=0\ndaily_done=1\ndaily_attempts=2\ndaily_draw_state=777\n' > "$O/v2.save";
        "$B" progress --save "$O/v2.save" > "$O/p15.txt" 2>&1; }
-for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15; do $f; done
+# p16 帧 D4 装的那条**整场**：p9/p12/p13/p14 四条每日场景全都在**开局前后**就收住了（EOF／三回合弃局／额度挡住），
+# 所以"存活回合数→代币→落盘"这条乘法在字节面上一个 witness 都没有——改坏了照样 15 条 SAME。
+# 这条只按 `e`（放弃行动、把回合交出去），让战斗自己打到"我方烛尽"或 30 回合上限，于是结语那行的
+# `+N 代币（余额 M）` 用的是**战斗自己数出来的回合数**（不是测试手工设的数），随后 `progress` 把同一个档读回来：
+# 两个读数同场出现＝发放、落盘、报告三段咬上了；对不上就是断在中间某处。
+# 与 p9/p12/p13 同一口径：md5 **随日历换**（今日种子 ⇒ 今日规则 ⇒ 今日这场的打法），那是日历在走。
+p16(){ { printf 'go\n'; printf 'e\n%.0s' $(seq 1 60); } | "$B" daily --save "$O/d16.save" > "$O/p16.txt" 2>&1;
+       "$B" progress --save "$O/d16.save" >> "$O/p16.txt" 2>&1; }
+for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15 p16; do $f; done
 md5sum "$O"/p*.txt | sed "s#$O/##"

@@ -29,10 +29,11 @@ use std::path::{Path, PathBuf};
 /// 档格式版本（写盘只用这一个数）。改格式必须 +1。
 /// **"不自动迁移"的范围**：迁移指**替人改战斗输入**（level／继承堆／牌面数值）——那种事旧档一律由人显式
 /// `progress recover` 处置。2026-10-05 的裁决定的是另一头：解析端同时接受 `SCHEMA_MIN..=SCHEMA`，
-/// 旧档**缺失的新键取默认值**。那两条不冲突——每日那五个键没有一个是战斗输入，
+/// 旧档**缺失的新键取默认值**。那两条不冲突——后来加的键（每日那五个＋代币余额）没有一个是战斗输入，
 /// 读旧档时给它们填 0 不会把任何人从第17关搬回第1关，也不会动一张牌。
 /// 2 ⇒ 3＝帧 D2 给抽取序列补了 `daily_rule_last`／`daily_rule_run` 两键（pity 要跨进程记"连着抽到第几次"）。
-pub const SCHEMA: u32 = 3;
+/// 3 ⇒ 4＝帧 D4 补 `tokens` 一键（每日挑战奖励结算落盘）；旧档缺它读作 0，那是"没攒过钱"，不是战斗输入。
+pub const SCHEMA: u32 = 4;
 /// 解析端接受的最旧格式（2026-10-05 裁「解析端同时接受 1 与 2」：旧档不作废、进度不丢）。
 pub const SCHEMA_MIN: u32 = 1;
 /// 默认档名（放在 `pick_path` 解析出的目录里）。
@@ -76,9 +77,12 @@ fn expand_home(s: &str, home: Option<&str>) -> PathBuf {
 }
 
 /// 一次主线运行的可持久进度。字段全部是**关隘入口**那一刻的真值；战斗内的瞬态（hp/flame/seq/…）一个不存。
-/// 不建代币/成就/收集字段：文档给了一条获取路径（每日挑战完成有奖），设计侧也已裁定货币改称「代币」并给出数额与价目
-/// （存活回合数×3＋通关 15、升级 10/次上限 3、重掷 3/次），但**代币能换什么的卡池名单一字未给** ⇒ 没有可实现口径，建了就是没有真值源的第二套壳。
-/// （措辞更正：本行旧版写的是"数额、卡池、解锁价格一字未给"，数额与价目已被设计回执清掉、只剩卡池；剩余缺口仍挂显式债，见 model.rs 债表，扩字段须单独一帧过裁定 27。）
+/// 代币余额在帧 D4 落地了（发放面：每日挑战按 存活回合数×3＋通关 15 入账，见 `meta::daily_settle`）。
+/// **仍然不建成就/收集字段，也不建任何消费面**：设计给了价目（升级 10/次上限 3、重掷 3/次），但**代币能换什么的
+/// 卡池名单一字未给** ⇒ 没有可实现口径；而且"升级"在文档里已经有另一套免费口径（每通关一次可选 1 张），
+/// 两种读法产出不同的数 ⇒ 消费面另帧待裁，建了就是没有真值源的第二套壳。
+/// （措辞更正：本注释旧版写"数额、卡池、解锁价格一字未给"，数额与价目已被设计回执清掉、只剩卡池；
+/// 剩余缺口仍挂显式债，见 model.rs 债表。）
 #[derive(Clone, Debug)]
 pub struct Progress {
     pub faction: Faction,
@@ -102,6 +106,12 @@ pub struct Progress {
     pub daily_rule_last: u32,
     /// 上一条规则**已连续**抽中的次数（pity 的计数器：到阈值就强推他条，见 `meta::daily_draw`）。
     pub daily_rule_run: u32,
+    /// 代币余额。**它不是"今天的第几个计数"，是历史攒下的钱** ⇒ 日界重置不许碰它（`meta::daily_begin`
+    /// 只换每日那五个键）；每天清零钱包不是"每日重置"，是丢档。
+    /// 只有一条路会加它：每日挑战那场收束时按 存活回合数×3（通关再 +15）入账。**主线不发**——
+    /// 那三条数出自每日挑战章的奖励结算，把它接到主线上就是给"通关一次"凭空造出第二份收益。
+    /// 也没有任何地方减它：消费面（能换什么）缺卡池名单，见本模块顶部注释与 model.rs 债表。
+    pub tokens: u32,
     pub inherit: Vec<CardInst>,
 }
 
@@ -213,6 +223,7 @@ impl Progress {
             daily_draw_state: 0,
             daily_rule_last: 0,
             daily_rule_run: 0,
+            tokens: 0,
             inherit: Vec::new(),
         }
     }
@@ -221,7 +232,7 @@ impl Progress {
     /// power/threshold 两个字段会被运行时改写），hp 之类瞬态写进去只会说谎——`Battle::new` 无条件重置它们。
     pub fn to_kv(&self) -> String {
         let mut s = format!(
-            "schema={SCHEMA}\nfaction={}\ndifficulty={}\nlevel={}\ncarry_karma={}\ncompleted={}\ndaily_done={}\ndaily_attempts={}\ndaily_draw_state={}\ndaily_rule_last={}\ndaily_rule_run={}\n",
+            "schema={SCHEMA}\nfaction={}\ndifficulty={}\nlevel={}\ncarry_karma={}\ncompleted={}\ndaily_done={}\ndaily_attempts={}\ndaily_draw_state={}\ndaily_rule_last={}\ndaily_rule_run={}\ntokens={}\n",
             faction_token(self.faction),
             diff_token(self.diff),
             self.level,
@@ -231,7 +242,8 @@ impl Progress {
             self.daily_attempts,
             self.daily_draw_state,
             self.daily_rule_last,
-            self.daily_rule_run
+            self.daily_rule_run,
+            self.tokens
         );
         for c in &self.inherit {
             let sk: Vec<&str> = c.skills.iter().map(|k| skill_token(*k)).collect();
@@ -259,7 +271,7 @@ impl Progress {
     pub fn from_kv(text: &str) -> Result<Progress, String> {
         let (mut schema, mut faction, mut diff, mut level, mut karma, mut completed, mut daily) =
             (None, None, None, None, None, None, None);
-        let (mut attempts, mut draw, mut last_rule, mut run) = (None, None, None, None);
+        let (mut attempts, mut draw, mut last_rule, mut run, mut tokens) = (None, None, None, None, None);
         let mut cards: Vec<(usize, String)> = Vec::new();
         for (i, raw) in text.lines().enumerate() {
             let no = i + 1;
@@ -295,6 +307,7 @@ impl Progress {
                 "daily_draw_state" => set_once(&mut draw, num::<u64>(v, k, no)?, k)?,
                 "daily_rule_last" => set_once(&mut last_rule, num::<u32>(v, k, no)?, k)?,
                 "daily_rule_run" => set_once(&mut run, num::<u32>(v, k, no)?, k)?,
+                "tokens" => set_once(&mut tokens, num::<u32>(v, k, no)?, k)?,
                 "card" => cards.push((no, v.trim().to_string())),
                 _ => {}
             }
@@ -323,6 +336,7 @@ impl Progress {
             daily_draw_state: draw.unwrap_or_default(),
             daily_rule_last: last_rule.unwrap_or_default(),
             daily_rule_run: run.unwrap_or_default(),
+            tokens: tokens.unwrap_or_default(),
             inherit: Vec::new(),
         };
         if p.carry_karma < 0 {
@@ -541,9 +555,10 @@ pub fn describe(path: &Path) -> (String, bool) {
                 format!("上一条 {}（连中 {} 次）", crate::meta::daily_rule_name(p.daily_rule_last), p.daily_rule_run)
             };
             out.push_str(&format!(
-                "结转业力={} · 主线通关标记={} · 每日：日戳{}（今日种子 {}）· 今日已用 {}/{} 次 · 今日抽取序列：{}\n",
+                "结转业力={} · 主线通关标记={} · 代币={} · 每日：日戳{}（今日种子 {}）· 今日已用 {}/{} 次 · 今日抽取序列：{}\n",
                 p.carry_karma,
                 if p.completed { "是" } else { "否" },
+                p.tokens,
                 p.daily_done,
                 crate::meta::daily_seed(),
                 p.daily_attempts,
@@ -606,6 +621,7 @@ mod save_tests {
             daily_draw_state: 0x5EED_0000_0001,
             daily_rule_last: 3,
             daily_rule_run: 2,
+            tokens: 7,
             inherit: vec![a, b, c],
         }
     }
@@ -623,6 +639,7 @@ mod save_tests {
         assert_eq!(back.daily_draw_state, 0x5EED_0000_0001, "抽取序列 state 跨次持久＝它必须活着回来");
         assert_eq!(back.daily_rule_last, 3, "pity 记的\"上一条\"丢了，当天就能连抽三条一样的");
         assert_eq!(back.daily_rule_run, 2, "pity 记的\"连中第几次\"丢了，阈值就永远撞不到");
+        assert_eq!(back.tokens, 7, "代币余额是攒下来的钱：丢一笔＝玩家打过两场白打");
         assert!(!back.completed);
         assert_eq!(back.inherit.len(), 3);
         assert_eq!(back.inherit[0].id, 2, "id 逐位原样");
@@ -672,27 +689,47 @@ mod save_tests {
         assert_eq!(p.daily_attempts, 0, "缺 daily_attempts ⇒ 默认 0＝今天还没用过额度");
         assert_eq!(p.daily_draw_state, 0, "缺 daily_draw_state ⇒ 默认 0；日界重置会把它换成当日种子");
         // 读宽写窄是**故意的**：读接受整段版本区间，写只写最新一版 ⇒ 旧档读进来再落盘就升上去了。
-        assert!(p.to_kv().starts_with("schema=3\n"), "落盘一律写 SCHEMA");
+        assert!(p.to_kv().starts_with("schema=4\n"), "落盘一律写 SCHEMA");
+        assert_eq!(p.tokens, 0, "缺 tokens ⇒ 默认 0＝没攒过钱，不是\"读不懂这份档\"");
     }
 
     /// D1 那版程序写出来的档（schema=2，有额度与 state、没有 pity 两键）到 D2 手里必须照样读得动——
-    /// 这条才是"区间闸 1..=3"每天真会走到的那一支：昨天装的二进制已经落过盘，今天换新的。
+    /// 这条才是"区间闸 1..=4"每天真会走到的那一支：昨天装的二进制已经落过盘，今天换新的。
     #[test]
     fn schema_two_archives_load_and_the_pity_keys_default() {
-        let v2 = sample().to_kv().replace("schema=3\n", "schema=2\n");
+        let v2 = sample().to_kv().replace("schema=4\n", "schema=2\n");
         let v2 = v2.replace("daily_rule_last=3\ndaily_rule_run=2\n", "");
-        let p = Progress::from_kv(&v2).expect("schema=2 的昨天档必须能读");
+        let v2 = v2.replace("tokens=7\n", ""); // schema=2 那版连代币键都还没有
+        let p = Progress::from_kv(&v2).expect("schema=2 的昨天档必须读得动");
         assert_eq!(p.daily_attempts, 2, "额度是 D1 就有的键，读回来就是它自己");
         assert_eq!(p.daily_draw_state, 0x5EED_0000_0001, "抽取序列起点照旧活着");
         assert_eq!((p.daily_rule_last, p.daily_rule_run), (0, 0), "缺 pity 两键 ⇒ 默认\"没抽过\"，第一次抽不该被判成连中");
         assert_eq!(p.level, 17, "读宽只宽在非战斗输入");
     }
 
+    /// D2／D3 那版程序落的是 **schema=3**：六个标量键里只少 `tokens` 一个。这就是**部署日那一支**——
+    /// 昨天打过两场每日（额度 2、序列走过两步），今天换新二进制读它：计数一个不许丢，代币从 0 起攒
+    /// （旧版没有发放机件 ⇒ 0 是那份档的真实历史，不是"读不懂就补一份"）。
+    #[test]
+    fn schema_three_archives_load_and_the_token_balance_starts_at_zero() {
+        let v3 = sample().to_kv().replace("schema=4\n", "schema=3\n").replace("tokens=7\n", "");
+        let p = Progress::from_kv(&v3).expect("schema=3 的昨天档必须读得动");
+        assert_eq!(p.tokens, 0, "旧档没发过钱 ⇒ 读回来就是 0，不凭空补一笔");
+        assert_eq!(
+            (p.daily_done, p.daily_attempts, p.daily_draw_state, p.daily_rule_last, p.daily_rule_run),
+            (20_454, 2, 0x5EED_0000_0001, 3, 2),
+            "每日那五个键是 D2 就有的，一个都不许被默认值盖掉"
+        );
+        assert_eq!(p.level, 17, "战斗输入照旧");
+        assert_eq!(p.inherit.len(), 3, "继承堆照旧");
+    }
+
     #[test]
     fn unknown_keys_are_ignored_for_forward_compatibility() {
         let text = sample().to_kv() + "coins=99\nfuture_thing=abc\n";
-        let p = Progress::from_kv(&text).expect("未知键必须忽略（代币/成就没有可实现口径⇒不建字段，但旧程序要能读新档）");
+        let p = Progress::from_kv(&text).expect("未知键必须忽略（旧程序的 coins 与未来的新键都不该让今天的档判坏；成就/卡池没有可实现口径⇒仍不建字段）");
         assert_eq!(p.level, 17);
+        assert_eq!(p.tokens, 7, "`coins=99` 是**另一个程序的**货币键，不许被读成代币");
     }
 
     /// 键两侧的空格是手改档位最常见的手滑。旧实现只 trim 值、不 trim 键 ⇒ `card =…` 落进"未知键"被
@@ -712,8 +749,8 @@ mod save_tests {
     fn each_corruption_is_refused_not_guessed() {
         let good = sample().to_kv();
         let cases: Vec<(&str, String)> = vec![
-            ("版本过新（超出 SCHEMA）", good.replace("schema=3\n", "schema=4\n")),
-            ("版本过旧（低于 SCHEMA_MIN）", good.replace("schema=3\n", "schema=0\n")),
+            ("版本过新（超出 SCHEMA）", good.replace("schema=4\n", "schema=5\n")),
+            ("版本过旧（低于 SCHEMA_MIN）", good.replace("schema=4\n", "schema=0\n")),
             ("缺键", good.replace("level=17\n", "")),
             ("重复键", format!("{good}level=3\n")),
             ("非 kv 行", format!("{good}手改的一行说明\n")),
@@ -728,6 +765,8 @@ mod save_tests {
             ("daily_draw_state 负", good.replace("daily_draw_state=", "daily_draw_state=-")),
             ("daily_rule_last 非数", good.replace("daily_rule_last=3", "daily_rule_last=黏稠")),
             ("daily_rule_run 负", good.replace("daily_rule_run=2", "daily_rule_run=-2")),
+            ("tokens 负", good.replace("tokens=7", "tokens=-1")),
+            ("tokens 非数", good.replace("tokens=7", "tokens=七枚")),
             ("未知卡名", good.replace("card=火苗", "card=不存在的卡")),
             ("跨阵营卡名", good.replace("card=火苗", "card=初霜")),
             ("开端入堆 §十:382", good.replace("card=火苗", "card=开端")),

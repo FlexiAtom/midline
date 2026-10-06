@@ -156,7 +156,7 @@ struct RunState {
 enum SaveUse {
     /// 主线：每次进关写「本关入口」快照（`裁定27`）。
     Progress,
-    /// 每日：只由调用方写**每日那五个键**（日戳／额度／抽取序列三键），关卡与继承堆一个字节都不动——
+    /// 每日：只由调用方写**每日那五个键＋代币余额**（日戳／额度／抽取序列三键 ＋ `tokens`），关卡与继承堆一个字节都不动——
     /// 每日跑的是单场生存战，把它写进主线进度会凭空造出一条没人打过的"主线进度"。
     Daily,
 }
@@ -315,6 +315,12 @@ fn persist(slot: &mut SaveSlot, what: &str) -> bool {
 /// 每日挑战的免费额度（修正2.MD 3.5「每日免费次数：3」）。
 pub const DAILY_ATTEMPTS: u32 = 3;
 
+/// 存活一回合给多少代币（修正2.MD 3.6「基础奖励：存活回合数 × 3」）。
+const TOKENS_PER_SURVIVED_TURN: u32 = 3;
+/// 通关那场的额外奖励（修正2.MD 3.6「通关奖励：额外 +15 代币」）。
+/// 上限因此是 `30×3+15=105`：回合上限是 `TURN_LIMIT`，乘出来就到不了更高的数。
+const TOKENS_CLEAR_BONUS: u32 = 15;
+
 /// 规则号 → 名字。**名单本身在 `battle::DailyRule`**（引擎要按它分支，名单再留一份 meta 侧的就成两处真值）；
 /// 这里只留"越界号报『今日无规则』而不是 panic"这一条存档口径。
 pub fn daily_rule_name(rule: u32) -> &'static str {
@@ -351,6 +357,7 @@ fn daily_draw(p: &mut Progress) -> u32 {
 
 /// 日界重置＋放行判据（纯函数：判据只在这一处，`daily_run` 与常驻测读同一条，不留第二份真值）。
 /// 返回 `false`＝今天的额度已经用完。日戳不是今天 ⇒ 当日计数作废、抽取序列换成当日种子（额度重满）。
+/// **重置只动"今天"的那五个键**：代币余额不在里面——它是历史攒下的钱，跟着日界清零不是"每日重置"，是丢档。
 fn daily_begin(p: &mut Progress, seed: u64) -> bool {  // §廿一:924 每日重置＝只比对**今天**的日种子：记过的是昨天，不挡今天重开
     if p.daily_done != seed {
         p.daily_done = seed;
@@ -362,16 +369,32 @@ fn daily_begin(p: &mut Progress, seed: u64) -> bool {  // §廿一:924 每日重
     p.daily_attempts < DAILY_ATTEMPTS
 }
 
+/// 一场该发多少代币（修正2.MD 3.6 的三条数在这一处收成一个式子）。
+/// 基础＝**存活回合数 × 3**；通关再 +15；失败只有基础那条（3.6 第 3 条「失败奖励：存活回合数 × 3」）。
+/// 所以它**不读胜负**：3.6 第 4 条把话说死了——「结算标准：唯一标准＝存活回合数」。
+/// 胜/败/平三种出口、蜡烛余量、击杀数，在这里都不该有价钱：给了就是第二套真值，且文档一字未给。
+/// `survived` 是 `i64`（从战斗里数出来的），负值只可能来自手改或未来的调试路径 ⇒ 先夹到 0，
+/// 免得一笔负奖励把攒下的余额掏空（那是"读得懂但会算出负钱"的那类静默）。
+fn daily_tokens(survived: i64, cleared: bool) -> u32 {
+    let turns = u32::try_from(survived.max(0)).unwrap_or(u32::MAX);
+    turns.saturating_mul(TOKENS_PER_SURVIVED_TURN).saturating_add(if cleared { TOKENS_CLEAR_BONUS } else { 0 })
+}
+
 /// 一场打完的记账（纯函数）。通关判据＝**活满回合上限**（2026-10-05 裁「一次挑战＝单场 30 回合生存战」）：
 /// 通关扣一次额度，中途败不扣（修正2.MD 3.5「失败不扣挑战次数」）。抽取序列 state 不在这里回滚——
 /// 回滚就等于允许同一局面无限重抽同一条规则（2026-10-05 裁 Q-新3 的耦合判据）。
-fn daily_settle(p: &mut Progress, survived: i64) -> bool {
-    if survived < TURN_LIMIT {
-        return false;
+/// 代币也在这一处入账，而且**挂在 `cleared` 之外**：3.6 第 3 条明写败局照发 `存活×3`，
+/// 把它写成"通关才发"就是少给一半钱，而那条分支看起来还挺像"奖励＝奖励给赢的人"。
+/// 返回 `(是否通关, 本次入账)`——入账报的是**这里实际记下的那个数**，调用方不许另算一遍。
+fn daily_settle(p: &mut Progress, survived: i64) -> (bool, u32) {
+    let cleared = survived >= TURN_LIMIT;
+    if cleared {
+        // saturating：额度是 u32，手改成 42 亿的档不该让程序在这行 panic（那是"读得懂的档"，不是坏档）。
+        p.daily_attempts = p.daily_attempts.saturating_add(1);
     }
-    // saturating：额度是 u32，手改成 42 亿的档不该让程序在这行 panic（那是"读得懂的档"，不是坏档）。
-    p.daily_attempts = p.daily_attempts.saturating_add(1);
-    true
+    let earned = daily_tokens(survived, cleared);
+    p.tokens = p.tokens.saturating_add(earned);
+    (cleared, earned)
 }
 
 /// 每日挑战那一场的遭遇：**恒第 1 关、恒无 Boss**。
@@ -408,13 +431,15 @@ pub fn daily_run(path: PathBuf, frame: Frame) {  // §廿一:916 每日挑战模
     );
     let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(save), daily_rule: daily };
     let (_, survived) = one_level(seed, Faction::Ember, Difficulty::Normal, 1, &mut st, daily_encounter, frame);
-    let cleared = daily_finish(&mut st, survived);
+    let (cleared, earned) = daily_finish(&mut st, survived);
+    let balance = st.save.as_ref().map_or(0, |s| s.progress.tokens);
     let verdict = if cleared {
-        format!("通关（活满 {TURN_LIMIT} 回合）⇒ 本次额度已用掉。")
+        format!("通关（活满 {TURN_LIMIT} 回合）⇒ 本次额度已用掉")
     } else {
-        format!("未活满 {TURN_LIMIT} 回合 ⇒ 不扣额度，今天还能再来。")
+        format!("未活满 {TURN_LIMIT} 回合 ⇒ 不扣额度，今天还能再来")
     };
-    println!("本场存活 {survived} 回合：{verdict} seed={seed} 可复现整场。");
+    // 奖励行跟着存活回合数走，因为那就是 3.6 的唯一结算标准；败局也有 `+3×N`，别把它读成"没通关就一分钱没有"。
+    println!("本场存活 {survived} 回合：{verdict} · +{earned} 代币（余额 {balance}）· seed={seed} 可复现整场。");
 }
 
 /// 无 Boss、无 60 关上限的纯跳打爬梯（`play` 专用；它**从不**落盘，`save` 恒为 `None`）。
@@ -445,11 +470,13 @@ fn ladder(seed: u64, faction: Faction, diff: Difficulty, frame: Frame) {
 /// 曾经真的抹掉过别人的 level 与继承堆）。
 /// 弃局走不到这里：`one_level` 的 Quit 臂直接结束进程 ⇒ 弃局既不占额度，也不消耗抽取序列。
 /// 返回是否通关。
-fn daily_finish(st: &mut RunState, survived: i64) -> bool {
-    let Some(slot) = st.save.as_mut() else { return false };
-    let cleared = daily_settle(&mut slot.progress, survived);
+/// 返回 `(是否通关, 本场入账代币)`。入账那个数是**内存槽**的增量：写失败时 `persist` 自己会打一行 ✖ 并说明
+/// "本次运行不再落盘，内存进度继续"——代币与额度、抽取序列走的是同一条口径，不单独给钱再加一道"报喜先验盘"。
+fn daily_finish(st: &mut RunState, survived: i64) -> (bool, u32) {
+    let Some(slot) = st.save.as_mut() else { return (false, 0) };
+    let (cleared, earned) = daily_settle(&mut slot.progress, survived);
     persist(slot, if cleared { "每日额度" } else { "每日抽取序列" });
-    cleared
+    (cleared, earned)
 }
 
 /// `play`：无限爬梯、无 Boss、不落盘。`--save/--resume` 在这儿没有意义，由 `main.rs` 直接拒（裁定28）。
@@ -962,7 +989,7 @@ mod meta_tests {
             .expect("合法档应能开出每日槽");
         assert!(daily_begin(&mut opened.progress, daily_seed()), "今天第一次进来必须放行");
         let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened), daily_rule: DailyRule::None };
-        assert!(daily_finish(&mut st, TURN_LIMIT), "活满回合上限就是通关，这条出口不该是假阴性");
+        assert!(daily_finish(&mut st, TURN_LIMIT).0, "活满回合上限就是通关，这条出口不该是假阴性");
 
         let got = Progress::load_from(&path).expect("写入后档仍应能被自己的校验器读回");
         assert_eq!(got.level, 5, "打一次每日不该把主线进度抹回第1关");
@@ -971,6 +998,7 @@ mod meta_tests {
         assert_eq!(got.carry_karma, 3, "结转业力不该被抹平");
         assert_eq!(got.daily_done, daily_seed(), "每日记录本身要写上");
         assert_eq!(got.daily_attempts, 1, "通关扣一次额度，且只扣一次");
+        assert_eq!(got.tokens, 30 * 3 + 15, "通关那场走**整文件重写**，代币必须跟额度一起落到盘上");
         // 中途败那一次：额度照旧不动，但**抽取序列必须落盘**。失败不回滚 state 是 Q-新3 定的耦合判据；
         // `save_to` 那道"字节相同就不重写"的闸在这里挡不住——序列确实前进了一步，落盘是真改动。
         let mut opened2 = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
@@ -979,9 +1007,10 @@ mod meta_tests {
         let drawn = daily_draw(&mut opened2.progress);
         let advanced_state = opened2.progress.daily_draw_state;
         let mut run2 = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened2), daily_rule: DailyRule::None };
-        assert!(!daily_finish(&mut run2, TURN_LIMIT - 1), "差一个回合就是没活满");
+        assert!(!daily_finish(&mut run2, TURN_LIMIT - 1).0, "差一个回合就是没活满");
         let after = Progress::load_from(&path).expect("失败那次落盘的档仍应能读回");
         assert_eq!(after.daily_attempts, 1, "失败不扣次数：额度还停在通关那一次");
+        assert_eq!(after.tokens, (30 * 3 + 15) + (TURN_LIMIT as u32 - 1) * 3, "败局照发 存活×3，且是**接着上一场的余额攒**，不是覆盖");
         assert_eq!(after.daily_draw_state, advanced_state, "抽过一步的序列必须活着落盘，否则下一场重抽同一条");
         assert_eq!(after.daily_rule_last, drawn, "pity 的\"上一条\"要跟着走");
         assert_eq!(after.level, 5, "失败那次同样不许碰主线关卡");
@@ -1060,19 +1089,76 @@ mod meta_tests {
         );
         // 今天打满三次 ⇒ 用完；用完之后同一天再进来必须被挡住。
         for _ in 0..DAILY_ATTEMPTS {
-            assert!(daily_settle(&mut p, TURN_LIMIT));
+            assert!(daily_settle(&mut p, TURN_LIMIT).0);
         }
         assert_eq!(p.daily_attempts, DAILY_ATTEMPTS);
         assert!(!daily_begin(&mut p, seed), "额度用完当天不许再来");
         assert!(daily_begin(&mut p, seed + 1), "但到明天必须又是满格");
+        assert_eq!(p.tokens, DAILY_ATTEMPTS * (30 * 3 + 15), "跨日：额度重满，代币**照旧攒着**——钱包不是日历");
         // 失败不扣：29 回合与 0 回合都是"没活满"，且抽取 state 不回滚（回滚＝同一局面可无限重抽同一条）。
         let mut q = Progress::new(Faction::Ember, Difficulty::Normal);
         daily_begin(&mut q, seed);
         for t in [TURN_LIMIT - 1, 0] {
-            assert!(!daily_settle(&mut q, t), "survived={t} 不该被读成通关");
+            assert!(!daily_settle(&mut q, t).0, "survived={t} 不该被读成通关");
             assert_eq!(q.daily_attempts, 0, "失败不扣次数");
             assert_eq!(q.daily_draw_state, seed, "失败也不回滚抽取 state");
         }
+    }
+
+    /// 3.6 那三条数的**表**：回合数是唯一乘数，+15 只跟着"活满"那一支。
+    /// 胜/败/平在这里没有区别——文档第 4 条把唯一结算标准写死成存活回合数，给胜负定价就是第二套真值。
+    #[test]
+    fn the_award_is_three_per_turn_plus_fifteen_only_on_a_clear() {
+        for (survived, cleared, want) in [
+            (0, false, 0),
+            (1, false, 3),
+            (12, false, 36),
+            (TURN_LIMIT - 1, false, 87),
+            (TURN_LIMIT, true, 105),
+        ] {
+            assert_eq!(daily_tokens(survived, cleared), want, "survived={survived} cleared={cleared}");
+        }
+        assert_eq!(daily_tokens(TURN_LIMIT, true), 3 * 30 + 15, "上限 105：回合上限 30 就是这场奖励的天花板");
+        assert_eq!(daily_tokens(-1, false), 0, "负回合数不许把余额掏空（夹到 0 是发放侧的闸，不是解析侧的）");
+    }
+
+    /// 每日挑战 D1 留下那条"仍待测"的端到端：**第 N 回合中途败 ⇒ 存活 N ⇒ 发 3N ⇒ 落到磁盘上**。
+    /// 三段都不手工设数：回合数由会话层从 `b.turn` 取（那条接缝另有
+    /// `session::the_terminus_hands_back_the_turn_the_battle_stopped_on` 钉住），乘与加在 `daily_settle`，
+    /// 写盘走 `daily_finish` 的真实整文件重写 ⇒ 断言读的是**磁盘上的数**，不是内存里的。
+    #[test]
+    fn a_mid_battle_loss_pays_three_times_the_turn_it_stopped_on() {
+        let path = snap_path("tokens-12-turn-loss");
+        let mut opened = SaveSlot::try_open(path.clone(), Faction::Ember, Difficulty::Normal, false, SaveUse::Daily)
+            .expect("没有档也该开得出新每日槽");
+        assert!(daily_begin(&mut opened.progress, daily_seed()), "第一次进来必须放行");
+        let mut st = RunState { inherit: Vec::new(), carry_karma: 0, has_next: false, save: Some(opened), daily_rule: DailyRule::None };
+        let (cleared, earned) = daily_finish(&mut st, 12);
+        assert!(!cleared, "12 回合不是通关");
+        assert_eq!(earned, 36, "存活 12 回合 ⇒ 3×12，不多不少");
+        let got = Progress::load_from(&path).expect("发过钱的那次必须落盘");
+        assert_eq!(got.tokens, 36, "报出来的数要活着到磁盘上，否则结语就是替内存吹牛");
+        assert_eq!(got.daily_attempts, 0, "发钱不扣额度：这两件事在 3.5/3.6 里本来就是两条独立的判据");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 主线一关都不发钱：3.6 整节挂在**每日挑战**章下，接到主线就是给"通关一次"凭空造出第二份收益。
+    /// 码面上代币的唯一写点是 `daily_settle`，而主线走的是**逐字段**的入口快照——所以这条量的不是"有没有写"，
+    /// 是"按关写入口既不顺手发钱、也不把已有的余额抹回 0"（后者是真会发生的形态：`snapshot_entry` 若整份换成
+    /// 新建的 `Progress`，钱就跟着 hp/瞬态一起没了）。
+    #[test]
+    fn mainline_snapshots_neither_pay_nor_erase_the_balance() {
+        let path = snap_path("tokens-mainline-idle");
+        let mut save = slot(path.clone(), SaveUse::Progress);
+        save.as_mut().unwrap().progress.tokens = 40;
+        let pile = vec![CardInst::new(3, faction_cards(Faction::Ember)[1])];
+        for level in 2..=4 {
+            snapshot_entry(&mut save, level, Faction::Ember, Difficulty::Normal, &pile, 0);
+        }
+        let got = Progress::load_from(&path).expect("主线快照应落盘");
+        assert_eq!(got.tokens, 40, "主线不发钱，也不许把攒下的钱抹平");
+        assert_eq!(got.level, 4, "关卡照旧是按关写的（这条测不是靠'什么都不变'来判绿的）");
+        std::fs::remove_file(&path).ok();
     }
 
     /// 【短兵相接】【粘稠暗影】各带一句「若关卡为 Boss 关卡 → 不触发」，后面还跟一句"重抽上限 3 次"。
