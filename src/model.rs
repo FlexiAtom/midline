@@ -174,7 +174,7 @@
 //!       手动删掉 `try_trigger_col` 的真锚点后测试**照样绿**；加排除逻辑后重做同一注入 ⇒ 红，报出
 //!       `md:945 ← 卡牌死亡后业火值达阈值…`，撤销注入 ⇒ 绿。② 阈值门控用"12 张里恰好 5 张命中"反向锁死，
 //!       防止将来把闸去掉时只看到"更多卡被强化"这种看着合理的假象。
-//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **二十张表／章**——§廿二 边界表、§十八 卡牌总表、
+//!     - **残留盲区（明写，不假装已解决）**：反向覆盖已纳入 **二十一张表／章**——§廿二 边界表、§十八 卡牌总表、
 //!       §十二 回合流程（第 30 条之后）、§廿三 规则总览速查（四条认领路：锚点／债／§廿二 同 key
 //!       复述／否定行，见 `every_row_of_section23_…`）、§廿一 单机模式（模式表／每日挑战规则围栏／
 //!       Boss 表三张子表共 14 行，只开锚点与挂债两条路，见 `every_row_of_section21_…`）、
@@ -212,7 +212,7 @@
 //!       没有任何正向测断言过，同帧已在 `fuse_moves_skills_keeps_main_and_costs_sub_minus_one` 补上断言（现为双红）。
 //!       ② 单独不可达，如实登记：① 要求逐字节 ⇒ 宿主判据只有在**文档换掉措辞**时才开口，且那时它与 ① 同红（M35 实测）；
 //!       留它的理由不是"多一道保险"，而是它报的是**原因**（字段错层）而不是症状（字面不符）。**仍未纳入**的是
-//!       §一/§二/§廿 那三章的散文行——那里"整条规则没落地"仍查不出；
+//!       §一/§二 那二章的散文行——那里"整条规则没落地"仍查不出；
 //!       语义是否被曲解始终不可机检，仍靠人向设计逐条核对。
 //!       以及本帧的 §十四 持业者·蜡烛（**第一条同章并用两条路、且九行双记账的章**：12 行＝围栏外表体 3
 //!       （走锚点）＋围栏内 9（走"文档数字驱动引擎复现"，**同时**一行都不许缺锚点）。配比钉死 锚点3／挂债0／实测9，
@@ -358,6 +358,24 @@
 //!       M127 把 `inherit.len() > 10` 改成 `> 9`（③上限对撞 ＋ §廿二 边界表，**2 红**）。本帧只动注释与 `#[cfg(test)]` 测，
 //!       release 二进制 10 场景逐字节双臂 SAME（先误把 worktree 目录当二进制传进 byte-baseline，p1..p10 全报"是一个目录"⇒ 那是**尺子用错**不是行为回归，
 //!       改传 HEAD 编译产物后十场景 md5 全等）。
+//!     - 以及本帧（第十六步·其八）的 §廿 AI设计（**第一张把"系数"当被比对数据的章**：23 行＝评分公式围栏 3＋决策树围栏 9＋
+//!       献祭条件围栏 6＋难度分档表 5，四道小节头（867／875／889／900）与一行列头（902）由**块首 token 数**判出、不算规则；
+//!       围栏数与 3／9／6 的内侧行数一起钉死，版式一改就红在计数上）。配比钉死 **锚点23／挂债0**——立尺前本章只有 8 行有锚
+//!       （870–872／893–897），其余 **15 行代码里都实现了、却没有一行指回文档**（878–886／892／903–907），所以第一刀是
+//!       **只加注释**补那 15 枚锚（零行为改动：双臂 byte-baseline 22 文件逐文件 SAME），第二刀才是这把尺。
+//!       三层等值两侧都不手抄清单：① 三条公式的**乘数多重集** ↔ `card_field_value`＋`placement_score_at`／`sacrifice_value`
+//!       那一句评分行的乘数多重集，负项按「文档几个 `- ` ↔ 码面几次减法」计数；**推进那一行分开钉**——裁定17 写明敌 AI
+//!       没有独立推进得分，于是尺子要求文档侧读到 3 与 2、代码侧读到烛差 3.0 **且** `evaluate` 里有工程自定的 4.0，
+//!       谁单方面把两边改成相等也红（抹平分岔得先改裁定，不是改一个数就完事）。② 「满足任一」那行原文 ＋ 文档条目数 ↔
+//!       `SacReason` 变体数 ↔ `ALL` 声明长度 ↔ `ALL` 实元素数**四个数相等**，再做文档行号 ↔ 变体尾锚点的**双射**
+//!       （"各数一遍"不够：那样错位与漏一条都看不出来）；`sac_reasons` 里 `& r.bit() != 0` 恰一处＝「任一」在码面的实现形式。
+//!       ③ 档名 ↔ `Difficulty::label()` 的字面量（文档写中文档名、代码写英文变体，label 是两者之间唯一的桥，故先读桥
+//!       再查 `search_depth`）、「N步预判」↔ 各臂的数（文档没写步数的那档，码面深度必须是 0）、「随机」⇒ `run_easy` 真掷
+//!       `b.rng.` **且**不读那四支评分函数（否定式）、「贪心」／「融合」↔ `greedy_key`／`plan_meta` 的定义次数；
+//!       第 5 行 Boss 不是难度档 ⇒ 只要求它有人认领、且认领者**全在** `boss.rs`。盲区照登：① 比的是多重集，不比
+//!       "哪个乘数乘在哪一项"——文档两列系数互换、码面不动，这把尺看不见；决策树 9 行的**先后次序**没有尺（五步散在
+//!       `starter_sac_at_zero`／`candidates`／`run` 三处，把第3步挪到第1步之前锚点仍在、照绿）；本章**没跑引擎**，
+//!       把「献祭低价值卡」实现成高价值卡量不到——那是正向测与电池的活。
 //! 27. 存档点＝**关隘入口**（裁定25/26 同一授权下的自决，人原话 2026-09-29：「推，我授权推进」）。
 //!     文档对"进度"零规定（全文 grep「存档」＝0 命中），只给了体量 §廿一:914「主线 60关，5章」与一条
 //!     硬要求 §廿一:926「每日挑战完成后记录日期，防止重复完成」。取"只在关隘入口写"的理由：
@@ -1404,7 +1422,7 @@ mod anchor_tests {
     /// `every_skill_row_of_section8_…` 覆盖（同 §十八 的逐字段等值形状，但比的四层不同，见该测试注释）；
     /// §十四 由 `every_row_of_section14_…` 覆盖（也是按形态推，但它开了**双记账**：围栏里那 9 行既走
     /// 文档数字驱动引擎的实测，也一行都不许缺锚点，见该测试注释）。
-    /// **其余各章**（§一/§二/§廿）那三章仍未反向纳入。
+    /// **其余各章**（§一/§二）那二章仍未反向纳入。
     #[test]
     fn every_edge_case_row_of_section22_is_anchored_back_or_debited() {
         let Some(lines) = doc_or_skip() else { return };
@@ -2828,6 +2846,402 @@ mod anchor_tests {
             assert!(debited.contains(&n), "md:{n}（{}）登记的处置是「挂债」，现在不在债表里＝这条账被删了或换了对象", at(n));
         }
     }
+
+    /// §廿 AI设计：**三道的围栏 ＋ 一张无围栏的难度表**（3 条评分公式／9 行决策树／6 行献祭条件／5 行难度分档＝23 行）。
+    /// 与 §十二／§廿一 相同处：必检集由**结构**推导（块首判据同 §廿一——紧跟空行的第一非空行，单 token＝小节头、多 token＝列头），
+    /// 认领路只有**锚点指回**与**挂债**两条，`NOT_A_RULE` 在本章不作数（裁定26 那条洗白路是量出来的）。
+    /// 不同处：本章**有实现**，所以另加三层等值，专钉"文档写一个数、代码用另一个数"这一族——
+    /// ① 三条评分公式的**系数多重集** ↔ 对应算式的乘数多重集（放置＝`card_field_value` ＋ `placement_score_at` 两段合起来对撞；献祭＝`sacrifice_value` 的评分行）。
+    ///    推进那一行**不并比**：裁定17 写明敌 AI 侧没有独立推进得分，其对应物＝叶子推进到回合末后的烛差×3，而"自身被挤风险"的权重是工程自定 4.0（≠ 文档字面 2）。
+    ///    这里把**两侧各自的数分开钉**（文档 2／代码 4），谁单方面把另一边改成相等也会红——那要改文档或改裁定，不是改一个数就完事。
+    /// ② 「满足任一」＋文档条目数 ↔ `SacReason` 变体数 ↔ `ALL` 的声明长度与实元素数，**四个数须相等**；再把文档条目行号与变体尾注释的锚点做**双射**
+    ///    （"两边各数一遍"不够——那样错位、漏一条都看不出来）。
+    /// ③ 难度分档的**档名** ↔ `Difficulty::label()` 的字符串字面量（按文档行序对齐），**行为列里的「N步」** ↔ `search_depth` 各臂的数；
+    ///    文档没写步数的档，代码深度必须是 0；文档里那一档若代码没有对应臂（Boss），必须由 `src/boss.rs` 的生产面行认领它。
+    /// 残留盲区（如实登记）：① 只证"这一行被认领了"，不证认领得对（同 §十二 的②）；② 决策树 9 行的**先后次序**没有尺——五步散在
+    /// `starter_sac_at_zero`／`candidates`／`run` 三处，把第3步挪到第1步之前，锚点仍在、本尺照绿；③ 等值层比的是**乘数多重集**，
+    /// 不比"哪个乘数乘在哪一项"：把文档里两项的系数互换、代码不动，本尺看不出来（要读 AST 才能钉位置，成本另计）。
+    #[test]
+    fn every_row_of_section20_ai_design_is_anchored_back_and_its_coefficients_match_the_code() {
+        let Some(lines) = doc_or_skip() else { return };
+        let at = |n: usize| lines.get(n - 1).map(String::as_str).unwrap_or("");
+        let head = lines
+            .iter()
+            .position(|l| l.trim() == "二十、AI设计")
+            .expect("§廿 标题必须存在（文档结构变了就要同步改本检查）");
+
+        // 体内**原始**行的取码口：留尾注释（② 要读变体尾上的锚点），三条硬守卫都不许静默放行——
+        // 上一帧（其七）量到的正是"读空了还算绿"，等值式与否定式吃同一套。
+        fn s20_body(src: &str, file: &str, sig: &str) -> Vec<String> {
+            let indent_of = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
+            let sls: Vec<&str> = src.lines().collect();
+            let hits: Vec<usize> = (0..sls.len()).filter(|&i| sls[i].trim_start().starts_with(sig)).collect();
+            assert_eq!(
+                hits.len(),
+                1,
+                "§廿 推导器要在 `{file}` 里读 `{sig}` 的体内行，实测命中 {} 处（应为 1）⇒ 它改名、拆函数、被复制了一份或挪了文件；同步这里，不许静默跳过",
+                hits.len()
+            );
+            let d = indent_of(sls[hits[0]]);
+            let mut out = Vec::new();
+            for l in &sls[hits[0] + 1..] {
+                if indent_of(l) == d && l.trim() == "}" {
+                    assert!(!out.is_empty(), "`{file}` 里 `{sig}` 的体内行为空 ⇒ 等值层无从对撞");
+                    return out;
+                }
+                out.push(l.to_string());
+            }
+            panic!("§廿 推导器没找到 `{file}` 里 `{sig}` 的收尾花括号（同缩进那一个）⇒ 判据失效");
+        }
+        /// 剔注释：等值层比的是算式，注释里的数字不算（锚点就写在尾注释里）。
+        fn s20_code_only(raw: &[String]) -> Vec<String> {
+            raw.iter()
+                .map(|l| l.split("//").next().unwrap_or("").trim().to_string())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect()
+        }
+        /// 代码侧乘数：认 `* <数>` 与 `<数> *` 两种写法（`3.0 * (` 这种数在星号左边）。
+        fn s20_code_factors(code: &[String]) -> Vec<f64> {
+            let mut out = Vec::new();
+            for l in code {
+                let toks: Vec<&str> = l.split_whitespace().collect();
+                for (i, tk) in toks.iter().enumerate() {
+                    if *tk != "*" {
+                        continue;
+                    }
+                    let right = toks.get(i + 1).map(|s| s.trim_end_matches([',', ';']));
+                    if let Some(v) = right.and_then(|s| s.parse::<f64>().ok()) {
+                        out.push(v);
+                        continue;
+                    }
+                    if let Ok(v) = toks[i.saturating_sub(1)].parse::<f64>() {
+                        out.push(v);
+                    }
+                }
+            }
+            out.sort_by(|a, b| a.total_cmp(b));
+            out
+        }
+        // 文档侧：乘数认 `× <数>`，负项数认 `- ` 分隔符（§廿 三条公式里 `-` 只做段分隔，不裹括号）。
+        let doc_terms = |n: usize| -> (Vec<f64>, usize) {
+            let t = at(n).trim();
+            let rhs = match t.split_once('=') {
+                Some((_, r)) => r,
+                None => panic!("md:{n} 不是「X = Y」形状（「{t}」）⇒ §廿 评分公式改了版式，等值层要同步改这里"),
+            };
+            let toks: Vec<&str> = rhs.split_whitespace().collect();
+            let mut f: Vec<f64> = Vec::new();
+            for (i, tk) in toks.iter().enumerate() {
+                if *tk == "×" {
+                    f.push(
+                        toks.get(i + 1)
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or_else(|| panic!("md:{n} 的 `×` 后面不是数（「{t}」）")),
+                    );
+                }
+            }
+            f.sort_by(|a, b| a.total_cmp(b));
+            (f, rhs.matches("- ").count())
+        };
+
+        // ---- 必检集：结构推导，不接受手写行号 ----
+        let mut rows: Vec<usize> = Vec::new();
+        let mut headings: Vec<usize> = Vec::new();
+        let mut headers: Vec<usize> = Vec::new();
+        let mut fences: Vec<Vec<usize>> = Vec::new();
+        let mut cur_fence: Vec<usize> = Vec::new();
+        let mut in_fence = false;
+        let mut block_start = false;
+        for (off, l) in lines[head + 1..].iter().enumerate() {
+            let n = head + 2 + off;
+            let t = l.trim();
+            if !in_fence && t == "---" {
+                break;
+            }
+            if t == "```" {
+                if in_fence {
+                    fences.push(std::mem::take(&mut cur_fence));
+                }
+                in_fence = !in_fence;
+                block_start = false;
+                continue;
+            }
+            if t.is_empty() {
+                block_start = true;
+                continue;
+            }
+            if !in_fence && block_start {
+                if t.split_whitespace().count() == 1 {
+                    headings.push(n);
+                } else {
+                    headers.push(n);
+                }
+                block_start = false;
+                continue;
+            }
+            rows.push(n);
+            if in_fence {
+                cur_fence.push(n);
+            }
+            block_start = false;
+        }
+        assert_eq!(rows.len(), 23, "§廿 按结构推导的必检集应得 23 行，实测 {} 行 ⇒ 文档加了公式/步子/条件/档位，或推导口径失效", rows.len());
+        assert_eq!(headings, vec![867, 875, 889, 900], "§廿 的四个小节头应恰好是 867 评分函数／875 决策树／889 AI献祭条件／900 难度分档，实测 {headings:?} ⇒ 块首判据吞了真规则行（或把小节头当规则）");
+        assert_eq!(headers, vec![902], "§廿 的列头应恰好是 902「难度 行为」，实测 {headers:?}");
+        assert_eq!(fences.len(), 3, "§廿 应有三道的围栏（评分公式／决策树／献祭条件），实测 {} 道 ⇒ 版式变了，等值层按围栏取段的做法要同步", fences.len());
+        let fence_sizes: Vec<usize> = fences.iter().map(|f| f.len()).collect();
+        assert_eq!(fence_sizes, vec![3, 9, 6], "§廿 三道围栏的内侧行数应为 3／9／6，实测 {fence_sizes:?}");
+
+        // ---- 认领面 ----
+        let referenced = referenced_doc_lines();
+        let debited = debt_claimed_lines();
+        for (n, why) in NOT_A_RULE {
+            assert!(
+                !rows.contains(n),
+                "md:{n} 落在 §廿 却被 `NOT_A_RULE` 认领＝排除表能吞掉真规则。要说它不算规则，请挂债并写去处；登记的排除理由：{why}"
+            );
+        }
+        let missing: Vec<String> = rows
+            .iter()
+            .filter(|&&n| !referenced.contains(&(n as u32)) && !debited.contains(&n))
+            .map(|&n| format!("  md:{n} ← {}", at(n)))
+            .collect();
+        assert!(missing.is_empty(), "§廿 有 {} 行既无锚点指回、也不在债表里（漏登记）：\n{}", missing.len(), missing.join("\n"));
+        let anchored = rows.iter().filter(|&&n| referenced.contains(&(n as u32))).count();
+        assert_eq!(
+            (anchored, rows.len() - anchored),
+            (23, 0),
+            "§廿 23 行应全部走「锚点指回」，实测 锚点{anchored}／非锚点{} ⇒ 有行挪去挂债（已实现的行挂债＝拔掉牙）或锚被删",
+            rows.len() - anchored
+        );
+        // 成员级反证：三种形态各钉一行、两个块首两类各钉一行——只钉总数能让"吞一行、凭空加一行"蒙混过关。
+        for n in [870usize, 878, 883, 886, 892, 897, 903, 907] {
+            assert!(rows.contains(&n), "md:{n}（{}）被剔出 §廿 必检集 ⇒ 这种形态的行漏了，文档改它没人喊", at(n));
+        }
+        for n in [867usize, 875, 889, 900, 902] {
+            assert!(!rows.contains(&n), "md:{n}（{}）进了必检集 ⇒ 块首判据失效", at(n));
+        }
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |name: &str| -> String {
+            std::fs::read_to_string(manifest.join("src").join(name))
+                .unwrap_or_else(|e| panic!("§廿 推导器要读 src/{name} 原文（读不到就没有等值层）：{e}"))
+        };
+        let ai = read("ai.rs");
+        let battle_src = read("battle.rs");
+        let boss_src = read("boss.rs");
+
+        // ---- 等值层①：三条评分公式的系数 ↔ 代码乘数 ----
+        let lhs_of = |n: usize| at(n).split('=').next().unwrap_or("").trim().to_string();
+        let find_formula = |key: &str| -> usize {
+            let hits: Vec<usize> = fences[0].iter().copied().filter(|&n| lhs_of(n).contains(key)).collect();
+            assert_eq!(hits.len(), 1, "§廿 评分公式那道围栏里抬头含「{key}」的行应恰一条，实测 {hits:?} ⇒ 文档加／改了公式，等值层要按新章体扩");
+            hits[0]
+        };
+        let n_place = find_formula("放置");
+        let n_sac = find_formula("献祭");
+        let n_adv = find_formula("推进");
+        let (f_place, m_place) = doc_terms(n_place);
+        let (f_sac, m_sac) = doc_terms(n_sac);
+        let (f_adv, m_adv) = doc_terms(n_adv);
+        let mut place_scope = s20_code_only(&s20_body(&ai, "src/ai.rs", "pub fn card_field_value("));
+        place_scope.extend(s20_code_only(&s20_body(&ai, "src/ai.rs", "fn placement_score_at(")));
+        let sac_line: Vec<String> = s20_body(&ai, "src/ai.rs", "pub fn sacrifice_value(")
+            .into_iter()
+            .map(|l| l.split("//").next().unwrap_or("").trim().to_string())
+            .filter(|l| l.starts_with("let sc ="))
+            .collect();
+        assert_eq!(sac_line.len(), 1, "§廿 推导器要在 `sacrifice_value` 里读到**唯一**那条 `let sc =` 评分行，实测 {} 条 ⇒ 献祭得分改写了算式或换了变量名", sac_line.len());
+        assert_eq!(
+            s20_code_factors(&place_scope),
+            f_place,
+            "§廿 放置得分（md:{n_place}）文档系数多重集与 `card_field_value` ＋ `placement_score_at` 的乘数多重集不符：文档 {f_place:?}／代码 {:?}",
+            s20_code_factors(&place_scope)
+        );
+        assert_eq!(
+            s20_code_factors(&sac_line),
+            f_sac,
+            "§廿 献祭得分（md:{n_sac}）文档系数多重集与 `sacrifice_value` 评分行不符：文档 {f_sac:?}／代码 {:?}",
+            s20_code_factors(&sac_line)
+        );
+        assert_eq!((m_place, m_sac, s20_code_only(&sac_line)[0].matches("- ").count()), (0, 1, 1), "§廿 放置式不该有负项、献祭式该有 1 条负项且代码也恰减 1 次（md:{n_sac}／评分行「{:?}」）", s20_code_only(&sac_line));
+        // 推进式两侧**分开钉**（裁定17：敌 AI 侧没有独立推进得分，代码侧是烛差×3 与工程自定的负项权重 4.0）。
+        let adv_code = s20_code_only(&s20_body(&ai, "src/ai.rs", "fn evaluate("));
+        let adv_line: Vec<String> = adv_code.iter().filter(|l| l.starts_with("let v =")).cloned().collect();
+        assert_eq!(adv_line.len(), 1, "§廿 推导器要在 `evaluate` 里读到**唯一**那条 `let v =` 烛差式，实测 {} 条", adv_line.len());
+        assert_eq!(s20_code_factors(&adv_line), vec![3.0], "§廿 推进得分（md:{n_adv}）文档的「挤压」系数 {:?} 对应物＝`evaluate` 的烛差权重，代码现在不是 3.0 ⇒ 裁定17 的对应关系要重新对账", f_adv);
+        assert!(f_adv.contains(&2.0) && m_adv == 1, "§廿 推进得分（md:{n_adv}）应是「正项×3 ＋ 一条带系数 2 的负项」，实测系数 {f_adv:?}／负项 {m_adv} ⇒ 文档措辞变了，下面的工程自定读数要人复核");
+        assert!(
+            s20_code_factors(&adv_code).contains(&4.0),
+            "§廿 推进得分的负项权重在代码里是工程自定 4.0（裁定17 明写它**不等于**文档字面 2）。现在读不到 4.0 ⇒ 谁把代码改成照抄文档、或换了权重，这条要红着让人来改裁定登记，不许静默收敛"
+        );
+
+        // ---- 等值层②：「满足任一」＋条目数 ↔ SacReason ----
+        let f3 = &fences[2];
+        let lead = at(f3[0]).trim();
+        assert!(lead.contains("任一"), "§廿 献祭条件围栏的第一行应是「满足任一」这类总括句，实测「{lead}」⇒ 语义前提没了");
+        let items: Vec<(u32, usize)> = f3[1..]
+            .iter()
+            .map(|&n| {
+                let t = at(n).trim();
+                let cs: Vec<char> = t.chars().collect();
+                let num: String = cs.iter().take_while(|c| c.is_ascii_digit()).collect();
+                let head_num = num.parse::<u32>().unwrap_or_else(|_| panic!("md:{n}（「{t}」）不是「数字. 」「N、」形状的条件行"));
+                let sep = cs.get(num.chars().count()).copied().unwrap_or(' ');
+                assert!(sep == '.' || sep == '、', "md:{n}（「{t}」）编号后不是「.」也不是「、」⇒ 条件行版式变了");
+                (head_num, n)
+            })
+            .collect();
+        for (want, (num, n)) in items.iter().enumerate() {
+            assert_eq!(*num, want as u32 + 1, "md:{n} 的编号应是第 {} 条，实测 {num} ⇒ 文档条件次序变了，变体↔条目的双射要重新排", want + 1);
+        }
+        let variant_raw = s20_body(&ai, "src/ai.rs", "pub enum SacReason {");
+        let variants: Vec<String> = variant_raw
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with("//"))
+            .collect();
+        let all_decl: Vec<&str> = ai.lines().filter(|l| l.trim().starts_with("pub const ALL")).collect();
+        assert_eq!(all_decl.len(), 1, "§廿 推导器要在 ai.rs 读到**唯一**一行 `pub const ALL`，实测 {} 行", all_decl.len());
+        let seg = all_decl[0].split(';').nth(1).unwrap_or("");
+        let declared: u32 = seg
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or_else(|_| panic!("`pub const ALL` 的数组长度读不出整数（「{}」）", all_decl[0].trim()));
+        let all_elems: Vec<&str> = ai
+            .lines()
+            .skip_while(|l| !l.trim().starts_with("pub const ALL"))
+            .skip(1)
+            .take_while(|l| !l.trim().starts_with("];"))
+            .filter(|l| l.contains("SacReason::"))
+            .collect();
+        let doc_nums: Vec<u32> = items.iter().map(|&(_, n)| n as u32).collect();
+        assert_eq!(
+            (items.len(), variants.len(), declared as usize, all_elems.len()),
+            (5, 5, 5, 5),
+            "§廿 献祭条件的四个数必须相等：文档条目／enum 变体／`ALL` 声明长度／`ALL` 实元素——实测 {}／{}／{}／{} ⇒ 文档加一条而代码没跟上（或反过来）",
+            items.len(),
+            variants.len(),
+            declared,
+            all_elems.len()
+        );
+        let mut variant_docs: Vec<u32> = Vec::new();
+        for v in &variants {
+            let ns: Vec<u32> = anchor_numbers(v);
+            assert_eq!(ns.len(), 1, "§廿 变体「{v}」尾上的锚点应恰一条（指回文档那五分之一条），实测 {ns:?} ⇒ 双射断链：要么没指、要么一指多");
+            variant_docs.push(ns[0]);
+        }
+        variant_docs.sort_unstable();
+        assert_eq!(variant_docs, doc_nums, "§廿 文档条件行号与 `SacReason` 变体尾锚点不是一一对应（文档 {doc_nums:?}／变体 {variant_docs:?}）⇒ 变体改了序、锚挪到了别的行、或有条目没人指");
+        let or_semantics: Vec<String> = s20_code_only(&s20_body(&ai, "src/ai.rs", "pub fn sac_reasons("))
+            .into_iter()
+            .filter(|l| l.contains("& r.bit() != 0"))
+            .collect();
+        assert_eq!(or_semantics.len(), 1, "文档「{lead}」在代码里的形式＝`sac_reasons` 那一条按位**或**回读（`& r.bit() != 0`）。实测 {} 条 ⇒ 改成与／只取第一个，§廿 那句「任一」就没有实现了", or_semantics.len());
+
+        // ---- 等值层③：难度分档 ↔ Difficulty／search_depth／boss.rs ----
+        let tier_rows: Vec<usize> = rows.iter().filter(|&&n| !fences.iter().any(|f| f.contains(&n))).copied().collect();
+        assert_eq!(tier_rows.len(), 5, "§廿 围栏外的难度分档应推导得 5 行，实测 {} 行：{tier_rows:?}", tier_rows.len());
+        let label_body = s20_code_only(&s20_body(&battle_src, "src/battle.rs", "pub fn label(self) -> &'static str {"));
+        // 文档写**中文档名**、代码写**英文变体**，`Difficulty::label()` 是两者之间唯一的桥；这里把桥读成配对，
+        // 后面档名对撞用 label，步数对撞先把中文名换回变体名再查 `search_depth`。
+        let label_pairs: Vec<(String, String)> = label_body
+            .iter()
+            .filter_map(|l| {
+                let (lhs, rhs) = l.split_once("=>")?;
+                let quoted = rhs.split_once('"')?.1.split_once('"')?.0.to_string();
+                let variant = lhs.trim().strip_prefix("Difficulty::")?.to_string();
+                Some((variant, quoted))
+            })
+            .collect();
+        assert!(!label_pairs.is_empty(), "`Difficulty::label()` 里读不出 `Difficulty::X => \"名字\"` 形状的臂 ⇒ 档名等值层空转");
+        let label_names: Vec<String> = label_pairs.iter().map(|(_, l)| l.clone()).collect();
+        let mut depth_of: Vec<(String, u32)> = Vec::new();
+        for l in s20_code_only(&s20_body(&ai, "src/ai.rs", "fn search_depth(")) {
+            if !l.contains("=>") {
+                continue;
+            }
+            let (lhs, rhs) = l.split_once("=>").unwrap();
+            let num: String = rhs.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+            let n = num.parse::<u32>().unwrap_or_else(|_| panic!("`search_depth` 的臂「{l}」右侧不是整数"));
+            for arm in lhs.split('|') {
+                let nm = arm.trim().strip_prefix("Difficulty::").unwrap_or_else(|| panic!("`search_depth` 的臂「{arm}」不是 `Difficulty::X` 形状"));
+                depth_of.push((nm.to_string(), n));
+            }
+        }
+        assert!(!depth_of.is_empty(), "`search_depth` 里读不出任何臂 ⇒ 步数等值层空转");
+        let steps_in = |s: &str| -> Option<u32> {
+            let cs: Vec<char> = s.chars().collect();
+            let mut i = 0;
+            while i + 1 < cs.len() {
+                if cs[i + 1] == '步' && cs[i].is_ascii_digit() {
+                    return cs[i].to_string().parse::<u32>().ok();
+                }
+                i += 1;
+            }
+            None
+        };
+        let claimants = |n: u32| -> Vec<String> {
+            let mut v = Vec::new();
+            for fp in src_rs_files() {
+                let src = std::fs::read_to_string(&fp).unwrap();
+                let name = fp.file_name().unwrap().to_string_lossy().into_owned();
+                for t in production_face(&src) {
+                    if !t.starts_with("//!") && anchor_numbers(&t).contains(&n) {
+                        v.push(name.clone());
+                    }
+                }
+            }
+            v
+        };
+        for (i, n) in tier_rows.iter().enumerate() {
+            let t = at(*n).trim();
+            let mut it = t.split_whitespace();
+            let name = it.next().unwrap_or("").to_string();
+            let behavior = it.collect::<Vec<&str>>().join(" ");
+            assert!(t.split_whitespace().count() >= 2, "md:{n}（「{t}」）读不出「档名 行为」两段 ⇒ 难度表版式变了");
+            if i < label_names.len() {
+                assert_eq!(label_names[i], name, "§廿 难度分档第 {} 行的档名「{name}」与 `Difficulty::label()` 第 {} 个「{}」不符 ⇒ 文档与代码的档序错开", i + 1, i + 1, label_names[i]);
+                let want = steps_in(&behavior).unwrap_or(0);
+                let variant = label_pairs.iter().find(|(_, l)| l == &name).map(|(v, _)| v.clone());
+                let variant = variant.unwrap_or_else(|| panic!("`Difficulty::label()` 里没有「{name}」这一档的中文名 ⇒ 文档与代码的档名换了桥"));
+                let got = depth_of.iter().find(|(nm, _)| *nm == variant).map(|(_, d)| *d);
+                let got = got.unwrap_or_else(|| panic!("`search_depth` 里没有 `{variant}`（文档档名「{name}」）的臂 ⇒ 代码少了一档而文档还写着它"));
+                assert_eq!(got, want, "§廿 md:{n}「{name}」的行为列读到的步数是 {}（文档「{behavior}」；没写步数按 0 算），代码 `search_depth` 却是 {got} ⇒ 难度曲线的署名漂了", want);
+                if behavior.contains("随机") {
+                    assert!(behavior.contains("不评估"), "md:{n}（「{behavior}」）说「随机」却没说「不评估」⇒ 下面那条否定式判据的前提没了");
+                    let easy = s20_code_only(&s20_body(&ai, "src/ai.rs", "fn run_easy("));
+                    assert!(easy.iter().any(|l| l.contains("b.rng.")), "md:{n}「随机放置」↔ `run_easy` 现在不碰 `b.rng.` ⇒ 随机那半没实现了");
+                    for needle in ["card_field_value", "placement_score_at", "sacrifice_value", "greedy_key"] {
+                        assert!(!easy.iter().any(|l| l.contains(needle)), "md:{n}「不评估」被破：`run_easy` 现在读了 `{needle}`（简单档本该不评分）");
+                    }
+                }
+                if behavior.contains("贪心") {
+                    assert_eq!(code_occurrences("fn greedy_key("), 1, "md:{n}「贪心评分」↔ 生产面 `fn greedy_key(` 现在 {} 处（应为 1）", code_occurrences("fn greedy_key("));
+                }
+                if behavior.contains("融合") {
+                    assert_eq!(code_occurrences("pub fn plan_meta("), 1, "md:{n}「含融合决策」↔ 生产面 `pub fn plan_meta(` 现在 {} 处（应为 1）；专家档的战斗外决策被摘掉，这句就没有落点", code_occurrences("pub fn plan_meta("));
+                }
+            } else {
+                let cl = claimants(*n as u32);
+                assert!(!cl.is_empty(), "md:{n}「{name}」不是 `Difficulty` 的档（label 只到 {:?}），而生产面现在也没有任何锚点指回它 ⇒ 这一档无人看守", label_names);
+                assert!(cl.iter().all(|f| f == "boss.rs"), "md:{n}「{name}」这一档由代码侧认领的行现在落在 {cl:?}——它不是搜索档，认领者应是脚本层 src/boss.rs");
+                assert!(behavior.contains("脚本"), "md:{n}（「{behavior}」）读不出「脚本」二字 ⇒ 下面那条脚本枚举的对账前提没了");
+                s20_body(&boss_src, "src/boss.rs", "pub enum BossAction {");
+                s20_body(&boss_src, "src/boss.rs", "pub enum BossRule {");
+            }
+        }
+        assert_eq!(
+            tier_rows.len() - label_names.len(),
+            1,
+            "§廿 难度分档比 `Difficulty` 的变体多出 {} 档；按裁定 它只该多出 Boss 那一档（脚本层，不是搜索深度）",
+            tier_rows.len() - label_names.len()
+        );
+    }
+
 
     /// §十五 伤害回滚：**围栏式散文章，不是表**，所以形态判据换一套（三条）：
     /// ① 章内 trim 后**单 token 且以「：」收尾**的行是标签——含围栏外的 606/615/633/641/662 与**围栏内**的 636「触发后：」，
@@ -5673,9 +6087,9 @@ mod anchor_tests {
     /// ⑤ 复述行（同一缺口在别处又打了一遍）必须与主债同 key 前缀、主债必须还在表里、且自己也不许有锚点。
     /// 条数与分档各钉一个死数：加一条债必须同时改这两个数，等于每次加债都被迫看一眼它属于哪一档。
     /// **诚实盲区（部分已解，剩余如实登记）**：这张表本身仍是**手录**的——机器能证它没过期、不自我洗白，
-    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一／§十／§十九 二十张表／章现在各自带推导器
-    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这二十章的完整性由推导器负责**；
-    /// 其余各章（§一/§二/§廿）那三章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
+    /// 证不了它**完整**。§廿二／§十二／§十八／§廿三／§廿一／§十五／§十七／§十六／§八／§七／§十四／§九／§五／§六／§三／§四／§十三／§十一／§十／§十九／§二十 二十一张表／章现在各自带推导器
+    /// （见上面的反向覆盖测试），它们的"无人认领"清单就是这些章债的来源，所以**这二十一章的完整性由推导器负责**；
+    /// 其余各章（§一/§二）那二章仍是散文行、未反向纳入，那里的漏记只能靠人 review 发现。
     /// 读数与计划记在 `~/.Athena/projects/midline/working/reverse-coverage-multi-chapter.md`。
     #[test]
     fn the_unimplemented_debt_table_is_pinned_paid_off_and_never_washes_itself() {

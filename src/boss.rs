@@ -31,7 +31,7 @@ pub enum BossId {
     ZhongYing, // §廿一:936 第五章 终影 · 最终Boss
 }
 
-/// 每 Boss 恰好一条特殊规则（测试按此枚举分派）。
+/// 每 Boss 恰好一条特殊规则（§廿:907「特殊规则」；测试按此枚举分派）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BossRule {
     None,
@@ -112,7 +112,7 @@ const fn card_rand(f: Faction, name: &'static str) -> BossCard {
     BossCard { faction: f, name, skills: &[], random_skill: true }
 }
 
-/// 脚本动作。`Sac` 显式指名（祭哪张是数据真值，不是运行时择优）。
+/// 脚本动作（§廿:907「脚本Combo」）。`Sac` 显式指名（祭哪张是数据真值，不是运行时择优）。
 #[derive(Clone, Copy, Debug)]
 pub enum BossAction {
     Place { card: BossCard, slot: Slot },

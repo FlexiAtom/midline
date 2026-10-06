@@ -24,8 +24,8 @@ use crate::model::{CardInst, Skill, TraitKind};
 fn search_depth(d: Difficulty) -> usize {
     match d {
         Difficulty::Easy | Difficulty::Normal => 0,
-        Difficulty::Hard => 2,
-        Difficulty::Expert => 3,
+        Difficulty::Hard => 2, // §廿:905「2步预判」
+        Difficulty::Expert => 3, // §廿:906「3步预判」
     }
 }
 
@@ -68,6 +68,7 @@ fn add_flag(f: &mut SacFlags, r: SacReason) {
     *f |= r.bit();
 }
 
+/// 五条献祭条件**满足任一**（§廿:892）即成立：位掩码回读成命中的条件名单。
 pub fn sac_reasons(f: SacFlags) -> Vec<SacReason> {
     SacReason::ALL.into_iter().filter(|r| f & r.bit() != 0).collect()
 }
@@ -167,6 +168,7 @@ fn slot_any(b: &Battle, row: Row, col: usize) -> Option<&CardInst> {
 }
 
 /// 随机放置，不评估（§二十「简单」）。
+/// 简单档（§廿:903「随机放置，不评估」）：随机挑一张手牌、随机挑一个空格，全程不读下面三类评分。
 fn run_easy(b: &mut Battle) {
     if b.enemy_hand.is_empty() {
         return;
@@ -236,7 +238,7 @@ fn affordable(b: &Battle, idx: usize) -> bool {
     hand_cost(c) <= b.e_karma && !b.ef.sacrificed_names.contains(&c.def.name)
 }
 
-/// 「有无可负担的牌」——决策树条件2/献祭门控用（卡牌价值最大者）。
+/// 「有无可负担的牌」——决策树第2步（§廿:879）与献祭门控共用（卡牌价值最大者）。
 fn best_place(b: &Battle) -> Option<usize> {
     (0..b.enemy_hand.len())
         .filter(|&i| affordable(b, i))
@@ -318,8 +320,8 @@ pub fn sacrifice_value(b: &Battle, row: Row, col: usize) -> (f64, SacFlags) {
     (sc, flags)
 }
 
-/// 贪心（普通档）候选分：直接取 §廿 的动作评分，不做前瞻。
-/// 献祭沿用决策树门控「放不出才祭」（条件2/3），场上祭还需 分>0。
+/// 贪心（普通档，§廿:904「贪心评分，避免明显失误」）候选分：直接取 §廿 的动作评分，不做前瞻。
+/// 献祭沿用决策树第3步（§廿:880）的门控「放不出才祭」，场上祭还需 分>0。
 fn greedy_key(b: &Battle, a: AiAction) -> Option<f64> {
     match a {
         AiAction::Place { hand_idx, col, .. } => Some(placement_score_at(b, hand_idx, col)),
@@ -341,7 +343,7 @@ fn greedy_key(b: &Battle, a: AiAction) -> Option<f64> {
     }
 }
 
-/// 决策树第1步／献祭条件1：业力0 且手牌有开端 → 献祭开端（开端手牌献祭不占额度）。
+/// 决策树第1步（§廿:878）／献祭条件1：业力0 且手牌有开端 → 献祭开端（开端手牌献祭不占额度）。
 fn starter_sac_at_zero(b: &mut Battle) {
     if b.e_karma == 0
         && let Some(i) = b.enemy_hand.iter().position(|c| c.is_starter())
@@ -515,7 +517,7 @@ pub fn run(b: &mut Battle) {
         }
         b.log.append(&mut lines);
         let Some((k, desc, a)) = best else { break };
-        if a == AiAction::Pass {
+        if a == AiAction::Pass {  // §廿:881 无可放置／献祭 → 结束回合
             let why = if k == f64::MIN { "无可用候选".to_string() } else { format!("{unit}={k:.2}") };
             b.log.push(format!("  采纳：不动作（{why}）→ 敌方本回合行动结束"));
             break;
@@ -561,7 +563,7 @@ pub enum MetaMove {
     Upgrade { idx: usize, kind: &'static str },
 }
 
-/// 专家档战斗外决策（§二十「含融合决策」；融合时机＝§九:317 准备阶段／§九:319 结算阶段，人裁定 2026-09-28）。
+/// 专家档战斗外决策（§廿:906「含融合决策」；融合时机＝§九:317 准备阶段／§九:319 结算阶段，人裁定 2026-09-28）。
 /// 只产出意图，由既有规则函数执行——AI 不自开一套结算，规则合法性单一来源。
 pub fn plan_meta(inherit: &[CardInst], karma: i32, upgrades_left: u8) -> Vec<MetaMove> {
     let mut moves = Vec::new();
