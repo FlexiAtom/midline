@@ -5616,7 +5616,7 @@ mod anchor_tests {
             row: "3. 完成获得金币，用于解锁新卡",
             tier: Tier::Mode,
             evidence: "由 §廿一 推导器列出：货币名已按设计回执统一为「代币」（src/ 自有陈述全部换词；「金币」字面只余**引用侧**——本条 row 是文档原句的逐字摘录，另有 model.rs 两处说明性列举）。**发放面已由帧 D4 落地**：`Progress.tokens: u32`（落盘格式 3⇒4，旧档缺那一键读作 0），数额＝存活回合数×3＋通关 15（文档 3.6 第 4 条把唯一结算标准钉在回合数上 ⇒ 败局照发 3×N、胜负本身不加价），入账点只有 `meta::daily_settle` 一处（主线／爬梯／跳打 Boss 三条路都不发），随每日收束整文件落盘，`progress` 报告行有读数。**消费面已落一半**：2026-10-06 人裁「扣」（升级收费，价目取文档 3.7 第 1 行那个 10 代币/次），扣款与升级同在 `progress::upgrade_card` 那道价闸里。本句那半句「用于解锁新卡」不再是挂起理由——那个 sink 已随 修正2.MD「取消卡包概念」一并判废，向它索要清单是问错了对象。仍欠的是文档给的另一条出口：**重掷开局手牌 3 代币/次（3.7 第 2 行）在码面一字未建**",
-            dest: "剩余那一半的开工点已可指：重掷开局手牌 归 battle.rs 的开牌处（它不在结算环里，主线与每日都走得到）＋progress.rs 复用同一枚钱包，已落 pool/redraw-opening-hand.md。发放面不必再动。另记两条同族的已知缺口，都不在消费面上：① 每日永进不了结算环 ⇒ 升级那条出口在每日里根本没有入口（归 pool/daily-mode-has-no-settlement-loop.md）；② 代币没有日上界（额度只在通关 +1、入账无条件）⇒ 这个价当节奏闸门是弱的（归 pool/token-faucet-has-daily-cap-gap.md）",
+            dest: "剩余那一半的开工点已可指：重掷开局手牌 归 battle.rs 的开牌处（它不在结算环里，主线与每日都走得到）＋progress.rs 复用同一枚钱包，已落 pool/redraw-opening-hand.md。发放面不必再动。另记三条同族的已知缺口，都不在消费面上：① 每日永进不了结算环 ⇒ 升级那条出口在每日里根本没有入口（归 pool/daily-mode-has-no-settlement-loop.md）；② 代币没有日上界（额度只在通关 +1、入账无条件）⇒ 这个价当节奏闸门是弱的（归 pool/token-faucet-has-daily-cap-gap.md）；③ 爬梯（`play`）不落盘 ⇒ 余额恒 0，那道价闸在这个模式里**恒拒**（本帧双臂实测 before 白升／after「✖ 代币不足：升级需10，当前0」），要不要给它一条自己的钱包归 pool/climb-mode-has-no-wallet.md（人的设计，待裁）",
         },
         Debt {
             doc: 980,
