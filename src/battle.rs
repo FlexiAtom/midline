@@ -621,7 +621,7 @@ impl Battle {
             return Err("本回合献祭次数已用完（每回合最多1次）".into());
         }
         let c = self.p_front[col].take().ok_or("该格没有卡牌")?;  // §四:170「腾出空位 → 为放置新卡做准备」＝take() 当场把那一格交回来，本行之后 P{col} 是 None
-        if self.turn - c.placed_turn < 1 {  // §十二:431 在场不足 1 回合不可献祭；§四:161 表「在场限制」那一格的正面分支（后半句「手牌献祭不受此限制」在下面那个入口，两条闸不是同一处代码）
+        if !c.aged_one_turn(self.turn) {  // §十二:431 在场不足 1 回合不可献祭；§四:161 表「在场限制」那一格的正面分支（后半句「手牌献祭不受此限制」在下面那个入口，两条闸不是同一处代码；减法式本身收在 `CardInst::aged_one_turn` 一处，两侧共读它）
             self.p_front[col] = Some(c);
             return Err("在场不足1回合，不可献祭".into());
         }
@@ -661,7 +661,7 @@ impl Battle {
             Row::Back => &mut self.e_back[col],
         };
         let c = slot.take().ok_or("敌方格为空")?;
-        if self.turn - c.placed_turn < 1 {
+        if !c.aged_one_turn(self.turn) {
             *slot = Some(c);
             return Err("敌方在场不足1回合".into());
         }
@@ -1600,7 +1600,7 @@ impl Battle {
         }
         self.slot(SideK::Enemy, row, col)
             .as_ref()
-            .is_some_and(|c| self.turn - c.placed_turn >= 1)
+            .is_some_and(|c| c.aged_one_turn(self.turn))
     }
 
     /// 只读谓词：敌方手牌献祭此刻是否合法（开端豁免每回合额度，裁定10）。
@@ -5795,6 +5795,29 @@ mod rule_tests {
             assert_eq!(b.player_sacrifice_field(col).err().as_deref(), Some("格位为 P1-P4"), "col={col}");
         }
         assert!(!b.pf.sacrifice_used, "越界请求不得消耗每回合1次的献祭额度");
+    }
+
+    /// 场外哨兵撞进在场闸：`placed_turn` 的「从未放置」值是 `i64::MIN`，而闸算 `turn - placed_turn`。
+    /// 生产路径今天到不了这里（`player_place` 一定写 `placed_turn = turn`），所以这是一次**形状**实验：
+    /// 它把电池 M94 从实测侧量到的那条减法溢出钉成断言，改一处闸的口径时不许它退回 panic 或 wrap。
+    #[test]
+    fn never_placed_card_hits_the_age_gate_without_overflowing_it() {
+        let mut b = fresh_battle();
+        let d = faction_cards(Faction::Ember)[1];
+        assert_eq!(CardInst::new(977, d).placed_turn, i64::MIN, "前提要坐实：新建卡带的就是场外哨兵");
+        b.p_front[0] = Some(CardInst::new(977, d));
+        assert_eq!(
+            b.player_sacrifice_field(0).err().as_deref(),
+            Some("在场不足1回合，不可献祭"),
+            "我方场上献祭：哨兵卡要被那道闸拒掉，而不是在 debug 构建里减穿下界"
+        );
+        assert!(b.p_front[0].is_some(), "被拒的那张要放回原格（拒单不吞卡）");
+        assert!(!b.pf.sacrifice_used, "拒掉的那次不许消耗每回合1次的额度");
+
+        let mut b2 = fresh_battle();
+        b2.e_front[0] = Some(CardInst::new(978, d));
+        assert_eq!(b2.enemy_sacrifice_field(Row::Front, 0).err().as_deref(), Some("敌方在场不足1回合"), "敌方那支镜像同一条闸，同一条口径");
+        assert!(!b2.enemy_sac_field_allowed(Row::Front, 0), "只读谓词要与那道闸同向：哨兵卡一律判「未满 1 回合」");
     }
 
     #[test]

@@ -698,6 +698,10 @@ pub struct CardInst {
     pub crafted: bool,
 }
 
+/// 在场闸要求的回合数（§十二:431／§四:161 那个「在场 1 回合以上」）。文档那个数在码面只落成这一处算术，
+/// 由 `CardInst::aged_one_turn` 独读；§四 推导器拿从文档里读出的数对撞这一行字面。
+pub const PLACED_TURNS_REQUIRED: i64 = 1;
+
 impl CardInst {
     pub fn new(id: CardId, def: CardDef) -> Self {
         CardInst {
@@ -717,6 +721,13 @@ impl CardInst {
 
     pub fn is_starter(&self) -> bool {
         self.def.tr == TraitKind::Starter
+    }
+
+    /// 在场已满 `PLACED_TURNS_REQUIRED` 回合（§十二:431／§四:161 那道在场闸的**唯一**减法式）。
+    /// 哨兵必须先短路：`turn - i64::MIN` 在 debug 构建里减穿下界 panic、在 release 里 wrap 成一个假的巨大值，
+    /// 两侧都不该拿这张卡去判"够不够老"——场外卡按"未满"处理，即任何在场闸一律拒它。调用点不许自己写减法。
+    pub fn aged_one_turn(&self, turn: i64) -> bool {
+        self.placed_turn != i64::MIN && turn - self.placed_turn >= PLACED_TURNS_REQUIRED
     }
 
     /// 阈值存于实例内嵌定义（升级直接改定义值），此处不再叠加计数。
@@ -4558,31 +4569,42 @@ mod anchor_tests {
     }
 
     /// 收齐若干支献祭入口的函数体（`s3_fn_body` 那条带缩进定界的读法），按判据筛行。
-    /// 签名写死在这里是刻意的：入口改名、拆函数或挪出，本尺当场红，不会静默少读一支。
+    /// 签名写死在这里是刻意的：每个签名要求在**全部** src 里恰好命中一次，改名、拆函数或被复制都会当场红。
+    /// 这条守卫是本帧补的：旧写法是「文件里没有就跳过」，而下面那三个签名串都少了 `pub ` 前缀 ⇒ 一份都没命中，
+    /// 于是两份否定式名单（md:153 那个豁免／md:160 那句「不能献敌方」）从写下那天起就在读空，`== 空` 恒真。
+    /// 电池 M94 改道（把闸写成 `!(...)` 让 ③ 那个计数看不见它）才量出这一层：那次 4 条行为测红了，
+    /// 而本该第一个喊的 ④ 仍然绿。§十三 `s13_attack_path_bodies` 早写了同样的守卫，注释里还点了这里读法不够。
     fn s4_entry_lines(sigs: &[&str], keep: &dyn Fn(&str) -> bool) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for fp in src_rs_files() {
-            let src = std::fs::read_to_string(&fp).unwrap();
-            for sig in sigs {
-                if !src.lines().any(|l| l.trim_start().starts_with(sig)) {
-                    continue;
+        for sig in sigs {
+            let mut found = 0usize;
+            let mut body: Vec<String> = Vec::new();
+            for fp in src_rs_files() {
+                let src = std::fs::read_to_string(&fp).unwrap();
+                if src.lines().any(|l| l.trim_start().starts_with(sig)) {
+                    found += 1;
+                    body = s3_fn_body(&src, sig);
                 }
-                out.extend(s3_fn_body(&src, sig).into_iter().filter(|l| keep(l)));
             }
+            assert_eq!(found, 1, "§四 推导器要读 `{sig}` 的函数体，实测在全部 src 里命中 {found} 处（应为 1）⇒ 那支入口改名、拆函数或被复制，下面那份否定式名单读到的已不是打中线的那一段（读空了还算绿，是否定式断言最坏的失效形）");
+            assert!(!body.is_empty(), "`{sig}` 函数体为空 ⇒ 那份否定式判据无从下手");
+            out.extend(body.into_iter().filter(|l| keep(l)));
         }
         out.sort();
         out
     }
 
     /// §四:153「手牌献祭不受“在场1回合以上”限制」的机器形式＝两支**手牌**入口的体内，
-    /// 那份在场闸的字面一处都不出现（它的落点是 md:161 那两处）。纯否定式，能兑现它的只有点名。
+    /// 那份在场闸一处都不出现（它的落点是 md:161 那两处调用）。纯否定式，能兑现它的只有点名。
+    /// 减法式收成 `aged_one_turn` 之后，只点 `placed_turn` 会漏掉"改用手柄名调用"这条路 ⇒ 两个名字一起点，
+    /// 否则 md:153 那条否定式会从"没有任何在场闸"悄悄降级成"没有裸减法"。
     fn s4_hand_gate_lines() -> Vec<String> {
         s4_entry_lines(
             &[
-                "fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
-                "fn enemy_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
+                "pub fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
+                "pub fn enemy_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
             ],
-            &|l| l.contains("placed_turn"),
+            &|l| l.contains("placed_turn") || l.contains("aged_one_turn"),
         )
     }
 
@@ -4592,8 +4614,8 @@ mod anchor_tests {
     fn s4_player_enemy_refs() -> Vec<String> {
         s4_entry_lines(
             &[
-                "fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {",
-                "fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
+                "pub fn player_sacrifice_field(&mut self, col: usize) -> Result<(), String> {",
+                "pub fn player_sacrifice_hand(&mut self, idx: usize) -> Result<(), String> {",
             ],
             &|l| l.contains("e_front") || l.contains("e_back") || l.contains("enemy_hand") || l.contains("self.ef."),
         )
@@ -4805,11 +4827,25 @@ mod anchor_tests {
         assert!(hand_exempt, "md:161 那格的右半句「手牌献祭不受此限制」读不到（{hand_exempt}）⇒ 表与 md:153 那一条的呼应断了，本章那条豁免只剩围栏一侧作证");
 
         // ③ 文档数字送进码面 grep：本章撞的不是配比，是三道闸的**形状**。
+        // 在场闸的减法式自本帧起只有一处（`CardInst::aged_one_turn`），两侧入口共读它 ⇒ 这里从"两处字面闸"改成
+        // "两处调用＋一处算术＋那个数由文档驱动"，三层各钉一头：摘调用＝闸没了，多调用＝有人另起一份，动算术＝文档那个数变了。
         assert_eq!(
-            code_occurrences("if self.turn - c.placed_turn < 1 {"),
+            code_occurrences("if !c.aged_one_turn(self.turn) {"),
             2,
-            "md:161 那道在场闸在码面恰有 2 处：玩家场上献祭＋敌方场上献祭（镜像同一条闸，文档只写了我方那侧）。实测 {} 处 ⇒ 0 处＝闸被摘（md:161 与 §十二:431 一起落空）；≥3 处＝有人第三处也在卡入场年龄，而那两处之外文档没许过",
-            code_occurrences("if self.turn - c.placed_turn < 1 {")
+            "md:161 那道在场闸在码面恰有 2 处**调用**：玩家场上献祭＋敌方场上献祭（镜像同一条闸，文档只写了我方那侧）。实测 {} 处 ⇒ 0 处＝闸被摘（md:161 与 §十二:431 一起落空）；≥3 处＝有人第三处也在卡入场年龄，而那两处之外文档没许过",
+            code_occurrences("if !c.aged_one_turn(self.turn) {")
+        );
+        assert_eq!(
+            code_occurrences(&format!("pub const PLACED_TURNS_REQUIRED: i64 = {min_turns};")),
+            1,
+            "md:161 那个「在场 {min_turns} 回合以上」在码面只落成一处常量声明，实测 {} 处 ⇒ 0 处＝文档的数与码面的数换了写法或换了值（两侧入口现在共读这一行，改它＝改两道闸）；≥2 处＝有人另立一份同名的数",
+            code_occurrences(&format!("pub const PLACED_TURNS_REQUIRED: i64 = {min_turns};"))
+        );
+        assert_eq!(
+            code_occurrences("turn - self.placed_turn >= PLACED_TURNS_REQUIRED"),
+            1,
+            "「在场多久」这条减法式在码面恰有 1 处（`aged_one_turn` 体内），实测 {} 处 ⇒ 0 处＝算术被换形（哨兵短路那一半很可能一起没了，`i64::MIN` 会被重新减穿）；≥2 处＝有人绕过谓词自己写了一份减法，那一份不会替哨兵短路",
+            code_occurrences("turn - self.placed_turn >= PLACED_TURNS_REQUIRED")
         );
         assert_eq!(
             code_occurrences("if !is_starter {"),

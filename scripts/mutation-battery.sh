@@ -21,7 +21,7 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 133 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 134 条记录的补丁有没有真打上；
 # 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
 # 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
 # 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
@@ -785,12 +785,12 @@ assert ls[151].count('获得2业力')==1, ls[151]
 ls[151]=ls[151].replace('获得2业力','获得3业力',1)
 open(q,'w',encoding='utf8').write('\n'.join(ls))"
 DOC="$D/doc.md" run
-echo "### M92 把在场闸那道「< 1」改成「< 0」（我方＋敌方两支场上入口一起，真行为回归：入场 0 回合也能献）⇒ 应红在复现测③ 那条边界扫描＋推导器 ③ 那句「码面恰有 2 处」实测 0 处"
+echo "### M92 把在场闸要求的那个回合数从 1 改成 0（改的是码面那枚常数 PLACED_TURNS_REQUIRED，文档不动；四侧共读它 ⇒ 真行为回归＝入场 0 回合也能献）⇒ 实测 **3** 红（预测 2 红，多出的那条是既有边界扫描）：clash_card_still_needs_one_turn_in_play_before_sacrifice（battle.rs:6623 那句「本回合刚放的牌不该能献祭」）＋复现测 ③ 那条 md:161 扫描（battle.rs:5178）＋§四 推导器 ③ 新增那层「文档那个数在码面恰落成一处常量声明」实测 0 处（model.rs:4838）。本条落点自本帧起换层：减法式收成一处之前，M92 打的是 battle.rs 那两段字面「< 1」⇒ 红在 ③ 的计数层；现在四侧共读一个谓词，改值一个字都不动调用字面，那句「恰有 2 处调用」照旧绿，喊人的换成数层。摘调用那半边归 M94 量"
 restore; py "
-p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
-a='if self.turn - c.placed_turn < 1 {'
-assert s.count(a)==2, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,'if self.turn - c.placed_turn < 0 {'))"
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='pub const PLACED_TURNS_REQUIRED: i64 = 1;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'pub const PLACED_TURNS_REQUIRED: i64 = 0;'))"
 run
 echo "### M93 摘掉开端那半道豁免（两支手牌入口的「if !is_starter {」一起改成「if true {」：开端也吃每回合1次额度）⇒ 实测 3 红：复现测⑤（battle.rs:4336「献完开端那位仍是 false」）＋**一条既有**手牌额度测 hand_sacrifice_quota_only_starter_exempt（battle.rs:4634）＋推导器 ③ 那句「码面恰有 2 处」实测 0 处（model.rs:4151）。预测只列了后两条，多出来的那条正向测与其五 §3.5 的 M82 同形——本章的牙把既有盲区接上账，不是新造；④ 那份名单确实不动（置位行数没变，变的是它被谁执行）"
 restore; py "
@@ -799,12 +799,12 @@ a='        if !is_starter {'
 assert s.count(a)==2, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        if true {'))"
 run
-echo "### M94 往玩家手牌献祭入口塞一道在场闸（md:153 那条否定式被摘：手牌献开端从此要看 placed_turn）⇒ 实测 **8 红**（预测 3 红，差额全是这条塞进去的闸在**行为侧**炸出的连锁）：7 条测死在同一处减法溢出 battle.rs:550:12（「self.turn - c.placed_turn」在 placed_turn=i64::MIN 上减穿下界），死者含 §三／§五 两章的复现测、既有手牌额度测，以及 boss／command／meta 三把**与本章无关**的既有尺；第 8 条是 §四 推导器，红在 ③ 那句闸计数「恰有 2 处」实测 3（model.rs:4145）——**④ 那份「体内零在场闸」的点名没读到**：同一条测里 assert 是串行的，③ 先炸就把④ 遮在后面（与 M95 合起来读出这条口径：红字数数的是**测**，不是层）。溢出这一形把池里 placed-turn-min-overflow 那个坑从**实测侧**也照了出来"
+echo "### M94 往玩家手牌献祭入口塞一道在场闸，写法特意多套一圈括号（谓词外面再取反 ⇒ ③ 那句按字面匹配的调用计数读不到它，只有 ④ 那份点名读得到）⇒ 实测 **5** 红（本帧改道前那次 8 红，其中 7 条死在同一处减法溢出，那条形现在归 M133 量）：行为侧 4 条＝既有手牌额度测 hand_sacrifice_quota_only_starter_exempt（battle.rs:5828 那句开端手牌献祭要成功）＋§三 业力围栏（battle.rs:5051，献开端是 md:122 那条链的第一环）＋§四 复现测（battle.rs:5196，红在 md:153 那句豁免）＋§五 开端围栏（battle.rs:4617，md:204 那句同样被拒）；第 5 条是 §四 推导器 ④ 那份「两支手牌入口体内不碰在场闸」的点名（model.rs:4909）——这一层的读数本帧才第一次量到：④ 的签名串少了 pub 前缀，而那份收函数体的旧读法把没命中的文件静默跳过 ⇒ 两份否定式名单（md:153 那个豁免／md:160 那句「不能献敌方」）从写下那天起就在读空，断言「等于空」于是恒真。改道之前 ③ 先炸，串行 assert 把这一层整个遮住（与 M95 同口径：红字数的是测、不是层）。守卫补成 §十三 那种「每个签名在全部 src 里恰命中一次」之后这条才有牙；同一次把减法式收成一处，也把 M92 的落点从计数层换到了数层"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='        let c = self.hand.remove(idx);'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a, a+chr(10)+'        if self.turn - c.placed_turn < 1 { return Err(\"在场不足1回合，不可献祭\".into()); }'))"
+open(p,'w',encoding='utf8').write(s.replace(a, a+chr(10)+'        if !(c.aged_one_turn(self.turn)) { return Err(\"在场不足1回合，不可献祭\".into()); }'))"
 run
 echo "### M95 生产码面新写一条文档里根本没有的献祭额度消耗（dead_code 方法，行为不变）⇒ 实测 **1 红**（预测 2 红）：推导器红在 ③ 那句「self.pf.sacrifice_used = true; 恰有 2 处」实测 3（model.rs:4157），而 ④ 那份封闭写点名单 14→15 **没被读到**——两层在同一条测里，assert 串行，先炸的那层就是这次的全部读数。M85 的姊妹条，但落点比它少一层：M85 那次 ③ 的 needle 恰好不覆盖新写点，所以 ④ 是唯一喊的人；这里两处都覆盖，③ 抢先。合起来（与 M94）读出的口径是：**红字数测不数层**，「两层的红字互相把对方指出来」这句话在单条测内不成立"
 restore; py "
@@ -1109,4 +1109,11 @@ p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
 a='pub(crate) const UPGRADE_COST: u32 = 10;'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'pub(crate) const UPGRADE_COST: u32 = 0;'))"
+run
+echo "### M133 摘掉 aged_one_turn 里那句哨兵短路（placed_turn 不等于 i64::MIN 那半边），减法式与那枚常数都不动 ⇒ 实测 **1** 红（正中预测）：只红在本帧新立那条 never_placed_card_hits_the_age_gate_without_overflowing_it，正文「attempt to subtract with overflow」（model.rs:730）。③ 那句「减法式恰有 1 处」照旧绿——它钉的是算术在不在，哨兵在不在它看不见。正证那条测钉的是形状之外的那一半：场外卡撞进在场闸时不许减穿下界（debug 构建 panic、release 构建 wrap 成一个假的巨大值，两侧都不该拿这张卡去判够不够老）。池里 placed-turn-min-overflow 那个坑从实测侧转成断言，钉的就是这一条"
+restore; py "
+p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
+a='self.placed_turn != i64::MIN && turn - self.placed_turn >= PLACED_TURNS_REQUIRED'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'turn - self.placed_turn >= PLACED_TURNS_REQUIRED'))"
 run

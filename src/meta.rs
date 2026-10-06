@@ -779,7 +779,7 @@ pub(crate) fn auto_turn(b: &mut Battle) {
                 }) else {
                     continue;
                 };
-                if b.turn - b.p_front[col].as_ref().unwrap().placed_turn < 1 {
+                if !b.p_front[col].as_ref().unwrap().aged_one_turn(b.turn) {
                     continue;
                 }
                 let better = b.hand.iter().any(|c| {
