@@ -54,14 +54,24 @@ pub(crate) fn fuse_cards(inherit: &mut Vec<CardInst>, main: usize, sub: usize, k
     Ok(format!("{} 吸收副牌「{}」的{n}个技能 → {}", m.def.name, s.def.name, short_card(m)))
 }
 
+/// 卡牌升级的价目（修正2.MD 3.7「卡牌升级：10 代币/次」）。全仓**只有这一处**写着这个数：
+/// 玩家与托管 AI 走的是同一个 `upgrade_card`，价落在规则层而不是词表层，免得哪一侧漏付就长成第二种价。
+/// 注意它没有文档对账的牙——`§十一` 通篇无价目，推导器只读得到 `~/中线.MD`，改这个数只会红在测上。
+pub(crate) const UPGRADE_COST: u32 = 10;
+
 /// §十一:402 升级＝每通关一次的奖励；§廿二:965 上限 3 次。
-pub(crate) fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str) -> Result<String, String> {
+/// `tokens` 是当代代币余额，形状照上面的 `fuse_cards` 花业力：**当场查、当场扣**，且只在牌真升上去那一支扣。
+pub(crate) fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str, tokens: &mut u32) -> Result<String, String> {
     if idx >= inherit.len() {
         return Err("下标无效".into());
     }
     let c = &mut inherit[idx];
     if c.upgrades >= 3 {
         return Err("该牌已达升级上限3次".into());
+    }
+    // 余额闸排在所有改动之前：付不起就一分不扣、一张不升，调用方那道「本次结算限 1 张」也不会被置上。
+    if *tokens < UPGRADE_COST {
+        return Err(format!("代币不足：升级需{UPGRADE_COST}，当前{tokens}"));
     }
     match kind { // §十一:403 三支效果：power→数值+1／thr→阈值-1／skill→技能强化（玩家侧实现体，敌方侧另见 battle.rs:337 的复用）
         "power" => {
@@ -76,6 +86,7 @@ pub(crate) fn upgrade_card(inherit: &mut [CardInst], idx: usize, kind: &str) -> 
         _ => return Err("power|thr|skill".into()),
     }
     c.upgrades += 1;
+    *tokens -= UPGRADE_COST;  // 扣款与升级同时发生：这一刻之前上面三道闸任何一道没过都不会走到这里
     Ok(format!("升级后：{}", short_card(c)))
 }
 
@@ -627,14 +638,38 @@ mod tests {
     #[test]
     fn upgrade_three_kind_and_cap() {
         let mut inherit = pile(1);
-        assert!(upgrade_card(&mut inherit, 0, "power").unwrap().starts_with("升级后："));
-        assert!(upgrade_card(&mut inherit, 0, "thr").is_ok());
-        assert!(upgrade_card(&mut inherit, 0, "skill").is_ok());
+        // 余额正好够三次：第三次之后归零，于是第四次**同时**是"没钱"和"满上限"两种拒——
+        // 它报的是上限那句，就把「上限闸排在余额闸之前」这个顺序也一起量到了。
+        // 这几个数**写死成字面量**、不写成 `UPGRADE_COST * 3`：价目本身就是这条测的对象，
+        // 期望值从被试的常数推出来就等于"改多少都绿"（把 10 改成 0 时那条推导甚至会编译失败，量不到行为）。
+        let mut purse = 30;
+        assert!(upgrade_card(&mut inherit, 0, "power", &mut purse).unwrap().starts_with("升级后："));
+        assert!(upgrade_card(&mut inherit, 0, "thr", &mut purse).is_ok());
+        assert!(upgrade_card(&mut inherit, 0, "skill", &mut purse).is_ok());
         assert_eq!(inherit[0].upgrades, 3);
-        assert_eq!(upgrade_card(&mut inherit, 0, "power").err().unwrap(), "该牌已达升级上限3次");
-        assert_eq!(upgrade_card(&mut inherit, 4, "thr").err().unwrap(), "下标无效");
+        assert_eq!(purse, 0, "三次升级正好把余额花干：扣款只发生在升成功那一支");
+        assert_eq!(upgrade_card(&mut inherit, 0, "power", &mut purse).err().unwrap(), "该牌已达升级上限3次");
+        assert_eq!(upgrade_card(&mut inherit, 4, "thr", &mut purse).err().unwrap(), "下标无效");
         // 坏 kind 用的是**没升过级**的新牌：上限检查在 kind 检查之前，拿上面那张已升满的牌只会收到上限文案。
-        assert_eq!(upgrade_card(&mut pile(1), 0, "pw").err().unwrap(), "power|thr|skill");
+        assert_eq!(upgrade_card(&mut pile(1), 0, "pw", &mut 20).err().unwrap(), "power|thr|skill");
+    }
+
+    #[test]
+    fn an_unaffordable_upgrade_changes_nothing_at_all() {
+        // 余额差一枚就不许动盘：牌不升、钱不扣。这条不是"顺手测一下"——先升后扣的写法在这里会当场红。
+        // 9／10 同样是字面量：这条要撞的是"把 10 这个价改掉"那种变异，不是"跟着价目一起漂"。
+        let mut inherit = pile(1);
+        let before = inherit[0].def.power;
+        let mut purse = 9;
+        assert_eq!(upgrade_card(&mut inherit, 0, "power", &mut purse).err().unwrap(), "代币不足：升级需10，当前9");
+        assert_eq!(inherit[0].def.power, before, "付不起 ⇒ 数值一分没涨");
+        assert_eq!(inherit[0].upgrades, 0, "付不起 ⇒ 升级计数没动，那张牌还能再买三次");
+        assert_eq!(purse, 9, "被拒的那一次不许扣钱");
+        // 边界：余额**刚好等于**价就成交，且扣完归零（不是"余额需大于价"那种多留一枚的写法）。
+        purse = 10;
+        assert!(upgrade_card(&mut inherit, 0, "power", &mut purse).is_ok());
+        assert_eq!(purse, 0, "刚好够 ⇒ 成交并扣干");
+        assert_eq!(inherit[0].def.power, before + 1);
     }
 
     #[test]

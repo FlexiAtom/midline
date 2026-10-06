@@ -70,5 +70,23 @@ p15(){ printf 'schema=2\nfaction=1\ndifficulty=normal\nlevel=1\ncarry_karma=0\nc
 # 与 p9/p12/p13 同一口径：md5 **随日历换**（今日种子 ⇒ 今日规则 ⇒ 今日这场的打法），那是日历在走。
 p16(){ { printf 'go\n'; printf 'e\n%.0s' $(seq 1 60); } | "$B" daily --save "$O/d16.save" > "$O/p16.txt" 2>&1;
        "$B" progress --save "$O/d16.save" >> "$O/p16.txt" 2>&1; }
-for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15 p16; do $f; done
+# p17 消费面（升级收费）装的那条**花钱**的整场。p1–p16 里没有一条能在字节面上看见"扣了 10 枚"：
+# 唯一进结算环的场景全走 `play`，而 play 没有存档槽 ⇒ 余额恒为 0（`PlayHost::tokens`），升级一律 ✖ 代币不足；
+# 每日那四条又永远进不了结算环（`has_next: false` ⇒ 提前 return）。所以"改了价目而 16 条全 SAME"这种假绿此刻无牙。
+# 这条的形状是"先让二进制自己写出第 1 关入口快照，再拿同一份档续打"：
+# ① `go` ⇒ 准备阶段出口那次 `snapshot_entry` 落盘，战斗内 EOF 收手（一行输出都不留）；
+# ② 把档上那个 `tokens=0` 手改成 25 —— **不是**夹具作弊：主线不发币，钱包只能从每日挣，
+#    而"先跑一场 daily"会让这条的 md5 随日历漂（p13/p16 已经各占一条日历依赖）。本条要钉的是扣款这笔算术，不是发放。
+# ③ 同一份档 `--resume` 真打赢第 1 关（这套脚本 seed=1 在第 11 回合把对面烛打掉，换成别的 seed 会输 ⇒ 换不得）；
+# ④ 结算阶段 `up 0 power` 花掉 10，`go` 提交 —— 钱与牌走同一个提交点＝「下一关入口快照」；第 2 关准备阶段 `q` 弃局，
+#    此后一个字节都不动（若第 2 关也被打赢，档面会再被下一关快照盖一次，那条 ✖ 就不是本条要钉的东西了）；
+# ⑤ 最后 `progress` 把档读回来：「代币=15」与「第 2 关」同场出现 ⇒ 扣款、提交、报告三段咬上，对不上就是断在中间。
+# 与 p13/p16 不同：**这条不随日历换 md5**（seed 钉死 1，不碰每日那三键）。
+p17(){ printf 'go\n' | "$B" mainline --seed 1 --save "$O/m17.kv" >/dev/null 2>&1;
+       sed -i 's/^tokens=0$/tokens=25/' "$O/m17.kv";
+       grep -q '^tokens=25$' "$O/m17.kv" || { echo "p17：档面上那个 tokens 键没改成 25 ⇒ 二进制没写出第 1 关入口快照（别拿一份读不懂的档冒充钱包）" >&2; exit 1; }
+       { printf 'go\n'; for _ in $(seq 1 11); do printf 'p 0 P1\np 0 P2\np 0 P3\np 0 P4\nsh 0\nsh 0\ne\n'; done;
+         printf 'up 0 power\ngo\nq\n'; } | "$B" mainline --seed 1 --resume --save "$O/m17.kv" > "$O/p17.txt" 2>&1;
+       "$B" progress --save "$O/m17.kv" >> "$O/p17.txt" 2>&1; }
+for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15 p16 p17; do $f; done
 md5sum "$O"/p*.txt | sed "s#$O/##"

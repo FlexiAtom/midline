@@ -229,10 +229,13 @@ pub(crate) fn parse_settle(line: &str) -> SettleCommand<'_> {
 /// 「✓ 排序：…」。拆成两截要么改文案（撞逐字节尺），要么让壳去猜哪条该加什么。归一属"文案改造"另一帧的事，
 /// 现在登记不实现。
 /// `up_used` 是"本次结算限 1 张"的闸（§十一:402），由调用方按阶段持有——它不进存档，所以跨关自然归零。
+/// `tokens` 是同一趟阶段借出来的代币余额：本层只把它转交给 `upgrade_card`（价与扣款都住在那儿），
+/// 自己**不**判断也**不**扣——在这儿扣就会漏掉托管 AI 那条直调 `upgrade_card` 的路（`meta.rs` 的 `apply_meta_plan`）。
 pub(crate) fn execute_settle(
     inherit: &mut Vec<CardInst>,
     karma: &mut i32,
     up_used: &mut bool,
+    tokens: &mut u32,
     post_battle: bool,
     cmd: SettleCommand<'_>,
 ) -> SettleStep {
@@ -270,7 +273,7 @@ pub(crate) fn execute_settle(
             if *up_used {
                 return SettleStep::Stay(one("✖ 每次通关只能升级1张（§十一:402 / §廿二:965）".into()));
             }
-            match crate::progress::upgrade_card(inherit, idx, kind) {
+            match crate::progress::upgrade_card(inherit, idx, kind, tokens) {
                 Ok(msg) => {
                     *up_used = true;
                     SettleStep::Stay(one(format!("✓ {msg}")))
@@ -293,11 +296,14 @@ pub(crate) fn inherit_line(i: usize, c: &CardInst) -> String {
 }
 
 /// 阶段提示行（`post_battle` 决定是通关奖励口径还是纯准备口径）。
-pub(crate) fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> String {
+/// 余额与价目只打在结算那一支（准备阶段没有 `up`）：那是一道要花钱的闸，藏在"报错了才知道"里
+/// 等于让玩家拿本次唯一的升级名额去试错。
+pub(crate) fn settle_hint(karma: i32, tokens: u32, post_battle: bool, up_used: bool) -> String {
     if post_battle {
         format!(
-            "（可保留业力 {karma}：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张{}）；drop <idx>；move <从> <到>；go）",
-            if up_used { "已用完" } else { "余1" }
+            "（可保留业力 {karma} · 代币 {tokens}：fuse <主> <副>；up <idx> power|thr|skill（{cost}代币/次，本结算限1张{}）；drop <idx>；move <从> <到>；go）",
+            if up_used { "已用完" } else { "余1" },
+            cost = crate::progress::UPGRADE_COST
         )
     } else {
         "（准备阶段：可 fuse/drop/move 后 go；go 直接开战）".to_string()
@@ -306,13 +312,13 @@ pub(crate) fn settle_hint(karma: i32, post_battle: bool, up_used: bool) -> Strin
 
 /// 一整个「继承堆清单 + 提示」文本块（每行自带换行）。调用方接 `> ` 提示符。
 /// 它是逐字搬来的：改前三段 `println!` 的顺序、括号、全角冒号一个字没动。
-pub(crate) fn settle_listing(inherit: &[CardInst], karma: i32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆；§十:386 准备阶段·可查看继承堆所有卡牌（整堆逐行列出，不改状态）
+pub(crate) fn settle_listing(inherit: &[CardInst], karma: i32, tokens: u32, post_battle: bool, up_used: bool) -> String {  // §十二:414 准备阶段查看继承堆；§十:386 准备阶段·可查看继承堆所有卡牌（整堆逐行列出，不改状态）
     let mut s = format!("继承堆（{}张）：\n", inherit.len());
     for (i, c) in inherit.iter().enumerate() {
         s.push_str(&inherit_line(i, c));
         s.push('\n');
     }
-    s.push_str(&settle_hint(karma, post_battle, up_used));
+    s.push_str(&settle_hint(karma, tokens, post_battle, up_used));
     s.push('\n');
     s
 }
@@ -442,10 +448,22 @@ mod tests {
     }
 
     fn run(lines: &[&str], inherit: &mut Vec<CardInst>, karma: &mut i32, post_battle: bool) -> Vec<String> {
+        // 那批旧测问的是词表与闸序，不是价 ⇒ 给它们一个付得起的余额。价本身由 `a_failed_upgrade` 那组测单独钉。
+        run_paid(lines, inherit, karma, &mut (crate::progress::UPGRADE_COST * 4), post_battle)
+    }
+
+    /// 带钱包的一台：`purse` 由调用方持有并可在跑完之后读——花钱这条道得有可断言的出口，不能只留一行文案。
+    fn run_paid(
+        lines: &[&str],
+        inherit: &mut Vec<CardInst>,
+        karma: &mut i32,
+        purse: &mut u32,
+        post_battle: bool,
+    ) -> Vec<String> {
         let mut used = false;
         let mut out = Vec::new();
         for l in lines {
-            match execute_settle(inherit, karma, &mut used, post_battle, parse_settle(l)) {
+            match execute_settle(inherit, karma, &mut used, purse, post_battle, parse_settle(l)) {
                 SettleStep::Stay(v) => out.extend(v),
                 SettleStep::Go => out.push("«GO»".into()),
                 SettleStep::Quit => out.push("«QUIT»".into()),
@@ -505,7 +523,7 @@ mod tests {
         assert_eq!(run(&["up 0 power"], &mut inherit, &mut k, false), vec!["✖ 升级是通关奖励，仅结算阶段可用"]);
         assert_eq!(run(&["up 99 power"], &mut inherit, &mut k, false), vec!["✖ 升级是通关奖励，仅结算阶段可用"]);
         let mut probe = pile(2);
-        let first = crate::progress::upgrade_card(&mut probe, 0, "power").unwrap();
+        let first = crate::progress::upgrade_card(&mut probe, 0, "power", &mut (crate::progress::UPGRADE_COST * 2)).unwrap();
         assert_eq!(
             run(&["up 0 power", "up 1 thr"], &mut inherit, &mut k, true),
             vec![format!("✓ {first}"), "✖ 每次通关只能升级1张（§十一:402 / §廿二:965）".to_string()]
@@ -514,18 +532,46 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_upgrade_does_not_burn_the_once_per_clear_lot() {
+        // 「付不起」与「已升过」是两条独立的拒，且必须**同一趟阶段**里验：
+        // 钱包空了若顺手把本次通关唯一的升级名额吃掉，玩家攒够钱那一刻才发现名额早就烧在一次失败尝试上。
+        let mut inherit = pile(2);
+        let mut k = 0;
+        let mut used = false;
+        let mut purse = 9; // 字面量：价目本身是这条要撞的对象，期望值不许从它推导
+        let lines = match execute_settle(&mut inherit, &mut k, &mut used, &mut purse, true, parse_settle("up 0 power")) {
+            SettleStep::Stay(v) => v,
+            other => panic!("拒一条命令不该结束阶段：{other:?}"),
+        };
+        assert_eq!(lines, vec!["✖ 代币不足：升级需10，当前9".to_string()], "余额进文案：让玩家看见差多少，而不是只知道「不够」");
+        assert_eq!(purse, 9, "被拒的那一次一分没扣");
+        assert_eq!(inherit[0].upgrades, 0, "被拒的那一次一张没升");
+        assert!(!used, "钱不够的那次尝试不许置闸");
+        // 同一趟阶段里钱到位 ⇒ 名额还在；成交才扣，扣完正好归零。
+        purse = 10;
+        let _ = execute_settle(&mut inherit, &mut k, &mut used, &mut purse, true, parse_settle("up 0 power"));
+        assert!(used, "升成了才置闸");
+        assert_eq!(purse, 0, "10 代币一次，只在成交那一支扣");
+        // 名额既已用掉，再来一次吃的是名额那条拒——与钱没关系（此时余额也正好是 0）。
+        match execute_settle(&mut inherit, &mut k, &mut used, &mut purse, true, parse_settle("up 1 thr")) {
+            SettleStep::Stay(v) => assert!(v[0].starts_with("✖ 每次通关只能升级1张"), "{v:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn the_listing_and_hint_keep_the_pre_refactor_wording() {
         let mut list = pile(2);
         list[0].deaths = 2;
         list[1] = CardInst::new(7, crate::model::STARTER);
         let starter = &list[1];
-        let txt = settle_listing(&list, 5, true, false);
+        let txt = settle_listing(&list, 5, 12, true, false);
         assert_eq!(txt.lines().next().unwrap(), "继承堆（2张）：");
         assert!(txt.contains("  [0] ") && txt.contains("死过2次"), "{txt}");
         assert!(txt.contains("〈开端·不可融合〉"), "{txt}");
-        assert!(txt.ends_with("（可保留业力 5：fuse <主> <副>；up <idx> power|thr|skill（本结算限1张余1）；drop <idx>；move <从> <到>；go）\n"), "{txt}");
-        assert!(settle_listing(&[], 0, false, false).ends_with("（准备阶段：可 fuse/drop/move 后 go；go 直接开战）\n"));
-        assert!(settle_listing(&[], 0, true, true).contains("本结算限1张已用完"));
+        assert!(txt.ends_with("（可保留业力 5 · 代币 12：fuse <主> <副>；up <idx> power|thr|skill（10代币/次，本结算限1张余1）；drop <idx>；move <从> <到>；go）\n"), "{txt}");
+        assert!(settle_listing(&[], 0, 0, false, false).ends_with("（准备阶段：可 fuse/drop/move 后 go；go 直接开战）\n"), "准备阶段那条一字未动：它没有 up，也就不该出现价目");
+        assert!(settle_listing(&[], 0, 3, true, true).contains("本结算限1张已用完"));
         assert_eq!(inherit_line(3, &starter), format!("  [3] {} | 特性:{} | 死过0次〈开端·不可融合〉", short_card(&starter), starter.def.tr.label()));
     }
 }

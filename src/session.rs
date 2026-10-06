@@ -45,6 +45,12 @@ pub(crate) trait Host {
     /// 下一关入口快照（打赢之后）。**终关不写**那条闸不在这里——它是存档形态的知识（`is_mainline_end`
     /// 配上 `SaveUse`），不是阶段机的，实现方自己判。
     fn snapshot_next(&mut self, level: u32, inherit: &[CardInst], karma: i32);
+    /// 本局的代币余额。会话层只借一枚 `u32`，不认识 `Progress`——落盘槽的形状归壳
+    /// （无存档槽的爬梯／冒烟读作 **0**，那是"没攒过钱"，不是"免费"）。
+    fn tokens(&self) -> u32;
+    /// 结算阶段结束时把余额交回。**这里不写盘**：写不写、什么时候写仍由 `snapshot_*` 那两条决定，
+    /// 于是"钱花掉了"与"牌升上去了"是同一个提交点，弃局两条一起作废（裁定27）。
+    fn set_tokens(&mut self, tokens: u32);
     /// 构造本关战斗（普通关与 Boss 关的差别、章强化豁免都在实现方）。
     fn new_battle(&mut self, inherit: &mut Vec<CardInst>, level: u32) -> Battle;
 }
@@ -163,18 +169,27 @@ fn settle_loop<H: Host>(
 ) -> Option<Terminus> {
     use crate::command::{SettleStep, execute_settle, parse_settle, settle_listing};
     let mut up_used = false;
+    // 钱包在阶段入口借出、在阶段出口交回：中间每一次升级扣的都是这枚 `u32`，壳那边的存档槽要等阶段
+    // 关上才看到新余额。`q` 那条出口**不交回**——弃局本来就不动盘，钱和牌一起留在原地。
+    let mut purse = host.tokens();
     loop {
-        host.write(&settle_listing(inherit, *karma, post_battle, up_used));
+        host.write(&settle_listing(inherit, *karma, purse, post_battle, up_used));
         host.write("> ");
         // `?` 在这里就是"EOF ⇒ 离开本阶段"＝改前那句 `return`（EOF 视作 `go`），不是错误传播。
-        let line = host.read()?;
-        match execute_settle(inherit, karma, &mut up_used, post_battle, parse_settle(&line)) {
+        let Some(line) = host.read() else {
+            host.set_tokens(purse);
+            return None;
+        };
+        match execute_settle(inherit, karma, &mut up_used, &mut purse, post_battle, parse_settle(&line)) {
             SettleStep::Stay(lines) => {
                 for l in lines {
                     host.write(&format!("{l}\n"));
                 }
             }
-            SettleStep::Go => return None,
+            SettleStep::Go => {
+                host.set_tokens(purse);
+                return None;
+            }
             SettleStep::Quit => return Some(Terminus::Quit { msg: None }),
         }
     }
@@ -202,6 +217,8 @@ mod tests {
         seen_karma: Option<i32>,
         /// 强制战斗结果那一刻的回合数——用来验出口带的 `survived` 是不是从战斗里取的（0＝开局即结束）。
         force_turn: i64,
+        /// 壳那一侧的代币余额：`set_tokens` 写进来的值只有这里收得到。
+        purse: u32,
     }
 
     impl Probe {
@@ -214,6 +231,7 @@ mod tests {
                 force: None,
                 seen_karma: None,
                 force_turn: 0,
+                purse: 0,
             }
         }
         fn saw(&self, tag: &str) -> bool {
@@ -259,6 +277,17 @@ mod tests {
         }
         fn snapshot_next(&mut self, level: u32, inherit: &[CardInst], _karma: i32) {
             self.trace.push(format!("next@{level}/{}张", inherit.len()));
+        }
+        fn tokens(&self) -> u32 {
+            self.purse
+        }
+        fn set_tokens(&mut self, tokens: u32) {
+            // 只在**数额真的变了**时留痕：那些不花钱的阶段（准备阶段、只融合、直接 go）的 trace 一字不变，
+            // 而"钱交回壳里"这一步一旦有人摘掉，`purse→N` 那条就没了，测当场红。
+            if tokens != self.purse {
+                self.trace.push(format!("purse→{tokens}"));
+            }
+            self.purse = tokens;
         }
         fn new_battle(&mut self, inherit: &mut Vec<CardInst>, level: u32) -> Battle {
             self.trace.push(format!("battle@{level}/{}张", inherit.len()));
@@ -318,6 +347,42 @@ mod tests {
             t => panic!("该走 Quit，实到 {t:?}"),
         }
         assert!(p.saw("entry@2/2张/0业"), "本关入口那次已经写了：{}", p.order());
+        assert!(!p.trace.iter().any(|t| t.starts_with("next")), "q 之后不该有下一关入口快照：{}", p.order());
+    }
+
+    /// 消费面的接缝：升级扣的那 10 枚要在**阶段出口**随钱包一起交回，与「下一关入口快照」同一个提交点。
+    /// `command` 层单独看只知道"扣了"，看不出这 10 枚进没进档面（那半归 byte-baseline p17）；
+    /// 这一条钉的是阶段机把两件事走同一个出口，不是一前一后各写一次。
+    #[test]
+    fn a_paid_upgrade_and_the_tokens_it_costs_leave_the_stage_together() {
+        let mut p = Probe::new(&["go", "up 0 power", "go"]);
+        p.force = Some(Outcome::PlayerWin);
+        p.purse = 25;
+        let mut inherit = pile(2);
+        let mut k = 0;
+        let _ = run_level(&mut p, &cfg(2, true), &mut inherit, &mut k);
+        assert_eq!(inherit[0].upgrades, 1, "那张牌确实升了，否则这条只是在测空气");
+        assert_eq!(p.purse, 15, "升一张＝10 枚，交回壳里的是花完的余额");
+        assert!(p.saw("purse→15"), "钱在阶段出口那次交回：{}", p.order());
+        assert!(p.saw("next@2/2张"), "同一次出口落下一关入口快照：{}", p.order());
+        assert!(p.out.contains("· 代币 25："), "开口时先把余额打给玩家看，价目与余额都在提示行里：{}", p.out);
+    }
+
+    /// 花钱与升级**同生同死**：`q` 离开结算阶段时既不落"下一关入口"快照，也不把新余额交回壳里
+    /// ⇒ 那 10 枚和那张升上来的牌一起留在原地。裁定27「弃局不动盘」这条口径，本帧多了一枚钱要照着走。
+    #[test]
+    fn quitting_the_settle_stage_reverts_the_spent_tokens_along_with_the_upgrade() {
+        let mut p = Probe::new(&["go", "up 0 power", "q"]);
+        p.force = Some(Outcome::PlayerWin);
+        p.purse = 25;
+        let mut inherit = pile(2);
+        let mut k = 0;
+        match run_level(&mut p, &cfg(2, true), &mut inherit, &mut k) {
+            Terminus::Quit { msg } => assert_eq!(msg, None, "结算 `q` 无文案"),
+            t => panic!("该走 Quit，实到 {t:?}"),
+        }
+        assert_eq!(p.purse, 25, "弃局 ⇒ 一枚不少：阶段里扣的那 10 枚随本地钱包一起作废");
+        assert!(!p.trace.iter().any(|t| t.starts_with("purse")), "q 那条出口不该交回钱包：{}", p.order());
         assert!(!p.trace.iter().any(|t| t.starts_with("next")), "q 之后不该有下一关入口快照：{}", p.order());
     }
 

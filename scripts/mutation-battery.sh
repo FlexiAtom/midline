@@ -21,7 +21,7 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 123 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 133 条记录的补丁有没有真打上；
 # 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
 # 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
 # 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
@@ -1102,4 +1102,11 @@ p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='                if Some((s, c.id)) == except {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'                if except.map(|(_, e)| e) == Some(c.id) {'))"
+run
+echo "### M132 把升级价目那枚常数从 10 改成 0（消费面悄悄退回免费）⇒ 实测 **5** 红：progress 那两条钱上的测（upgrade_three_kind_and_cap 三次花干那个 0 ／ an_unaffordable_upgrade_changes_nothing_at_all 余额 9 那次竞升成了）＋command 两条（a_failed_upgrade_does_not_burn_the_once_per_clear_lot 同一处拒案 ／ the_listing_and_hint_keep_the_pre_refactor_wording 提示行里那个 10）＋session 一条接缝（a_paid_upgrade_and_the_tokens_it_costs_leave_the_stage_together 交回壳里的是 25 不是 15）。这些余额期望**全是字面量**、没有一条写成由该常数推导 ⇒ 正证「价目本身」有牙：改它没有一条测跟着漂。反过来说明本条为什么红不到 meta 那两条——handing_the_wallet_back… 与 a_battle_without_a_save_slot… 量的是档面接缝（搬钱、无槽读 0），它们不调用价闸；冒烟夹具那笔预算按常数给，因为它是夹具的钱、不是断言"
+restore; py "
+p='$D/src/progress.rs'; s=open(p,encoding='utf8').read()
+a='pub(crate) const UPGRADE_COST: u32 = 10;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'pub(crate) const UPGRADE_COST: u32 = 0;'))"
 run

@@ -644,6 +644,20 @@ impl crate::session::Host for PlayHost<'_> {
         persist_next_entry(&mut *self.save, level, self.faction, self.diff, inherit, karma);
     }
 
+    /// 没有存档槽 ⇒ **0**，不是"免票"：爬梯（`ladder`）从不落盘，它也就没有可扣的钱，
+    /// 读成一个哨兵值（`u32::MAX` 之类）等于在该模式里悄悄把价目取消。
+    fn tokens(&self) -> u32 {
+        self.save.as_ref().map_or(0, |s| s.progress.tokens)
+    }
+
+    fn set_tokens(&mut self, tokens: u32) {
+        // 只改内存槽、**不在这里写盘**：写盘的时机仍归「关卡入口快照」那一条路（裁定27），
+        // 于是升级和它的价钱要么一起进档、要么一起弃局作废。
+        if let Some(slot) = self.save.as_mut() {
+            slot.progress.tokens = tokens;
+        }
+    }
+
     /// Boss 关豁免章强化：B1 的贪心全败读数要与改前逐帧可比（裁定24 只补"每章新阵营"的普通关缺口）；
     /// 普通关走 `new_mainline`＝构造即强化，省掉"记得再补一刀"这个会漏的步骤。
     fn new_battle(&mut self, inherit: &mut Vec<CardInst>, level: u32) -> Battle {
@@ -663,6 +677,10 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
         let mut inherit: Vec<CardInst> = Vec::new();
         let mut level = 1u32;
         let mut last = Outcome::Draw;
+        // 冒烟夹具的钱包：`--auto` 没有存档槽（它不落盘），而升级现在是**要花钱的**，所以这里显式给它
+        // 一笔只存在于本次调用的预算——数＝单场最多 5 次通关 × 每次的价。它是夹具，不是发放面的产出：
+        // 真游戏里那笔钱只能由 `daily_settle` 挣来，这条路上一个代币都不会落进任何档面。
+        let mut purse = crate::progress::UPGRADE_COST * 5;
         for _ in 0..5 {
             // 与 one_level 同一套敌方构造（`new_mainline`＝构造即章强化）：本循环当前最多到第5关
             // （第1章，强化量 0），加上来是为了将来把轮数拉长读章节曲线时，托管冒烟与主线玩的不是两种游戏。
@@ -677,7 +695,7 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
                     }
                     // 融合/升级：验证跨关持有与 meta 决策路径
                     let mut k = b.p_karma.max(0);
-                    apply_meta_plan(&mut inherit, &mut k, diff, 1);
+                    apply_meta_plan(&mut inherit, &mut k, &mut purse, diff, 1);
                     level += 1;
                 }
                 _ => break,
@@ -690,7 +708,9 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
 /// 战斗外（准备/结算阶段）的托管决策落地（§二十「专家含融合决策」；时机按 §九:317／§九:319 那张融合时机表，战斗内没有这条路）。
 /// 只把 `ai::plan_meta` 的意图回灌既有规则函数执行，AI 不自开一套结算。
 /// 非专家档保持既有冒烟行为：固定融合前两牌、不代管升级。
-fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, diff: Difficulty, upgrades_left: u8) {
+/// `tokens` 是这一局用来付升级费的钱包——托管**代扣**，与玩家走的是 `upgrade_card` 里同一道价闸；
+/// 冒烟没有存档槽，那一笔预算由调用点显式给（夹具的钱，不是发放面的产出）。
+fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, tokens: &mut u32, diff: Difficulty, upgrades_left: u8) {
     if diff != Difficulty::Expert {
         if inherit.len() >= 2 {
             let _ = crate::progress::fuse_cards(inherit, 0, 1, karma);
@@ -700,7 +720,7 @@ fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, diff: Difficult
     // plan 的下标基于同一快照；先执行不改长度的升级，再执行会摘牌的融合
     let plan = crate::ai::plan_meta(inherit, *karma, upgrades_left);
     let mut run = |m: &crate::ai::MetaMove| match m {
-        crate::ai::MetaMove::Upgrade { idx, kind } => match crate::progress::upgrade_card(inherit, *idx, kind) {
+        crate::ai::MetaMove::Upgrade { idx, kind } => match crate::progress::upgrade_card(inherit, *idx, kind, tokens) {
             Ok(msg) => println!("AI·升级[{kind}] {msg}"),
             Err(e) => println!("✖ AI·升级 {e}"),
         },
@@ -968,6 +988,41 @@ mod meta_tests {
         snapshot_entry(&mut save, 5, Faction::Ember, Difficulty::Normal, &[], 9);
         assert!(!path.exists(), "每日槽不该建主线档");
         assert_eq!(save.unwrap().progress.level, 1, "内存档也不该被推进");
+    }
+
+    /// 壳这一侧的钱包接缝：交回只动内存槽、**不自己写盘**——落盘时机仍归「关卡入口快照」独家决定。
+    /// 若有人在这条路上顺手补一次 `persist`，弃局（`q`）就会留下一份"钱已扣、牌没升"的档面，
+    /// 而会话层那两条测（`session.rs`）看不见磁盘，拦不住它。
+    #[test]
+    fn handing_the_wallet_back_moves_the_slot_but_not_the_disk() {
+        use crate::session::Host;
+        let path = snap_path("purse");
+        let mut save = slot(path.clone(), SaveUse::Progress);
+        let mut host = PlayHost {
+            seed: 7, faction: Faction::Ember, diff: Difficulty::Normal,
+            foe: Faction::Frost, boss: None, save: &mut save, frame: Frame::Text, daily_rule: DailyRule::None,
+        };
+        host.set_tokens(15);
+        assert_eq!(host.tokens(), 15, "阶段出口交回的余额进内存槽");
+        assert!(!path.exists(), "交回钱包这一步不许写盘");
+        host.snapshot_next(1, &[], 0);
+        assert_eq!(Progress::load_from(&path).unwrap().tokens, 15, "下一次入口快照把新余额一起带进档面");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 无存档槽 ⇒ 余额读作 **0**，不是免票。爬梯（`ladder`）与冒烟都不落盘，所以它们在规则上就是
+    /// "没攒过钱"：把 `map_or(0, ..)` 换成哨兵值（`u32::MAX`）或干脆跳过检查，这条当场红。
+    #[test]
+    fn a_battle_without_a_save_slot_has_nothing_to_pay_with() {
+        use crate::session::Host;
+        let mut no_slot: Option<SaveSlot> = None;
+        let mut host = PlayHost {
+            seed: 7, faction: Faction::Ember, diff: Difficulty::Normal,
+            foe: Faction::Frost, boss: None, save: &mut no_slot, frame: Frame::Text, daily_rule: DailyRule::None,
+        };
+        assert_eq!(host.tokens(), 0, "没有档面就没有余额");
+        host.set_tokens(15);
+        assert_eq!(host.tokens(), 0, "无槽时交回来的钱不落任何地方，也不凭空多出一槽");
     }
 
     /// 每日记一次通关，走的是**整文件重写**——所以它不能顺带把主线档抹回第1关。
