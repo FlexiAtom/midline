@@ -21,7 +21,7 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 134 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 141 条记录的补丁有没有真打上；
 # 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
 # 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
 # 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
@@ -1089,14 +1089,14 @@ open(p,'w',encoding='utf8').write(s.replace(n,'''                    } else {
                         up -= 1;
                     }'''))"
 run
-echo "### M130 把 derivator 文档头自称的「二十张表／章」改成「十九张表／章」而不动任何推导器 ⇒ 实测 **1** 红（正中预测）：只红在 the_module_header_self_claimed…（S 侧 count_before 撞上 left 19 ≠ right 20，model.rs:1237 当场喊「自称的 derivator 总表数与现推 S 不符」）。正证 D23 这把自声称计数尺咬得住——头里的数字与现推 derivator 章集漂一字即红"
+echo "### M130 把 derivator 文档头自称的「二十一张表／章」改成「二十张表／章」而不动任何推导器 ⇒ 实测 **1** 红（其八 把计数同步到 21 之后复量，本条读的是同一颗牙的新数）：只红在 the_module_header_self_claimed…（S 侧 count_before 撞上 left 20 ≠ right 21，当场喊「自称的 derivator 总表数与现推 S 不符」）。正证 D23 这把自声称计数尺咬得住——头里的数字与现推 derivator 章集漂一字即红"
 restore; py "
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
-n='二十张表／章现在各自带推导器'
+n='二十一张表／章现在各自带推导器'
 assert s.count(n)==1, s.count(n)
-open(p,'w',encoding='utf8').write(s.replace(n,'十九张表／章现在各自带推导器'))"
+open(p,'w',encoding='utf8').write(s.replace(n,'二十张表／章现在各自带推导器'))"
 run
-echo "### M131 把 add_flame_col 的 (side,id) 复合键退化成"只看 id、不看 side"（except.map(|(_,e)| e)==Some(c.id)，SideK 是 Copy 故循环内可反复读 except）⇒ 跨侧同号同列重新被误免；应红在 cross-side-id-collision 的两条常驻锁（cross_side_same_id_card_in_same_column_is_not_exempted…／threshold_burst_does_not_exempt_opposite_side_same_id…）——正证这两把锁真咬着复合键语义：退回单 id 键，那发业火当场少算给对侧同号牌，锁当场红"
+echo "### M131 把 add_flame_col 的 (side,id) 复合键退化成「只看 id、不看 side」（except.map(|(_,e)| e)==Some(c.id)，SideK 是 Copy 故循环内可反复读 except）⇒ 跨侧同号同列重新被误免；应红在 cross-side-id-collision 的两条常驻锁（cross_side_same_id_card_in_same_column_is_not_exempted…／threshold_burst_does_not_exempt_opposite_side_same_id…）——正证这两把锁真咬着复合键语义：退回单 id 键，那发业火当场少算给对侧同号牌，锁当场红"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='                if Some((s, c.id)) == except {'
@@ -1116,4 +1116,53 @@ p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
 a='self.placed_turn != i64::MIN && turn - self.placed_turn >= PLACED_TURNS_REQUIRED'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'turn - self.placed_turn >= PLACED_TURNS_REQUIRED'))"
+run
+echo "### M134 摘掉 ai.rs 那行注释上的 §廿:879 那枚锚（整行留着、只抠锚本身）⇒ 实测 **1** 红（正中预测）：只红在 §廿 推导器 认领面那句（model.rs:3022「§廿 有 1 行既无锚点指回、也不在债表里」）＝漏登记。函数体一字没动 ⇒ 行为侧 0 红；879 全仓只有这一处提及，按 M39 定的口径（交叉引用也算锚）抠掉它就没有第二处替它作证"
+restore; py "
+p='$D/src/ai.rs'; s=open(p,encoding='utf8').read()
+a='决策树第2步（§廿:879）与'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'决策树第2步与'))"
+run
+echo "### M135 文档副本在 §廿 献祭条件那道围栏末尾凭空加一条第 6 条（代码一字不动）⇒ 实测 **6** 红（比预测多 5 条，那 5 条正是本条要登记的东西）：§廿 结构推导红在 model.rs:3001「必检集应得 23 行，实测 24 行」，另外 §廿一／§廿二／§廿三 三条推导器、every_doc_anchor_lands_on_a_nonempty_line… 与债表**一起红**——往文档中间插一行把 897 之后的行号整体下移一位，别人家的锚点落点跟着挪空。这条撞的是 本章行数由文档形态推出、不接受手抄清单 那一半，顺带量出**文档行号是全族共用的坐标**：改文档形状从来不只改本章"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[896].startswith('5. '), '文档行 897 变了，副本口径不再对：'+ls[896]
+ls.insert(897,'6. 变异检验：凭空多出的献祭条件')
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M136 文档副本把 md:897 那条的行首编号由 5. 改成 6.（四条围栏、行数、锚点全不动）⇒ 实测 **1** 红（正中预测）：红在 §廿 推导器 等值层② 那句（model.rs:3109「md:897 的编号应是第 5 条，实测 6」）＝文档条件次序与 SacReason 变体序错开。认领面照旧绿（23 行全有锚）——正证 ② 钉的是次序，不是「有没有指回」，与 M134 各撞一层"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[896].startswith('5. '), '文档行 897 变了，副本口径不再对：'+ls[896]
+ls[896]=ls[896].replace('5. ','6. ',1)
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M137 把 placement_score_at 里那个列威胁权重 2.0 改成 2.5（文档一字不动）⇒ 实测 **1** 红，而且**行为侧 0 红**：只红在 §廿 推导器 等值层①（model.rs:3068「放置得分文档系数多重集与码面乘数多重集不符：文档 [1.5, 2.0, 2.0]／代码 [1.5, 2.0, 2.5]」）。这正是本条要量那句——那个权重从 2.0 挪到 2.5，在全部 220 条测里换不出一次决策差异（它只在两候选接近时才可能换位），唯一看得见它的尺是文档系数对撞；**没有这把尺，它是一个静默改得动的数**"
+restore; py "
+p='$D/src/ai.rs'; s=open(p,encoding='utf8').read()
+a='card_field_value(&b.enemy_hand[idx]) + col_threat(b, col) * 2.0'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'card_field_value(&b.enemy_hand[idx]) + col_threat(b, col) * 2.5'))"
+run
+echo "### M138 文档副本把 md:905「困难 2步预判」改成「困难 4步预判」（代码 search_depth 不动）⇒ 实测 **1** 红（正中预测）：红在 §廿 推导器 等值层③（model.rs:3226「md:905 困难…行为列读到的步数是 4…代码 search_depth 却是 2」）＝难度曲线的署名漂了。档名对撞与 label 桥照旧绿——正证 ③ 量的是「文档给的数 vs 码面用的数」，与 M137 分属两侧"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[904].startswith('困难 2步'), '文档行 905 变了，副本口径不再对：'+ls[904]
+ls[904]=ls[904].replace('2步预判','4步预判',1)
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M139 文档副本把 md:903「简单 随机放置，不评估」里那句「不评估」换成「看缘分」（码面 run_easy 一字不动）⇒ 实测 **1** 红（正中预测）：红在 §廿 推导器 等值层③ 那句前提闸（model.rs:3228「md:903（随机放置，看缘分）说「随机」却没说「不评估」⇒ 下面那条否定式判据的前提没了」）＝前提被文档自己拆掉时尺子当场喊，而不是静默失去那四支评分函数的牙。这条量的正是 其七 那一族的反面：不靠读空蒙绿，靠把前提钉成断言"
+restore; py "
+p='$D/doc.md'; ls=open(p,encoding='utf8').read().split('\n')
+assert ls[902].startswith('简单 随机放置'), '文档行 903 变了，副本口径不再对：'+ls[902]
+ls[902]=ls[902].replace('不评估','看缘分',1)
+open(p,'w',encoding='utf8').write('\n'.join(ls))"
+DOC="$D/doc.md" run
+echo "### M140 把 grant_free_starter 的签名加上 pub（体内行、调用点、期望值全不动）⇒ 实测 **1** 红（正中预测）：红在 §三 推导器 那句自证守卫（model.rs:2257「§三 推导器要在全部 src 里读到恰一处该签名，实测 0 处」）＝本帧补上的那条守卫（池档 negative-list-readers-must-prove-they-read 剩下的那处座位）。改道之前这份名单会静默转绿：md:130 期望恒为空，收到 0 行与读到东西长得一模一样——加 pub 让旧签名串读空，现在它喊人，而不是让空名单冒充「没违规」"
+restore; py "
+p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
+a='    fn grant_free_starter(&mut self) {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    pub fn grant_free_starter(&mut self) {'))"
 run

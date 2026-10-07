@@ -2233,20 +2233,33 @@ mod anchor_tests {
     /// （主动额度 `manual_draws` 与开端堆额度 `starter_draws`）。这条是纯否定式，能兑现它的只有"点名全部碰额度的行"，
     /// 所以取函数体、按写点形状筛，期望值恒为空；§六 那份全局写点名单管不住这里——多一处扣额度两处都会红，
     /// 但红在 §六 那条会把这笔账算到 §六 头上，本章这句「不消耗」就没有自己的尺了。
+    /// 期望恒为空的否定式名单最坏的失效形是**读空了还算绿**（收到 0 行与读到东西长得一模一样），所以这里先自证
+    /// 真收到了那支函数的体内行——同 `s4_entry_lines` 那条守卫，其七 由 M94 量到它静默了四帧，本处是那族剩下的座位。
     fn s3_free_starter_quota_writes() -> Vec<String> {
         let sig = "fn grant_free_starter(&mut self) {";
         let mut out: Vec<String> = Vec::new();
+        let mut found = 0usize;
+        let mut body_len = 0usize;
         for fp in src_rs_files() {
             let src = std::fs::read_to_string(&fp).unwrap();
             if !src.lines().any(|l| l.trim_start().starts_with(sig)) {
                 continue;
             }
-            for l in s3_fn_body(&src, sig) {
+            found += 1;
+            let body = s3_fn_body(&src, sig);
+            body_len = body.len();
+            for l in body {
                 if s3_is_write(&l, "manual_draws") || s3_is_write(&l, "starter_draws") {
                     out.push(l);
                 }
             }
         }
+        assert_eq!(
+            found,
+            1,
+            "§三 推导器要在全部 src 里读到**恰一处** `{sig}`，实测 {found} 处 ⇒ 那支入口改名、拆函数或被复制，下面那份否定式名单读到的已不是打中线的那一段（读空了还算绿）"
+        );
+        assert!(body_len > 0, "`{sig}` 的体内行为空 ⇒ 「一份都不碰额度」这条否定式判据无从下手");
         out.sort();
         out
     }
