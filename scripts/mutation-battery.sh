@@ -1191,7 +1191,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,''))"
 run
 
-echo "### M144 把帧文件名从写入序号改回回合数（其余一字不动）⇒ 实测 **1** 红：红在 meta 那条「每帧一格、报数与盘上文件数一致」尺＝本帧那处实测事故的牙。它红的方式很具体：Boss 炎与冰那一盘第 9 回合连着出两帧（战前、战后），改回回合数就让第二帧盖掉第一帧，于是 index.html 报 10 张而盘上只有 9 个文件。这条是四张交付帧里唯一能**翻图复核**的一处：boss-yanbing-seed2026 的 frame-009 与 frame-010 标题同为「第 9 回合」"
+echo "### M144 把帧文件名从写入序号改回回合数（其余一字不动）⇒ 实测 **1** 红：红在 meta 那条「每帧一格、报数与盘上文件数一致」尺＝本帧那处实测事故的牙。它红的方式很具体：Boss 炎与冰那一盘第 9 回合连着出两帧（战前、战后），改回回合数就让第二帧盖掉第一帧，于是 index.html 报 10 张而盘上只有 9 个文件。这条也是那批交付帧里唯一能**翻图复核**的一处：boss-yanbing-seed2026 的 frame-009 与 frame-010 标题同为「第 9 回合」（实测读数＝1 红，红在 meta 那条尺，报的张数与盘上文件数 9 对 10）"
 restore; py "
 p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
 a='        let name = format!(\"frame-{:03}.svg\", guard);'
