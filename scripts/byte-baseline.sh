@@ -89,4 +89,7 @@ p17(){ printf 'go\n' | "$B" mainline --seed 1 --save "$O/m17.kv" >/dev/null 2>&1
          printf 'up 0 power\ngo\nq\n'; } | "$B" mainline --seed 1 --resume --save "$O/m17.kv" > "$O/p17.txt" 2>&1;
        "$B" progress --save "$O/m17.kv" >> "$O/p17.txt" 2>&1; }
 for f in p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15 p16 p17; do $f; done
-md5sum "$O"/p*.txt | sed "s#$O/##"
+# 取 md5 前先把**输出目录**从文件内容里抠掉：p15/p16/p17 三条会把「存档路径：<目录>」原样印进输出里，
+# 而双臂必然跑在两个不同目录下 ⇒ 不归一就换 md5，量出来的是"脚本换了个临时目录"，不是行为漂移。
+# 这一步此前只写在人话注释里、没进代码，于是同一挂陷阱能被同一个人踩两次（第十六步·其九 实测两次假 DIFF）。
+for f in "$O"/p*.txt; do printf '%s  %s\n' "$(sed "s#$O#<OUT>#g" "$f" | md5sum | cut -d' ' -f1)" "${f#"$O"/}"; done
