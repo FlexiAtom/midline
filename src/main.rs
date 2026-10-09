@@ -18,6 +18,7 @@
 mod ai;
 mod battle;
 mod boss;
+mod canvas;
 mod command;
 mod meta;
 mod model;
@@ -47,6 +48,8 @@ const USAGE: &str = "\
   progress recover [--save F]                               把当前档改名留证 .bad-N，下次从空档开始
   auto [N] [--difficulty X]                                 AI 托管模拟 N 局（默认 1，不落盘）
   auto [N] --boss all|<id> [--faction 1|2|3]                Boss 脚本冒烟：N 轮 × 5 个（或指定）
+  frames --out DIR [--seed N] [--faction 1|2|3] [--difficulty X] [--boss <id>]
+                                                          2D 离线帧：托管打一关，每回合写一张 SVG 到 DIR（--out 必给；不落存档、不动 --save 那条面）
   help                                                      本帮助
 <id> ＝ 1-5 | luzhu|雪爵… 见下：1 炉主 / 2 雪爵 / 3 影长 / 4 炎与冰 / 5 终影
 （Boss 战敌方由脚本接管，不吃难度档；--difficulty 只影响我方托管评分口径 —— 裁定21）
@@ -63,7 +66,7 @@ const USAGE: &str = "\
   --tui               TUI 清屏重绘 + 行输入（对局命令全程可用：play / mainline / daily / boss；auto、progress 不适用）";
 
 /// 吃一个值的长选项（其值不算位置参数）。
-const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", "--save"];
+const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", "--save", "--out"];
 
 /// 不带值的长选项（出现即为真）。它必须单列一张表：漏了它，`--resume` 会被当成未知选项，
 /// 而它的值（如果紧跟位置参数）又不会被吞掉——两处错法互不相干，一起改才对齐。
@@ -113,6 +116,7 @@ fn main() {
     let cmd = if cmd.starts_with('-') { "play" } else { cmd };
     gate_save_flags(cmd, &args);
     gate_tui(cmd, &args);
+    gate_out(cmd, &args);
     // 画帧档：Text 是默认，`--tui` 只切这一档，其余（遭遇/落盘/阶段机）两条路共用同一台 host。
     let frame = if has_flag(&args, "--tui") { meta::Frame::Tui } else { meta::Frame::Text };
     match cmd {
@@ -125,6 +129,7 @@ fn main() {
             }
         }
         "daily" => meta::daily_run(save_path(&args), frame),
+        "frames" => meta::frames_dump(seed, faction, diff, frames_boss(&args), out_dir(&args)),
         "mainline" => meta::mainline_run(seed, faction, diff, save_path(&args), has_flag(&args, "--resume"), frame),
         "play" => match value_flag(&args, "--boss") {
             Flag::Absent => meta::play_run(seed, faction, diff, frame),
@@ -172,6 +177,40 @@ fn gate_tui(cmd: &str, args: &[String]) {
     if !matches!(cmd, "play" | "mainline" | "daily" | "boss") {
         println!("✖ --tui 只作用于对局命令（play / mainline / daily / boss）：「{cmd}」没有可逐帧重绘的对局。");
         std::process::exit(2);
+    }
+}
+
+/// `--out` 的作用域。它是**帧文件的落点**，不是存档位置，所以两条都要响亮：
+/// ① 别的命令带着它 ⇒ 报错。"以为出图了、其实没出"与"以为存了、其实没存"是同一族失真。
+/// ② 只有 `frames` 要它，且 `frames` **不给就报错**——没有"当前目录"这种默认落点可猜，
+///    一次倒几十个文件到别人正在干活的地方，比一条错误难查得多。
+fn gate_out(cmd: &str, args: &[String]) {
+    if cmd != "frames" && has_flag(args, "--out") {
+        println!("✖ --out 不用于「{cmd}」：只有 frames 出帧文件，其它命令的画面走 stdout。");
+        std::process::exit(2);
+    }
+}
+
+fn out_dir(args: &[String]) -> PathBuf {
+    match value_flag(args, "--out") {
+        Flag::Absent => bad_out(None),
+        Flag::Missing => bad_out(Some("值空了")),
+        Flag::Value(v) if v.trim().is_empty() => bad_out(Some("值是空白")),
+        Flag::Value(v) => PathBuf::from(v),
+    }
+}
+
+fn bad_out(why: Option<&str>) -> ! {
+    println!("✖ frames 需要一个 --out <目录>{}：帧文件不往当前目录倒，落点由你给。", why.map(|w| format!("（{w}）")).unwrap_or_default());
+    std::process::exit(2);
+}
+
+/// `frames` 的 `--boss` 是**可选**的（不给＝打一关普通爬关），与 `play --boss` 那个"给了就必须认"同一口径。
+fn frames_boss(args: &[String]) -> Option<BossId> {
+    match value_flag(args, "--boss") {
+        Flag::Absent => None,
+        Flag::Value(raw) => Some(require_boss(raw)),
+        Flag::Missing => bad_boss_arg(),
     }
 }
 

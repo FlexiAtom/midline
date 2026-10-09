@@ -737,6 +737,58 @@ fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, tokens: &mut u3
     }
 }
 
+/// 2D 离线帧记录器（第十四步·其九，走「零依赖离线帧」那一支）：托管打一关，**每个回合写一张 SVG**。
+///
+/// 它落在 `meta` 而不是新开一个壳，是为了复用同一套托管驱动（`auto_turn`）——换的只是"这一帧变成什么"：
+/// Text/Tui 变成 stdout 上的一段字串，本条变成**落盘的字节**。这两种 IO 语义不该塞进同一个 `Frame` 枚举，
+/// 所以这里既不加档也不复制 host：`Frame` 那条 match 一字不动，文本路逐字节如旧。
+/// 唯一的写是 `out` 目录里的 `frame-NNN.svg` 与 `index.html`——不落存档、不碰 `--save` 那条面、不删任何既有文件。
+pub fn frames_dump(seed: u64, faction: Faction, diff: Difficulty, boss: Option<crate::boss::BossId>, out: PathBuf) {
+    let scene = boss.map_or("普通爬关 第1关".to_string(), |id| format!("Boss {} 第{}关", id.name(), id.chapter() * 12));
+    let mut b = match boss {
+        Some(id) => Battle::new_boss(seed, faction, id, Vec::new(), id.chapter() * 12),
+        None => Battle::new_mainline(seed, faction, enemy_faction_for(1), diff, Vec::new(), 1),
+    };
+    if let Err(e) = std::fs::create_dir_all(&out) {
+        println!("✖ 帧目录建不出来：{e}");
+        std::process::exit(2);
+    }
+
+    let mut names: Vec<String> = Vec::new();
+    let mut guard = 0;
+    loop {
+        guard += 1;
+        let v = b.view();
+        let frame = crate::canvas::svg_frame(&v, seed, &scene);
+        // 文件名用**写入序号**，不用回合数：战斗是在某一回合的结算里结束的，那一回合会连着出两帧
+        // （战前、战后），拿回合数命名就让第二帧盖掉第一帧——帧少一张，而报数与 index 都按写入次数算，
+        // 于是"10 张"只有 9 个文件。回合数仍在帧内标题里，序号只保证一帧一格。
+        let name = format!("frame-{:03}.svg", guard);
+        if let Err(e) = std::fs::write(out.join(&name), frame) {
+            println!("✖ 帧文件写不下去：{e}");
+            std::process::exit(2);
+        }
+        names.push(name);
+        if b.over.is_some() || guard >= 300 {
+            break;
+        }
+        auto_turn(&mut b);
+    }
+
+    let mut index = format!("<!DOCTYPE html>\n<html lang=\"zh\"><head><meta charset=\"utf-8\"><title>中线 2D 帧 · seed {seed}</title></head>\n<body style=\"background:#10131a;color:#e6e9f2;font-family:sans-serif\">\n<h2>《中线》2D 帧 · {scene} · seed {seed} · 共 {} 张</h2>\n", names.len());
+    for n in &names {
+        index.push_str(&format!("<p>{n}</p><img src=\"{n}\" width=\"1240\" alt=\"{n}\">\n"));
+    }
+    index.push_str("</body></html>\n");
+    if let Err(e) = std::fs::write(out.join("index.html"), index) {
+        println!("✖ index.html 写不下去：{e}");
+        std::process::exit(2);
+    }
+
+    let outcome = b.over.map_or("未分胜负（到达回合上限）".to_string(), |o| format!("{o:?}"));
+    println!("✓ 帧目录 {}：{} 张 SVG ＋ index.html（场景={scene} seed={seed} 结果={outcome}）", out.display(), names.len());
+}
+
 fn auto_play(b: &mut Battle) {
     let mut guard = 0;
     while b.over.is_none() && guard < 300 {
@@ -1364,5 +1416,40 @@ mod meta_tests {
         // 日志尾同理分派：Text 走 render::log_tail，Tui 走 view().log_tail，各自与改前同一口径。
         assert_eq!(tail_str(Frame::Text, &b), crate::render::log_tail(&b, 12));
         assert_eq!(tail_str(Frame::Tui, &b), b.view().log_tail(12));
+    }
+
+    /// 帧记录器**一帧一个文件**，且报出的张数等于目录里真有的文件数。
+    /// 这条装的是终局那一格：战斗是在某一回合的结算里结束的，那一回合连着出两帧（战前、战后），
+    /// 一旦拿回合数当文件名，战后那帧就静默盖掉战前那帧——盘上少一张，而计数照旧往上走。
+    #[test]
+    fn every_frame_lands_in_its_own_file_and_the_index_agrees_with_the_disk() {
+        let n = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("midline-frames-{}-{n}", std::process::id()));
+        frames_dump(2026, Faction::Ember, Difficulty::Normal, Some(BossId::YanBing), dir.clone());
+
+        let mut svgs: Vec<String> = std::fs::read_dir(&dir)
+            .expect("帧目录应已建出")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".svg"))
+            .collect();
+        svgs.sort();
+        let index = std::fs::read_to_string(dir.join("index.html")).expect("index.html 应与帧同批写出");
+        let claimed: usize = index
+            .split("共 ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|num| num.parse().ok())
+            .expect("index.html 里那句「共 N 张」要能读回来（读不回＝这条没在量任何东西）");
+
+        assert!(svgs.len() >= 3, "至少要有几帧可数，否则这条在空目录上永真：实得 {}", svgs.len());
+        assert_eq!(svgs.len(), claimed, "index 报的张数要等于盘上的 svg 数");
+        let unique: std::collections::HashSet<&String> = svgs.iter().collect();
+        assert_eq!(unique.len(), svgs.len(), "帧文件名不得重复（重复＝后一帧覆盖了前一帧）");
+        // 序号必须连续从 001 起：跳号说明有帧没写出去，重复说明有帧被盖。
+        for (i, name) in svgs.iter().enumerate() {
+            assert_eq!(name, &format!("frame-{:03}.svg", i + 1), "帧序号要连续，第 {} 格实得 {name}", i + 1);
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
