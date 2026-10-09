@@ -107,6 +107,8 @@ fn card_cell(x: i32, y: i32, w: i32, c: &CardView, fill: &str, edge: &str) -> St
     if c.trait_label != "无" {
         marks.push(c.trait_label.to_string());
     }
+    // 开端牌的 `starter` 与 `trait_label` 会撞成同一个词（快照两个字段、中文一个说法），印两遍是噪声不是信息。
+    marks.dedup();
     // 业火足额标记：一个实心小块，不配文字——它是给眼睛看的状态，不是第三条数值。
     let lit = c.flame >= c.threshold;
     // 标记占右上角那一格，属性串是右对齐的：不腾出这块宽度，长属性（`战吼:同列+2焰`）会被方块压住尾字。
@@ -453,6 +455,20 @@ mod tests {
         let tail = head.rsplit(r##"x=""##).next()?;
         let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
         digits.parse().ok()
+    }
+
+    /// 开端牌不许把"开端"印两遍：快照里 `starter` 与 `trait_label` 是两个字段、中文是同一个说法，
+    /// 各自往右上角推一次就成 `开端 · 开端`（首版实测就是这样，交付图上一眼可见）。
+    #[test]
+    fn a_starter_card_says_it_once_not_twice() {
+        let starter = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: true, trait_label: "开端", skills: vec![] };
+        let s = card_cell(0, 0, 300, &starter, PLAYER_CELL, EDGE_PLAYER);
+        assert_eq!(s.matches("开端").count(), 1, "同一个词印两遍＝噪声：{s}");
+
+        // 反面对照：不同来源的两个词该都留下，不许把 dedup 写成"只留第一个标记"。
+        let both = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, flame: 0, upgrades: 1, crafted: true, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
+        let t = card_cell(0, 0, 300, &both, PLAYER_CELL, EDGE_PLAYER);
+        assert!(t.contains("造·升级+1·战吼:同列+2焰"), "三个不同来源的标记要连起来全在：{t}");
     }
 
     /// 折行按**显示宽度**，不按字符数：同样一行预算，全 ASCII 装得下更多字符；
