@@ -21,7 +21,7 @@
 # 而 §七／§八 这类多层等值的章，层号才是这条变异真正的落点。旧记录（M0–M32 那次整族）是 head -6 的截断口径。
 # 但**红字数的单位是"测"，不是"层"**（§四 帧由 M94／M95 纠正的口径）：同一条测里的 assert 是串行的，先炸那层就是
 # 这次读数的全部——"一处新写点同时踩两层、两层的红字互相指出来"那种写法在这两条上不成立，落点要按测名列，层号只标第一个。
-# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 141 条记录的补丁有没有真打上；
+# 想先验补丁写法而不必等整族：bash scripts/battery-preflight.sh（十几秒量完 145 条记录的补丁有没有真打上；
 # 那条尺本帧还顺手量出一类**抬头自己**的静默失效：M82 的抬头在双引号里写了反引号 ⇒ bash 把它当命令替换执行，
 # 日志里那个词整个消失（本帧之前没人发现，因为没人对过抬头文本与源码的一致性）。抬头一律只用「」与全角符号，
 # 不得出现反引号、$ 与 ASCII 双引号——预检会把「未找到命令」直接喊在 stderr 上。
@@ -1165,4 +1165,36 @@ p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='    fn grant_free_starter(&mut self) {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    pub fn grant_free_starter(&mut self) {'))"
+run
+
+echo "### M141 摘掉 candle_readout 的夹负（把 max(0) 去掉，其余一字不动）⇒ 实测 **1** 红：红在 canvas 那条读数口径测（the_candle_readout_clamps_below_zero_and_marks_the_extinguished_wick）＝本帧第 ④ 处失真的牙。这条牙存在的理由不是那个负数好不好看：超额削烛那一刻引擎把 -1 原样交给快照，而文本路 render::candle_bar 是夹 0 再标「烛尽」——两个壳读出两个数就是第二套呈现口径，而这类漂移在本仓只有一种抓法：拿一条测钉住口径"
+restore; py "
+p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+a='    let shown = hp.max(0);'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    let shown = hp;'))"
+run
+
+echo "### M142 把业火点亮时让位的右锚退回常态值（lit 那一支从 34 改成 14，未点亮那支不动）⇒ 实测 **1** 红：红在 canvas 那条方块不压字测＝本帧第 ③ 处失真的牙。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住"
+restore; py "
+p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+a='        let marks_x = x + w - if lit { 34 } else { 14 };'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        let marks_x = x + w - 14;'))"
+run
+
+echo "### M143 摘掉 marks.dedup 那一行（开端牌的两个字段各推一次，撞词不再去重）⇒ 实测 **1** 红：红在 canvas 那条「开端只说一次」测＝本帧第 ⑤ 处失真的牙。这条测的正反两面都是要的：正面数那个词恰出现一次，反面拿一张 造＋升级＋战吼 的牌钉三个标记全在——所以摘掉 dedup 会红，把 dedup 写成「只留第一个标记」也会红，两种坏法各撞一次"
+restore; py "
+p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+a='    marks.dedup();'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M144 把帧文件名从写入序号改回回合数（其余一字不动）⇒ 实测 **1** 红：红在 meta 那条「每帧一格、报数与盘上文件数一致」尺＝本帧那处实测事故的牙。它红的方式很具体：Boss 炎与冰那一盘第 9 回合连着出两帧（战前、战后），改回回合数就让第二帧盖掉第一帧，于是 index.html 报 10 张而盘上只有 9 个文件。这条是四张交付帧里唯一能**翻图复核**的一处：boss-yanbing-seed2026 的 frame-009 与 frame-010 标题同为「第 9 回合」"
+restore; py "
+p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
+a='        let name = format!(\"frame-{:03}.svg\", guard);'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        let name = format!(\"frame-{:03}.svg\", v.player.turn);'))"
 run

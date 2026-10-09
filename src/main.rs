@@ -49,7 +49,7 @@ const USAGE: &str = "\
   auto [N] [--difficulty X]                                 AI 托管模拟 N 局（默认 1，不落盘）
   auto [N] --boss all|<id> [--faction 1|2|3]                Boss 脚本冒烟：N 轮 × 5 个（或指定）
   frames --out DIR [--seed N] [--faction 1|2|3] [--difficulty X] [--boss <id>]
-                                                          2D 离线帧：托管打一关，每回合写一张 SVG 到 DIR（--out 必给；不落存档、不动 --save 那条面）
+                                                          2D 离线帧：托管打一关，每次写入一张 SVG 到 DIR（序号＝写入次序，不是回合数；--out 必给；不落存档、不动 --save 那条面）
   help                                                      本帮助
 <id> ＝ 1-5 | luzhu|雪爵… 见下：1 炉主 / 2 雪爵 / 3 影长 / 4 炎与冰 / 5 终影
 （Boss 战敌方由脚本接管，不吃难度档；--difficulty 只影响我方托管评分口径 —— 裁定21）
