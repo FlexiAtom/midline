@@ -13,7 +13,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//! 安卓壳的 crate 根。**源码级融合**：下面那 14 行 `#[path]` 把主仓 `src/*.rs` 的原文件
+//! 安卓壳的 crate 根。**源码级融合**：下面那张 `#[path]` 表把主仓 `src/*.rs` 的原文件逐模块
 //! 直接编进本 crate，与入口胶水同属一个编译单元——所以本 crate 里没有引擎的一份副本，
 //! 也就不存在"主仓动了、壳里那份还是旧的"这种失真（上一档那 14 份副本欠的同步债在此结构性消失）。
 //!
@@ -24,7 +24,7 @@
 //! 导出面纪律：本 crate 对外只应露出**平台强制**的入口符号（`ANativeActivity_onCreate`）。
 //! 守它的是 `scripts/shell-export-surface.sh`，不是主仓那条检——主仓绿不证明壳没拓宽。
 
-// 壳现在只挂了入口回调，引擎那 14 个模块的大部分项还没被调用，`dead_code` 会淹掉输出。
+// 壳现在只挂了入口回调，引擎那批模块的大部分项还没被调用，`dead_code` 会淹掉输出。
 // 这是"壳尚未接上呈现面"的真实状态，不是需要修的缺陷，所以按整体豁免处理而非逐条 `#[allow]`。
 #![allow(dead_code)]
 
@@ -38,6 +38,8 @@ mod boss;
 mod canvas;
 #[path = "../../src/command.rs"]
 mod command;
+#[path = "../../src/md3.rs"]
+mod md3;
 #[path = "../../src/meta.rs"]
 mod meta;
 #[path = "../../src/model.rs"]
