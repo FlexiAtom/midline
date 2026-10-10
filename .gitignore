@@ -25,3 +25,6 @@ AGENTS.md
 
 # 电池预检的临时副本（带 PID，退出即删；防被 SIGKILL 后残留）
 scripts/.battery-preflight.*.sh
+
+# APK 组包产物（可复现，不入库；签名键在 ~/.midline-android，比它更不该进来）
+/dist
