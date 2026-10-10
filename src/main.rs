@@ -50,9 +50,9 @@ const USAGE: &str = "\
   auto [轮数] --boss all|<id> [--seed S] [--faction 1|2|3]  Boss 脚本冒烟：N 轮 × 5 个（或指定）
   frames --out DIR [--seed S] [--faction 1|2|3] [--difficulty X] [--boss <id>]
                                                           2D 离线帧：托管打一关，每次写入一张 SVG 到 DIR（序号＝写入次序，不是回合数；--out 必给；不落存档、不动 --save 那条面）
-  help  /  -h  /  --help                                    本帮助（-h、--help 在任何位置都有效）
+  help  /  -h  /  --help                                    本帮助（-h、--help 在选项位都有效；值位上它仍是值，不当帮助）
 <id> ＝ 1-5 | luzhu|雪爵… 见下：1 炉主 / 2 雪爵 / 3 影长 / 4 炎与冰 / 5 终影
-（--seed / --faction 不给＝种子7·烬火；auto 那族不给＝自己的夹具默认，见上两行）
+（--seed / --faction 不给＝种子7·烬火；只有不带 --boss 的 auto 用它自己的夹具默认（1000 起·每轮 +1·烬火），auto --boss 那一支照旧按种子7·烬火）
 （参数面三条口径，任何一条违反都直接 rc=2，不存在「警告一句再回退」：
  ① 给了值却读不懂 ⇒ 拒；② 这条命令不读的旗标 ⇒ 拒（谁读它，报错里会列出来）；③ 多余的位置参数 ⇒ 拒。
  其中 --difficulty 有三个消费者：敌方 AI 的搜索档、我方托管的融合/升级决策、以及档面（mainline 落盘 difficulty、progress 回显）；
@@ -76,7 +76,8 @@ const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", 
 /// 而它的值（如果紧跟位置参数）又不会被吞掉——两处错法互不相干，一起改才对齐。
 const BOOL_FLAGS: &[&str] = &["--resume", "--tui"];
 
-/// 全局旗标：在**任何位置**出现都印帮助、rc=0。它不进 `READS`（作用域表），因为它的"作用域"就是全部 argv，
+/// 全局旗标：出现在**选项位**上就印帮助、rc=0；带值旗标的**值位**上它仍是那个值（判据在 `option_tokens`）。
+/// 它不进 `READS`（作用域表），因为它的"作用域"就是全部 argv，
 /// 包括那条命令本身不认识的情况。从前 `-h` 只在首词有效，而 `reject_unknown_flags` 又把它排除在闸外——
 /// 于是 `play -h` 既不报错、也不印帮助，直接开打一局。
 const HELP_FLAGS: &[&str] = &["-h", "--help"];
@@ -98,9 +99,57 @@ const READS: &[(&str, &[&str])] = &[
     ("--out", &["frames"]),
 ];
 
-/// 认得的命令词。闸用它做一件事：**未知命令不归闸管**。
-/// `bogus --seed 1` 该听到"未知命令：bogus"，而不是"--seed 不用于「bogus」"——后者把真问题（打错了命令）说成了假问题。
+/// 认得的命令词。它是**未知命令那条真值的唯一来源**：`main()` 在两道闸之前先按它拒一次，
+/// 于是 `bogus --seed 1` 听到的是"未知命令：bogus"，而不是"--seed 不用于「bogus」"或"--seed 的值读不懂"——
+/// 后两句都把真问题（命令打错了）说成了假问题。表与 `main()` 里那个 match 的分支一一对上（对不上时 `unreachable!` 当场暴露）。
 const CMDS: &[&str] = &["auto", "boss", "daily", "frames", "help", "mainline", "play", "progress"];
+
+/// 编译期用的字符串相等。`==` 在 const 里是 trait 调用、还不许（rustc 1.97 报 E0658），
+/// 而这份检查要的就是"有人漏填表时编译不过"，所以它不能是运行时断言。
+const fn same(a: &str, b: &str) -> bool {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    if x.len() != y.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < x.len() {
+        if x[i] != y[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// 两张表的**编译期**不变量。这两格不是整洁癖，是本帧口径自己的两条前提：
+/// ① 表里出现的旗标名必须同时被"带值/布尔"那两张表认得——否则它既不进 `option_tokens` 的跳值规则、
+///    也不被任何解析口读，新加一条旗标只写进 `READS` 就正好造出口径要杀的那个形状（人人可给、无人读）。
+/// ② 每行的命令名单不得为空——空名单会印出「它只被  读」这种半句话，而它下面那个 `exit(2)` 照跑。
+/// 写在 const 里＝编译期就炸，不占一次测试运行，也不依赖有人去跑。
+const _: () = {
+    let mut i = 0;
+    while i < READS.len() {
+        let (name, ok) = READS[i];
+        assert!(!ok.is_empty(), "READS 里有一行的命令名单是空的");
+        let mut in_table = false;
+        let mut j = 0;
+        while j < VALUE_FLAGS.len() {
+            if same(VALUE_FLAGS[j], name) {
+                in_table = true;
+            }
+            j += 1;
+        }
+        let mut k = 0;
+        while k < BOOL_FLAGS.len() {
+            if same(BOOL_FLAGS[k], name) {
+                in_table = true;
+            }
+            k += 1;
+        }
+        assert!(in_table, "READS 里的旗标不在 VALUE_FLAGS／BOOL_FLAGS：它没人解析，闸却会放它过去");
+        i += 1;
+    }
+};
 
 /// 命令 × 这条命令吃几个位置参数。表里没有的命令＝0 个。
 /// 依据是 §2 那格 `progress recover extra`：多余参数今天被按"recover"办，**真把档改了名**。
@@ -110,10 +159,13 @@ const ARITY: &[(&str, usize)] = &[("auto", 1), ("boss", 1), ("progress", 1)];
 /// 但可选值在报错文案里出现过两处（旧 `parse_difficulty` 与 USAGE 各写一遍）就会漂 ⇒ 收成一处。
 const DIFFICULTIES: &str = "easy|normal|hard|expert";
 
-/// 未知选项一律当场拒。两个洞一起补：
-/// ① 从前只测 `--` 前缀 ⇒ `play -x` 静默开打一局；② 带值旗标的**值**不参与判断，
-/// 所以 `--out -tmp` 里那个 `-tmp` 仍是目录名、不会被误判成选项（它与 `positionals` 共用同一套"跳过值"的规则）。
-fn reject_unknown_flags(args: &[String]) {
+/// argv 里**参与"这是不是一个选项"判断**的 token：跳过命令词，也跳过带值旗标的值。
+/// 这条跳值规则从前有三个读手——`reject_unknown_flags` 一份、`positionals` 一份、帮助扫描**一份都没写**——
+/// 于是 `progress --save -h` 里那个 `-h` 既是 `--save` 的值、又被当成帮助旗标：rc=0 印完帮助、一个字节不做事，
+/// 正是本帧口径要杀的「你给了，程序接了，但没人按你给的意思办」那一格。
+/// 现在它是这三处唯一的判据：帮助扫描与 `reject_unknown_flags` 直接用它，`positionals` 由它派生。
+fn option_tokens(args: &[String]) -> Vec<&String> {
+    let mut out = Vec::new();
     let mut it = args.iter();
     // 首词只有在不是选项时才是命令词——与 `positionals` 同一条判据，两处不许各写一份。
     if args.first().is_some_and(|a| !a.starts_with('-')) {
@@ -124,6 +176,16 @@ fn reject_unknown_flags(args: &[String]) {
             it.next();
             continue;
         }
+        out.push(a);
+    }
+    out
+}
+
+/// 未知选项一律当场拒。两个洞一起补：
+/// ① 从前只测 `--` 前缀 ⇒ `play -x` 静默开打一局；② 带值旗标的**值**不参与判断，
+/// 所以 `--out -tmp` 里那个 `-tmp` 仍是目录名、不会被误判成选项（判断面走的是 `option_tokens`）。
+fn reject_unknown_flags(args: &[String]) {
+    for a in option_tokens(args) {
         if a.starts_with('-') && !BOOL_FLAGS.contains(&a.as_str()) && !HELP_FLAGS.contains(&a.as_str()) {
             println!(
                 "✖ 未知选项：{a}（可用 {} / {}）",
@@ -135,39 +197,38 @@ fn reject_unknown_flags(args: &[String]) {
     }
 }
 
-/// 位置参数：跳过命令词、长选项及其值。
+/// 位置参数：`option_tokens` 里那些不以破折号开头的 token。
+/// 它从前自己再写一遍"跳命令词＋跳带值旗标的值"——两条判据与 `option_tokens` 逐字等价
+/// （`VALUE_FLAGS` 里每一条都以 `--` 开头，所以那句 `starts_with("--")` 外壳是空守卫），
+/// 于是同一件事有两处可以各自漂开。收成一处派生后，`positionals` 与闸只剩**读法**不同：
+/// 闸要看所有非值 token（不认得的得拒），它只看不是选项的那一族（多出来的得拒）。
 /// 首词只有在**不是选项**时才算命令词——旧写法无条件 `skip(1)`，于是 `midline --difficulty expert`
 /// 这种"无命令词"的合法调用会把它自己的值 `expert` 漏成位置参数（今天没人读它所以看不出来；
 /// 一旦装上"多余位置参数就拒"的闸，这条泄漏就会**误拒合法调用**，所以闸之前先修这里）。
 fn positionals(args: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut it = args.iter();
-    if args.first().is_some_and(|a| !a.starts_with('-')) {
-        it.next();
-    }
-    while let Some(a) = it.next() {
-        if a.starts_with("--") {
-            if VALUE_FLAGS.contains(&a.as_str()) {
-                it.next();
-            }
-            continue;
-        }
-        out.push(a.clone());
-    }
-    out
+    option_tokens(args).into_iter().filter(|a| !a.starts_with('-')).cloned().collect()
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("play");
-    // `help` 仍是命令词；`-h`／`--help` 是全局旗标，任何位置出现都印帮助。
-    if cmd == "help" || args.iter().any(|a| HELP_FLAGS.contains(&a.as_str())) {
+    // `help` 仍是命令词；`-h`／`--help` 是全局旗标，在选项位上出现都印帮助——但**值位不算**（判据在 `option_tokens`），
+    // 否则 `progress --save -h` 会把帮助打印出来、一个字节不做事，而用户以为他在读一个叫 `-h` 的档。
+    if cmd == "help" || option_tokens(&args).iter().any(|a| HELP_FLAGS.contains(&a.as_str())) {
         println!("{USAGE}");
         return;
     }
     reject_unknown_flags(&args);
     // 无命令词、直接给标志（`midline --seed 42`）＝ play，旧版即如此，不当未知命令。
     let cmd = if cmd.starts_with('-') { "play" } else { cmd };
+    // **未知命令先说完，再动任何值闸**。这一格是本帧自己造出来的回归：作用域与 arity 两道闸排在值解析之前，
+    // 而它们对不认识的命令词直接 `return`；如果不在这里也拦一道，`bogus --seed abc` 就会先听到「--seed 的值读不懂」——
+    // 拿"值"抢走"命令打错了"那句真话，正是本帧在别处逐条杀掉的那种失真。CMDS 与 match 的分支必须一一对上。
+    if !CMDS.contains(&cmd) {
+        println!("✖ 未知命令：{cmd}");
+        println!("{USAGE}");
+        std::process::exit(2);
+    }
     // **先问作用域，再问值读不读得懂**：`daily --difficulty 1` 该听到的是"daily 不读 --difficulty"，
     // 而不是"1 读不懂"——后者暗示换成 `--difficulty easy` 就行，而它对 daily 一样什么都不做。
     // 顺序反过来时，越界的旗标会先按值报错，把"这条命令根本不接它"这层信息吃掉。
@@ -205,11 +266,9 @@ fn main() {
             }
         },
         "progress" => progress_cmd(&args),
-        other => {
-            println!("✖ 未知命令：{other}");
-            println!("{USAGE}");
-            std::process::exit(2);
-        }
+        // 走到这里只可能是 `CMDS` 与这些分支脱钩（加了命令词却没加分支），那是改表的编程错、不是用户输入。
+        // 这里不再印第二句「未知命令」——上面那道闸是它唯一一处，两处同话就是本帧要消的那一族病。
+        other => unreachable!("命令词「{other}」在 CMDS 里却没有分支（CMDS 与 match 脱钩＝改表的编程错）"),
     }
 }
 
@@ -217,9 +276,6 @@ fn main() {
 /// "以为存了、其实没存"、"以为开了 TUI、其实没开"、"以为换了阵营、其实没换"是同一种失真，
 /// 用一处表挡住比三道闸各挡一段可靠。
 fn gate_flag_scope(cmd: &str, args: &[String]) {
-    if !CMDS.contains(&cmd) {
-        return;
-    }
     for (flag, ok) in READS {
         if !ok.contains(&cmd) && has_flag(args, flag) {
             println!("✖ {flag} 不用于「{cmd}」：它只被 {} 读。", ok.join(" / "));
@@ -231,9 +287,6 @@ fn gate_flag_scope(cmd: &str, args: &[String]) {
 /// 位置参数超量 ⇒ 当场拒。多余的参数不猜、不忽略：`progress recover extra` 那一格今天会把
 /// `recover` 之外的词连同 `recover` 一起办，那不是显示失真，是**动了盘**。
 fn gate_arity(cmd: &str, args: &[String]) {
-    if !CMDS.contains(&cmd) {
-        return;
-    }
     let want = ARITY.iter().find(|(c, _)| *c == cmd).map_or(0, |(_, n)| *n);
     let got = positionals(args).len();
     if got > want {

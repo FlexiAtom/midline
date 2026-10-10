@@ -50,21 +50,30 @@ cargo build --release     # 产物：target/release/midline
 
 | 命令 | 作用 |
 |---|---|
-| `play [--seed N] [--faction 1\|2\|3] [--difficulty X]` | 普通爬关，阵营三循环，不落盘 |
+| `play [--seed S] [--faction 1\|2\|3] [--difficulty X]` | 普通爬关，阵营三循环，不落盘 |
 | `play --boss <id>` | 跳打某章末 Boss |
-| `mainline [--seed N] [--faction …] [--difficulty X]` | 主线 60 关（5 章，章末 Boss），自动存档 |
+| `mainline [--seed S] [--faction …] [--difficulty X]` | 主线 60 关（5 章，章末 Boss），自动存档 |
 | `mainline --resume [--save F]` | 从存档的「本关入口」续打；不给 `--resume` 则从第 1 关重开 |
-| `boss <id> [--seed N]` | 单关跳打 Boss（`<id>` = 1–5，或 `luzhu`／`雪爵`… ） |
+| `boss <id> [--seed S]` | 单关跳打 Boss（`<id>` = 1–5，或 `luzhu`／`雪爵`… ） |
 | `daily [--save F]` | 每日挑战（以**本地日期**为种子、日界＝机器本地零点；一天 3 次，一次是一场 30 回合生存战，每场抽一条当日特殊规则——4 条特殊规则（业火狂潮／短兵相接／献祭余响／粘稠暗影）全部在对局内生效；只有活满通关扣额度，败局不扣、弃局不记账，不动主线进度） |
 | `progress [--save F]` | 只读看当前存档；档读不懂则 `rc=2` |
 | `progress recover [--save F]` | 把当前档改名留证 `.bad-N`，下次从空档开始 |
-| `auto [N] [--difficulty X]` | AI 托管模拟 N 局（默认 1，不落盘） |
-| `auto [N] --boss all\|<id>` | Boss 脚本冒烟：N 轮 × 5 个（或指定） |
+| `auto [轮数] [--seed S] [--faction …] [--difficulty X]` | AI 托管模拟若干局（轮数默认 1；**不给 `--seed` 时从 1000 起、每轮 +1**，这是 `auto` 自己的夹具默认，不是 `play` 那族的种子 7；不落盘） |
+| `auto [轮数] --boss all\|<id> [--seed S] [--faction …]` | Boss 脚本冒烟：N 轮 × 5 个（或指定） |
 | `… --tui` | TUI 清屏重绘 + 行输入；四条对局命令**全程可用**（`play`／`mainline`／`daily`／`boss`），与文本路共用同一台 host 与落盘逻辑；`auto`／`progress` 无盘面可绘，带 `--tui` 显式报错 |
-| `frames --out DIR [--seed N] [--boss <id>]` | **2D 离线帧**：托管打一关，每次写入一张 `frame-NNN.svg` ＋ 一份 `index.html` 翻页页。非交互、不落存档、不碰 `--save` 那条落盘面；同 seed 两跑逐字节相同。`--out` 缺值显式报错（帧不往当前目录倒） |
+| `frames --out DIR [--seed S] [--faction …] [--difficulty X] [--boss <id>]` | **2D 离线帧**：托管打一关，每次写入一张 `frame-NNN.svg` ＋ 一份 `index.html` 翻页页。非交互、不落存档、不碰 `--save` 那条落盘面；同 seed 两跑逐字节相同。`--out` 缺值显式报错（帧不往当前目录倒） |
+| `help`／`-h`／`--help` | 本帮助。后两者是**全局旗标**：在选项位出现即印帮助并 `rc=0`（`play -h` 不再"既不报错也不印帮助，直接开打一局"）；带值旗标的**值位**上它仍是那个值（`progress --save -h` 读的就是那个叫 `-h` 的档，不是帮助） |
 
-`--faction` 1＝烬火教团／2＝霜誓守卫／3＝幽影议会。不给 `--seed`／`--faction` 时＝种子 7·烬火；
-给了却读不懂会直接报错退出（`rc=2`），不会静默回退成别的值。
+`--faction` 1＝烬火教团／2＝霜誓守卫／3＝幽影议会。不给 `--seed`／`--faction` 时＝种子 7·烬火（`auto` 那族除外，见上表）。
+
+**参数面三条口径**（任何一条违反都 `rc=2`，不存在"警告一句再回退"）：
+① **给了值却读不懂 ⇒ 拒**——`--difficulty turbo`／`auto 3x`／`--seed 4x`／`--faction 9` 同一出口；
+② **这条命令不读的旗标 ⇒ 拒**，报错里列出它到底被谁读——`daily --seed`、`mainline --boss`、`play --save`、`auto --tui` 都在这一格；
+③ **多余的位置参数 ⇒ 拒**——`progress recover extra` 那一格从前不是显示失真而是**动了盘**（真把人的档改名成 `.bad-N`）。
+名单与 arity 各收成一处表（`main.rs` 的 `READS`／`ARITY`），三道同族闸（`gate_save_flags`／`gate_tui`／`gate_out`）已并进 `READS`；
+"什么算选项"也收成一处判据（`option_tokens`：跳过命令词、跳过带值旗标的值），帮助扫描、未知选项闸与 `positionals` 三处共读它——从前帮助扫描**没写**这条，于是 `progress --save -h` 印完帮助 `rc=0` 什么都不做。
+两条闸之前还有一道**未知命令先拒**：`bogus --seed abc` 听到的是"未知命令：bogus"，而不是让值闸抢走那句真话。
+重复给同一个旗标＝**最后一个赢**，且所有带值旗标走**同一个** helper（从前 `--seed`／`--faction` 按最后一个赢、其余按第一个赢，两套规则并存）。
 
 战斗内一行一条命令：`p <手牌idx> <P1-P4>` 放置｜`s <P1-P4>` 场上献祭｜`sh <idx>` 手牌献祭｜
 `di`／`ds` 抽继承堆／开端堆｜`e` 结束回合｜`l` 日志｜`b` Boss 档案｜`q` 退出。
@@ -85,7 +94,7 @@ cargo build --release     # 产物：target/release/midline
 cargo test
 ```
 
-233 项全在仓库内，含两类值得一提的：
+251 项全在仓库内（233 项引擎单测 ＋ 18 项**端到端 CLI 测**——它们 exec 真二进制、只吃 std，量的是 `rc` 与 stdout 而不是内部状态），含两类值得一提的：
 
 - **确定性**：同种子必得同结果（战斗、AI 托管、Boss 脚本都靠这条活着）。
 - **反向覆盖机检**：规则文档每一章的"必检行"必须由代码指回——锚点指回、挂成有去处的债、或被文档自身的
@@ -389,7 +398,7 @@ p15＝一份手写的 schema=2 旧档交新二进制 `progress` 读，钉"旧档
 p16＝每日挑战打进真实回合再复跑 `progress`，第十六步·其五 才补上——旧那 4 条每日场景全在开局前后就收住，「存活×3＋通关15」这支乘法在字节面**一次都没被走过**；
 p17＝主线真打赢一关再付费升级、复跑 `progress`，第十六步·其六 才补上——p1–p16 里唯一进结算环的场景全走 `play`，而爬梯没有存档槽 ⇒ 余额恒 0，**"扣了 10 枚"这件事在字节面上一次都没被看见**。
 **p13 的"今天"由二进制自己报**（`today_seed()`：先弃一局把它印的 seed 抠出来再造档面）——脚本里另算一份哈希就是第二套真值，
-它会"永远正确"，因为它从不与程序对撞）、`scripts/mutation-battery.sh`（143 条反证变异＝**145 条记录**，外加 M0 不打补丁的对照与 M19
+它会"永远正确"，因为它从不与程序对撞）、`scripts/mutation-battery.sh`（154 条反证变异＝**156 条记录**，外加 M0 不打补丁的对照与 M19
 复原收尾，每条变异都必须把某一条测试撞红，并记下**红在哪条测、红在哪一层**——`run()` 连 panic 正文前几行一起打，
 多层等值的章里"落点"要按层号读；但**红字数的单位是"测"不是"层"**（§四 帧由 M94／M95 量正：同一条测里 assert 串行，
 先炸那层就是这次读数的全部，别把"两层都会喊"写成"两红"）、`scripts/battery-preflight.sh`（半分钟量完"每条变异的补丁

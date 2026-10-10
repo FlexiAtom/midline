@@ -56,9 +56,11 @@ fn run(args: &[&str]) -> Run {
     Run { rc: p.status.code().unwrap_or(-1), out }
 }
 
-/// 每条测自己的临时档目录。名字由调用点给（**不用时钟、不用随机数**：那会让失败复现不了）。
+/// 每条测自己的临时档目录。名字由调用点给（**不用时钟、不用随机数**：那会让失败复现不了），
+/// 末尾再拼**进程号**——电池在 `mktemp` 出来的副本里跑同一套测，两个 `cargo test` 并发时
+/// 同名沙盒会互相 `remove_dir_all`，把对方的读数打成假红/假绿（这条是第二轮审查实测到的形状）。
 fn sandbox(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("midline-cli-{name}"));
+    let root = std::env::temp_dir().join(format!("midline-cli-{}-{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("建不出临时目录");
     root
@@ -263,12 +265,37 @@ fn repeated_flag_last_wins() {
 #[test]
 fn unknown_command_still_reports_itself() {
     // 作用域闸排在值解析之前，就必须让开未知命令：`bogus --seed 1` 的真问题是命令词打错了，
-    // 不是"bogus 不读 --seed"。
-    for args in [vec!["bogus"], vec!["bogus", "--seed", "1"], vec!["bogus", "extra", "more"]] {
+    // 不是"bogus 不读 --seed"。`--seed abc` 那一格是本帧自己造出来的回归：值闸比 dispatch 先开口，
+    // 「--seed 的值读不懂」会抢走「未知命令」——所以闸不是"让开"就够，得当场把命令词拒掉。
+    for args in [
+        vec!["bogus"],
+        vec!["bogus", "--seed", "1"],
+        vec!["bogus", "--seed", "abc"],
+        vec!["bogus", "--tui"],
+        vec!["bogus", "extra", "more"],
+    ] {
         let r = run(&args);
         assert_eq!(r.rc, 2, "{args:?} 该非零退出：{}", r.out);
         assert!(r.first().contains("未知命令"), "{args:?} 没报出未知命令：{}", r.first());
     }
+}
+
+#[test]
+fn help_flag_in_a_value_slot_stays_a_value() {
+    // 帮助扫描从前逐 token 命中、不跳值 ⇒ `progress --save -h` 印完帮助 rc=0，一个字节不做事：
+    // 用户以为自己在读一个叫 `-h` 的档。同一条"带值旗标的值不参与判断"的规则必须三处共读（见 `option_tokens`）。
+    let dir = sandbox("help-in-value");
+    let r = run(&["progress", "--save", &dir.join("-h").to_string_lossy()]);
+    assert!(!r.out.contains("《中线》核心规则 CLI"), "把 -h 当帮助旗标吞掉了：{}", r.out);
+    assert_eq!(r.rc, 0, "progress 读一个不存在的档该照旧报路径：{}", r.out);
+    let d = run(&["auto", "--seed", "-h"]);
+    assert!(!d.out.contains("《中线》核心规则 CLI"), "把 -h 当帮助旗标吞掉了：{}", d.out);
+    assert_eq!(d.rc, 2, "-h 不是合法种子值：{}", d.out);
+    assert!(d.first().contains("读不懂"), "该报「--seed 的值读不懂」，实得：{}", d.first());
+    // 反过来：真在选项位的 -h 仍然有效，别把闸做成"值位置的判断顺手吃掉选项位"。
+    let h = run(&["play", "-h"]);
+    assert_eq!(h.rc, 0, "play -h 该印帮助：{}", h.out);
+    assert!(h.out.contains("《中线》核心规则 CLI"), "play -h 没印帮助：{}", h.out);
 }
 
 #[test]

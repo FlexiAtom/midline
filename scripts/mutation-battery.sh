@@ -1239,12 +1239,12 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    match args.iter().position(|a| a == name) {'))"
 run
 
-echo "### M150 把未知选项闸的前缀判据从单破折号退回只测两个破折号 ⇒ 实测 **1** 红：红在那条单破折号尺。play -x 在改法之前静默开打一局，因为闸只看得见两个破折号开头的那一族。这条与 M153 各锚一处：同一个 starts_with 判据在闸与 positionals 里是两份同话，摘错一份的量程完全不同"
+echo "### M150 把未知选项闸的前缀判据从单破折号退回只测两个破折号 ⇒ 实测 **1** 红：红在那条单破折号尺。play -x 在改法之前静默开打一局，因为闸只看得见两个破折号开头的那一族。这条与 M153 各锚另一条判据：M150 摘的是闸里的'什么算选项'（前缀），M153 摘的是 option_tokens 里的'首词算不算命令词'（跳值的前半）——两条规则、两处落点，各有一把牙。另记一条写补丁的形状坑：替换串写成 \x27--\x27 会产出 Rust 的非法 char 字面量 ⇒ 编译失败，整族的 run() 当场喊「没有落点」（预检看不见这格，它只验补丁打到码上没有）；要的是 \x22--\x22"
 restore; py "
 p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
 a='        if a.starts_with(\x27-\x27) && !BOOL_FLAGS'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,'        if a.starts_with(\x27--\x27) && !BOOL_FLAGS'))"
+open(p,'w',encoding='utf8').write(s.replace(a,'        if a.starts_with(\x22--\x22) && !BOOL_FLAGS'))"
 run
 
 echo "### M151 让 auto 的玩家阵营退回硬写烬火（签名与 seed 那半都不动）⇒ 实测 **1** 红：红在 auto 读阵营那尺。这条牙的存在理由是它自己量出来的：300 个种子只有 2 个能让阵营在 auto 的输出面上露头，所以它必须钉住 seed=22 那一个，换 seed 就量不到"
@@ -1255,7 +1255,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'Battle::new_mainline(seed, Faction::Ember, enemy_faction_for(level)'))"
 run
 
-echo "### M152 让 auto 的种子退回写死 1000 起（阵营那半不动）⇒ 实测 **1** 红：红在 auto 读 seed 那尺。这条是本帧 p5 那唯一一处预期漂移的牙：摘掉它，auto 1 --seed 7 的头报会重新印 seed=1000——一行自称可复现的输出，复现的是别人那一局"
+echo "### M152 让 auto 的种子退回写死 1000 起（阵营那半不动）⇒ 实测 **3** 红（抬头起初预测 1 红，整族读数改的是抬头）：红在 auto 读 seed 那尺，**外加** auto 读阵营那条与重复旗标 last-wins 那两条。后两条不是噪声而是同一件事的两面：阵营那条必须钉 seed=22 才量得到阵营差异（1000 起时两侧跑的是同一局，断言「烬火止于第1关／霜誓到第2关」与 assert_ne 一起塌），last-wins 那条读的是头报里的 seed=2。这条牙是本帧 p5 那唯一一处预期漂移的牙：摘掉它，auto 1 --seed 7 的头报会重新印 seed=1000——一行自称可复现的输出，复现的是别人那一局"
 restore; py "
 p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
 a='        let seed = base.wrapping_add(i as u64);'
@@ -1263,11 +1263,26 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        let seed = 1000 + i as u64;'))"
 run
 
-echo "### M153 把 positionals 的首词判据退回无条件跳过（只退 positionals 那一处，未知选项闸不动）⇒ 实测 **1** 红：红在「无命令词那条路不许吞掉自己的值」那尺。这条牙量的是两处同话里最坏的一种：闸装上之后，这个泄漏的表现会从「没人看见」变成「合法调用被误拒」——midline --seed 42 会报「play 最多接 0 个参数」"
+echo "### M153 把「首词只有在不是选项时才算命令词」那条判据退回无条件 skip ⇒ 实测 **1** 红：红在「无命令词那条路不许吞掉自己的值」那尺。这条牙量的是最坏的一种泄漏：闸装上之后，那个泄漏的表现会从「没人看见」变成「合法调用被误拒」——midline --seed 42 会报「play 最多接 0 个参数」。本帧后半把它从两份收成一处（positionals 改由 option_tokens 派生），所以摘这里＝闸与 arity 同时退，而'只退 positionals 那一处'这种错法从此在文件里无处可写——这是收成一处本身的证据，不是损失"
 restore; py "
 p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
 g='    if args.first().is_some_and(|a| !a.starts_with(\x27-\x27)) {\n        it.next();\n    }\n'
-assert s.count(g)==2, s.count(g)   # 闸与 positionals 各一份，同话两处
-k=s.rfind(g)                        # 后那一处＝positionals（文件里它排在 reject_unknown_flags 之后）
-open(p,'w',encoding='utf8').write(s[:k]+'    it.next();\n'+s[k+len(g):])"
+assert s.count(g)==1, s.count(g)   # 收成一处之后，'摘错哪一份'这种错法已经没有格子可写
+open(p,'w',encoding='utf8').write(s.replace(g,'    it.next();\n'))"
+run
+
+echo "### M154 把帮助旗标的扫描退回「逐 token 命中、不跳值」（option_tokens 换回 args.iter）⇒ 实测 **1** 红：红在「值位上的 -h 不许当帮助旗标」那尺。这条牙守的是本帧自己造出来的一格回归：装上全局帮助旗标之后，progress --save -h 与 frames --out -h 印完帮助 rc=0、一个字节不做事——一个本该 rc=2 的调用被一个读不懂的值换成了 rc=0，比「给了没人读」更坏，因为程序还回了一句「成功」"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='    if cmd == \x22help\x22 || option_tokens(&args).iter().any(|a| HELP_FLAGS'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    if cmd == \x22help\x22 || args.iter().any(|a| HELP_FLAGS'))"
+run
+
+echo "### M155 摘掉 main() 里「未知命令先拒」那一道（两道闸已不再自带 CMDS 前置，摘这里就等于让值闸抢在 dispatch 之前开口）⇒ 实测 **1** 红：红在「未知命令那条真值不许被抢」那尺。bogus --seed abc 会先听到「--seed 的值读不懂」，而真问题是命令词打错了；同一格还把 dispatch 的兜底分支打成 unreachable! 的 panic——那是 CMDS 与分支必须一一对上这件事的正面证据，不是第二条要修的文案"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='    if !CMDS.contains(&cmd) {\\n        println!(\\x22✖ 未知命令：{cmd}\\x22);\\n        println!(\\x22{USAGE}\\x22);\\n        std::process::exit(2);\\n    }\\n'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
 run
