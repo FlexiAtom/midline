@@ -120,7 +120,10 @@ fn main() {
         return;
     }
     reject_unknown_flags(&args);
-    let (seed, faction) = parse_opts(&args);
+    let (seed_given, faction_given) = parse_opts(&args);
+    // 对局那一族的默认＝种子 7·烬火（`USAGE` 里写死的那两个数）；`auto` 用它自己的夹具默认，见 `meta::auto_battles`。
+    let seed = seed_given.unwrap_or(7);
+    let faction = faction_given.unwrap_or(Faction::Ember);
     let diff = parse_difficulty(&args);
     // 无命令词、直接给标志（`midline --seed 42`）＝ play，旧版即如此，不当未知命令。
     let cmd = if cmd.starts_with('-') { "play" } else { cmd };
@@ -133,7 +136,7 @@ fn main() {
         "auto" => {
             let n = auto_rounds(&args);
             match value_flag(&args, "--boss") {
-                Flag::Absent => meta::auto_battles(n, diff),
+                Flag::Absent => meta::auto_battles(seed_given, faction_given, n, diff),
                 Flag::Value(raw) => auto_bosses(seed, faction, n, raw),
                 Flag::Missing => bad_boss_arg(),
             }
@@ -336,29 +339,33 @@ fn bad_opt(got: Option<&str>, flag: &str, want: &str) -> ! {
     std::process::exit(2);
 }
 
-/// `--seed N` / `--faction 1|2|3`；**不给** → 种子7·烬火，**给了但读不懂** → 报错退出。
+/// `--seed N` / `--faction 1|2|3` 的读数。**不给** ⇒ `None`；**给了但读不懂** ⇒ 报错退出 rc=2。
 /// 静默回退的代价：`--seed 4x` 跑出来的那局根本不是你要复现的那局，而输出里没有任何地方说命令被改写过；
 /// `--faction 9` 更糟——回退到烬火是换掉整张卡表，头报却照样写着"烬火教团"，看着就像你打的就是那个阵营。
-/// 与 `--save` 同一口径（见 `save_path`）。
-fn parse_opts(args: &[String]) -> (u64, Faction) {
-    let mut seed: u64 = 7;
-    let mut faction = Faction::Ember;
+/// 与 `--save` 同一口径（见 `save_path`）。重复给同一个旗标＝**最后一个赢**（扫到argv 末尾）。
+///
+/// 默认值**不在这里**：`play` 那一族默认「种子 7·烬火」，`auto` 那一族默认「1000 起、每轮 +1」。
+/// 两个是各自命令的口径，谁也不许拿对方的默认当自己的——从前 `auto` 就是不看这里，
+/// 于是 `auto --seed 7` 的头报印 `seed=1000`：一行自称"可复现"的输出，复现的是别人那一局。
+fn parse_opts(args: &[String]) -> (Option<u64>, Option<Faction>) {
+    let mut seed: Option<u64> = None;
+    let mut faction: Option<Faction> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--seed" => {
                 let raw = it.next();
                 match raw.and_then(|s| s.parse::<u64>().ok()) {
-                    Some(v) => seed = v,
+                    Some(v) => seed = Some(v),
                     None => bad_opt(raw.map(String::as_str), "--seed", "非负整数"),
                 }
             }
             "--faction" => {
                 let raw = it.next();
                 faction = match raw.map(String::as_str) {
-                    Some("1") => Faction::Ember,
-                    Some("2") => Faction::Frost,
-                    Some("3") => Faction::Shadow,
+                    Some("1") => Some(Faction::Ember),
+                    Some("2") => Some(Faction::Frost),
+                    Some("3") => Some(Faction::Shadow),
                     other => bad_opt(other, "--faction", "1|2|3"),
                 }
             }

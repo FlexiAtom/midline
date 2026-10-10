@@ -669,11 +669,21 @@ impl crate::session::Host for PlayHost<'_> {
     }
 }
 
+/// `auto` 冒烟的默认起点种子：从 1000 起、每轮 +1。**只在调用方没给 `--seed` 时用它**，
+/// 为的是保住既有冒烟读数（`auto 3` 与 HEAD 逐字节相同是这一帧的反证项之一）。
+const AUTO_SEED_BASE: u64 = 1000;
+
 /// 自动对局冒烟：玩家侧也走贪心，验证规则闭环不 panic、能分胜负。
 /// `diff` 是敌方 AI 档位；专家档额外让托管侧（有继承堆的一侧）在结算阶段由 AI 决策融合/升级。
-pub fn auto_battles(n: u32, diff: Difficulty) {
+/// `seed`/`faction` 是**调用方给的**（`--seed`/`--faction`），没给就用冒烟夹具自己的默认：
+/// 种子从 1000 起、每轮 +1，阵营烬火。那两个默认**不属于** `play` 那一族的"不给＝种子7·烬火"——
+/// 从前这里根本不看调用方给的值，于是 `auto --seed 7` 的头报印着 `seed=1000`：一行自称"可复现"的输出，
+/// 复现的却是别人那一局。每轮 `base + i` 与 `auto --boss` 的 `base + round` 是同一条规则。
+pub fn auto_battles(seed: Option<u64>, faction: Option<Faction>, n: u32, diff: Difficulty) {
+    let base = seed.unwrap_or(AUTO_SEED_BASE);
+    let mine = faction.unwrap_or(Faction::Ember);
     for i in 0..n {
-        let seed = 1000 + i as u64;
+        let seed = base.wrapping_add(i as u64);
         let mut inherit: Vec<CardInst> = Vec::new();
         let mut level = 1u32;
         let mut last = Outcome::Draw;
@@ -685,7 +695,7 @@ pub fn auto_battles(n: u32, diff: Difficulty) {
             // 与 one_level 同一套敌方构造（`new_mainline`＝构造即章强化）：本循环当前最多到第5关
             // （第1章，强化量 0），加上来是为了将来把轮数拉长读章节曲线时，托管冒烟与主线玩的不是两种游戏。
             let mut b =
-                Battle::new_mainline(seed, Faction::Ember, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
+                Battle::new_mainline(seed, mine, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level);
             auto_play(&mut b);
             last = b.over.unwrap_or(Outcome::Draw);
             match last {
