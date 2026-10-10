@@ -72,6 +72,10 @@ const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", 
 /// 而它的值（如果紧跟位置参数）又不会被吞掉——两处错法互不相干，一起改才对齐。
 const BOOL_FLAGS: &[&str] = &["--resume", "--tui"];
 
+/// 难度档的可选值，抄进每一条"读不懂"的报错里。解释口只有 `Difficulty::parse` 一个，
+/// 但可选值在报错文案里出现过两处（旧 `parse_difficulty` 与 USAGE 各写一遍）就会漂 ⇒ 收成一处。
+const DIFFICULTIES: &str = "easy|normal|hard|expert";
+
 /// 未知长选项一律报错：`auto 1 --bos all` 静默当普通对局跑完，比一条错误难查得多。
 fn reject_unknown_flags(args: &[String]) {
     for a in args.iter() {
@@ -87,9 +91,15 @@ fn reject_unknown_flags(args: &[String]) {
 }
 
 /// 位置参数：跳过命令词、长选项及其值。
+/// 首词只有在**不是选项**时才算命令词——旧写法无条件 `skip(1)`，于是 `midline --difficulty expert`
+/// 这种"无命令词"的合法调用会把它自己的值 `expert` 漏成位置参数（今天没人读它所以看不出来；
+/// 一旦装上"多余位置参数就拒"的闸，这条泄漏就会**误拒合法调用**，所以闸之前先修这里）。
 fn positionals(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
-    let mut it = args.iter().skip(1);
+    let mut it = args.iter();
+    if args.first().is_some_and(|a| !a.starts_with('-')) {
+        it.next();
+    }
     while let Some(a) = it.next() {
         if a.starts_with("--") {
             if VALUE_FLAGS.contains(&a.as_str()) {
@@ -121,7 +131,7 @@ fn main() {
     let frame = if has_flag(&args, "--tui") { meta::Frame::Tui } else { meta::Frame::Text };
     match cmd {
         "auto" => {
-            let n: u32 = positionals(&args).first().and_then(|s| s.parse().ok()).unwrap_or(1);
+            let n = auto_rounds(&args);
             match value_flag(&args, "--boss") {
                 Flag::Absent => meta::auto_battles(n, diff),
                 Flag::Value(raw) => auto_bosses(seed, faction, n, raw),
@@ -316,7 +326,8 @@ fn auto_bosses(seed: u64, faction: Faction, n: u32, raw: &str) {
     }
 }
 
-/// 标志给值却没给对：一律 `exit 2`，不替人改写命令。
+/// 标志给值却没给对：一律 `exit 2`，不替人改写命令。两面都要有读数——
+/// 给了但读不懂（`Some(值)`）、给了旗标却没给值（`None`）。
 fn bad_opt(got: Option<&str>, flag: &str, want: &str) -> ! {
     match got {
         None => println!("✖ {flag} 需要一个值（{want}）"),
@@ -357,17 +368,35 @@ fn parse_opts(args: &[String]) -> (u64, Faction) {
     (seed, faction)
 }
 
-/// `--difficulty easy|normal|hard|expert`；未给 → 普通；未知值 → 告警后回退普通（不再静默）。
+/// `--difficulty easy|normal|hard|expert`；**不给** → 普通；**给了却读不懂 ⇒ rc=2**。
+/// 从前这里"印一句警告再回退普通"，与 `--seed 4x`／`--faction 9`／`--boss 99`（那三条一律 rc=2）是同族两种口径。
+/// 回退的代价与静默同量：一个读不懂的难度值悄悄换掉"你正在玩哪一局"，而输出里没有任何地方说命令被改写过。
+/// 缺值那一面（`--difficulty` 放在最后）旧写法会当成"未知值 空串"再回退，现在与 `--seed` 同口径直接报错。
 fn parse_difficulty(args: &[String]) -> Difficulty {
-    let Some(i) = args.iter().position(|a| a == "--difficulty") else {
-        return Difficulty::Normal;
+    let raw = match value_flag(args, "--difficulty") {
+        Flag::Absent => return Difficulty::Normal,
+        Flag::Missing => bad_opt(None, "--difficulty", DIFFICULTIES),
+        Flag::Value(raw) => raw,
     };
-    let raw = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
     match Difficulty::parse(raw) {
         Some(d) => d,
-        None => {
-            println!("✖ 未知难度：{raw}（可选 easy|normal|hard|expert），已回退普通");
-            Difficulty::Normal
-        }
+        None => bad_opt(Some(raw), "--difficulty", DIFFICULTIES),
+    }
+}
+
+/// `auto [N]` 的轮数。**不给＝1；给 0 就是零场**（与 `auto_bosses` 同一口径，不偷偷保底一轮）；
+/// 读不懂 ⇒ rc=2。旧写法 `parse().ok().unwrap_or(1)` 让 `auto 3x` **静默按 1 局**跑完，
+/// 屏幕上一个字都没说"你要的那几局没跑"。
+/// 文案不套 `bad_opt`：那个模板是"{旗标} 的值「x」"，轮数是**位置参数**，没有旗标可指。
+fn auto_rounds(args: &[String]) -> u32 {
+    match positionals(args).first().map(String::as_str) {
+        None => 1,
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(n) => n,
+            Err(_) => {
+                println!("✖ auto 的轮数「{raw}」读不懂，要 非负整数（不给＝1）");
+                std::process::exit(2);
+            }
+        },
     }
 }
