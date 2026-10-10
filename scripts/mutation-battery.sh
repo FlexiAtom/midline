@@ -33,7 +33,7 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)/src"
 [ -f "$REAL" ] || { echo "找不到规格文档 $REAL（可用 MIDLINE_REAL_DOC 指定）"; exit 1; }
 D="$(mktemp -d)"; trap 'rm -rf "$D"' EXIT
 cp "$(dirname "$SRC")/Cargo.toml" "$(dirname "$SRC")/Cargo.lock" "$D/"
-restore() { PATCH_FAIL=""; cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$D/src"; cp "$SRC"/*.rs "$D/src/"; }; cp "$REAL" "$D/doc.md"; }
+restore() { PATCH_FAIL=""; cp "$SRC"/*.rs "$D/src/" 2>/dev/null || { mkdir -p "$D/src"; cp "$SRC"/*.rs "$D/src/"; }; T="$(dirname "$SRC")/tests"; if [ -d "$T" ]; then mkdir -p "$D/tests"; cp "$T"/*.rs "$D/tests/" 2>/dev/null; fi; cp "$REAL" "$D/doc.md"; }
 # PATCH_FAIL：补丁没打上时 run() 先喊出来，**不**假装"这条变异撞红了"。§九 帧整族复跑就撞上一条静默假绿——
 # M46 的 `assert s.count(n)==1` 因 §九 推导器照抄了同一行守卫而变成 2，python 抛 AssertionError 后 cargo 照旧
 # 151 全绿，日志里那行 traceback 只会被当成噪音（本帧之前从没查过它）。`bash -n` 也只验 shell 语法，验不到内嵌
@@ -1197,4 +1197,77 @@ p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
 a='        let name = format!(\"frame-{:03}.svg\", guard);'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        let name = format!(\"frame-{:03}.svg\", v.player.turn);'))"
+run
+
+echo "### M145 把「难度读不懂⇒rc=2」换回从前那句「印一句警告再回退普通」⇒ 实测 **1** 红：红在 CLI 面那条难度尺。本帧立的口径是「给了值却读不懂 ⇒ rc=2」，而这条测是它唯一的牙——从前 main.rs 一个字节测都没有，把 rc=2 改回静默回退，其余四把尺一条都不红"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='        None => bad_opt(Some(raw), \\\"--difficulty\\\", DIFFICULTIES),'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        None => Difficulty::Normal,'))"
+run
+
+echo "### M146 把 auto 轮数解析失败那支换回「静默按 1 局」⇒ 实测 **1** 红：红在 CLI 面那条轮数尺。它复现的是本帧开头那格读数：auto 3x 在改法之前 rc=0 并照常打一局，输出的 seed=1000 看着像默认，其实是把「3x」吞成了 1"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='            Err(_) => {\n                println!(\\\"✖ auto 的轮数「{raw}」读不懂，要 非负整数（不给＝1）\\\");\n                std::process::exit(2);\n            }'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            Err(_) => 1,'))"
+run
+
+echo "### M147 摘掉作用域闸那一次调用（表与函数都留着，只是不再被叫）⇒ 实测 **1** 红：红在 CLI 面那条「不读的旗标必须当场拒」尺。这张表替掉的是原先各管一段的三道闸，所以它一旦被摘掉，daily --seed、mainline --boss、play --save 三族读数会同时回到 rc=0"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='    gate_flag_scope(cmd, &args);\n'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M148 摘掉 arity 闸那一次调用 ⇒ 实测 **2** 红：一条是多余位置参数那族，一条是 progress recover 带着第三个词不许动盘那条。后者是本帧里唯一一条**副作用**形状的牙：它从前真把人的档改名成 .bad-N，所以它必须同时断言 rc 与「盘上没多出留证文件、原档内容一字未动」"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='    gate_arity(cmd, &args);\n'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M149 把带值旗标的查找从 rposition 退回 position（last-wins 变 first-wins）⇒ 实测 **1** 红：红在重复给同一个旗标那尺。这条牙守的是「一套规则」而不是某个具体赢家——从前 parse_opts 的循环按最后一个赢、value_flag 按第一个赢，两条路各自都对，合起来是两套真值"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='    match args.iter().rposition(|a| a == name) {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    match args.iter().position(|a| a == name) {'))"
+run
+
+echo "### M150 把未知选项闸的前缀判据从单破折号退回只测两个破折号 ⇒ 实测 **1** 红：红在那条单破折号尺。play -x 在改法之前静默开打一局，因为闸只看得见两个破折号开头的那一族。这条与 M153 各锚一处：同一个 starts_with 判据在闸与 positionals 里是两份同话，摘错一份的量程完全不同"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+a='        if a.starts_with(\x27-\x27) && !BOOL_FLAGS'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        if a.starts_with(\x27--\x27) && !BOOL_FLAGS'))"
+run
+
+echo "### M151 让 auto 的玩家阵营退回硬写烬火（签名与 seed 那半都不动）⇒ 实测 **1** 红：红在 auto 读阵营那尺。这条牙的存在理由是它自己量出来的：300 个种子只有 2 个能让阵营在 auto 的输出面上露头，所以它必须钉住 seed=22 那一个，换 seed 就量不到"
+restore; py "
+p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
+a='Battle::new_mainline(seed, mine, enemy_faction_for(level)'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'Battle::new_mainline(seed, Faction::Ember, enemy_faction_for(level)'))"
+run
+
+echo "### M152 让 auto 的种子退回写死 1000 起（阵营那半不动）⇒ 实测 **1** 红：红在 auto 读 seed 那尺。这条是本帧 p5 那唯一一处预期漂移的牙：摘掉它，auto 1 --seed 7 的头报会重新印 seed=1000——一行自称可复现的输出，复现的是别人那一局"
+restore; py "
+p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
+a='        let seed = base.wrapping_add(i as u64);'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        let seed = 1000 + i as u64;'))"
+run
+
+echo "### M153 把 positionals 的首词判据退回无条件跳过（只退 positionals 那一处，未知选项闸不动）⇒ 实测 **1** 红：红在「无命令词那条路不许吞掉自己的值」那尺。这条牙量的是两处同话里最坏的一种：闸装上之后，这个泄漏的表现会从「没人看见」变成「合法调用被误拒」——midline --seed 42 会报「play 最多接 0 个参数」"
+restore; py "
+p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
+g='    if args.first().is_some_and(|a| !a.starts_with(\x27-\x27)) {\n        it.next();\n    }\n'
+assert s.count(g)==2, s.count(g)   # 闸与 positionals 各一份，同话两处
+k=s.rfind(g)                        # 后那一处＝positionals（文件里它排在 reject_unknown_flags 之后）
+open(p,'w',encoding='utf8').write(s[:k]+'    it.next();\n'+s[k+len(g):])"
 run

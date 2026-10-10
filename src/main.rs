@@ -38,22 +38,26 @@ use std::path::PathBuf;
 const USAGE: &str = "\
 《中线》核心规则 CLI
 用法：
-  play [--seed N] [--faction 1|2|3] [--difficulty X]        普通爬关（阵营三循环，不落盘）
-  play --boss <id> [--seed N] [--faction 1|2|3]             跳打某章末 Boss（同 boss <id>，不落盘）
-  mainline [--seed N] [--faction 1|2|3] [--difficulty X]     主线 60 关（5 章，章末 Boss，自动存档）
+  play [--seed S] [--faction 1|2|3] [--difficulty X]        普通爬关（阵营三循环，不落盘）
+  play --boss <id> [--seed S] [--faction 1|2|3]             跳打某章末 Boss（同 boss <id>，不落盘）
+  mainline [--seed S] [--faction 1|2|3] [--difficulty X]     主线 60 关（5 章，章末 Boss，自动存档）
   mainline --resume [--save F] [--faction 1|2|3]            从存档的「本关入口」续打；不给 --resume 则从第1关重开（档上已有进度会先警告再覆盖）
-  boss <id> [--seed N] [--faction 1|2|3]                    单关跳打 Boss
+  boss <id> [--seed S] [--faction 1|2|3]                    单关跳打 Boss
   daily [--save F]                                          每日挑战（本地日期为种子；一天 3 次，一次一场 30 回合生存战，每场抽一条当日特殊规则；只有通关扣额度，不动主线进度）
   progress [--save F]                                       看当前存档（只读：不写、不修、不猜；档读不懂则 rc=2）
   progress recover [--save F]                               把当前档改名留证 .bad-N，下次从空档开始
-  auto [N] [--difficulty X]                                 AI 托管模拟 N 局（默认 1，不落盘）
-  auto [N] --boss all|<id> [--faction 1|2|3]                Boss 脚本冒烟：N 轮 × 5 个（或指定）
-  frames --out DIR [--seed N] [--faction 1|2|3] [--difficulty X] [--boss <id>]
+  auto [轮数] [--seed S] [--faction 1|2|3] [--difficulty X]  AI 托管模拟若干局（轮数默认 1，不给种子默认 1000 起·每轮 +1，不落盘）
+  auto [轮数] --boss all|<id> [--seed S] [--faction 1|2|3]  Boss 脚本冒烟：N 轮 × 5 个（或指定）
+  frames --out DIR [--seed S] [--faction 1|2|3] [--difficulty X] [--boss <id>]
                                                           2D 离线帧：托管打一关，每次写入一张 SVG 到 DIR（序号＝写入次序，不是回合数；--out 必给；不落存档、不动 --save 那条面）
-  help                                                      本帮助
+  help  /  -h  /  --help                                    本帮助（-h、--help 在任何位置都有效）
 <id> ＝ 1-5 | luzhu|雪爵… 见下：1 炉主 / 2 雪爵 / 3 影长 / 4 炎与冰 / 5 终影
-（Boss 战敌方由脚本接管，不吃难度档；--difficulty 只影响我方托管评分口径 —— 裁定21）
-（--seed / --faction 不给＝种子7·烬火；给了却读不懂 ⇒ 直接报错退出 rc=2，不静默回退成别的值）
+（--seed / --faction 不给＝种子7·烬火；auto 那族不给＝自己的夹具默认，见上两行）
+（参数面三条口径，任何一条违反都直接 rc=2，不存在「警告一句再回退」：
+ ① 给了值却读不懂 ⇒ 拒；② 这条命令不读的旗标 ⇒ 拒（谁读它，报错里会列出来）；③ 多余的位置参数 ⇒ 拒。
+ 其中 --difficulty 有三个消费者：敌方 AI 的搜索档、我方托管的融合/升级决策、以及档面（mainline 落盘 difficulty、progress 回显）；
+ Boss 战里它实际不改变任何行为——敌方是脚本、我方交互局是人类、auto --boss 的托管走贪心不读难度档（裁定21）。
+ 所以 boss／play --boss／frames --boss 仍然接受这个旗标：不是没读它，是读了也不换东西，那句是裁定21 的设计而不是失真。）
 存档（只挂在 mainline / daily 上；落点＝--save ＞ $MIDLINE_SAVE ＞ $XDG_DATA_HOME/midline/ ＞ $HOME/.local/share/midline/）：
   --save <文件>   换档的位置（缺值直接报错，不静默落回默认位置）
   --resume        读档续关；档损坏一律拒绝并指向 progress recover，不会当成空档静默重开
@@ -72,14 +76,55 @@ const VALUE_FLAGS: &[&str] = &["--seed", "--faction", "--difficulty", "--boss", 
 /// 而它的值（如果紧跟位置参数）又不会被吞掉——两处错法互不相干，一起改才对齐。
 const BOOL_FLAGS: &[&str] = &["--resume", "--tui"];
 
+/// 全局旗标：在**任何位置**出现都印帮助、rc=0。它不进 `READS`（作用域表），因为它的"作用域"就是全部 argv，
+/// 包括那条命令本身不认识的情况。从前 `-h` 只在首词有效，而 `reject_unknown_flags` 又把它排除在闸外——
+/// 于是 `play -h` 既不报错、也不印帮助，直接开打一局。
+const HELP_FLAGS: &[&str] = &["-h", "--help"];
+
+/// 命令 × 这条命令接哪些旗标。原先是 `gate_save_flags`／`gate_tui` 两道闸各写各的名单，
+/// 加一道旗标就得记住改几处——表收成一处，新增闸与既有闸才不可能漂开。
+///
+/// 表里写的是**接进这条命令的路径**，不等于"必有可观察后果"：`--difficulty` 在 Boss 局不改变任何行为，
+/// 那是 `裁定21` 正文（`model.rs:99-101`）自己写明的设计，且 `frames [--difficulty X] [--boss <id>]`
+/// 一行里两种局都在 ⇒ 这里不拒那个组合，改由 `USAGE` 那句摘要对齐正文来负责说实话。
+const READS: &[(&str, &[&str])] = &[
+    ("--seed", &["auto", "play", "mainline", "boss", "frames"]),
+    ("--faction", &["auto", "play", "mainline", "boss", "frames"]),
+    ("--difficulty", &["auto", "play", "mainline", "boss", "frames"]),
+    ("--boss", &["auto", "play", "frames"]),
+    ("--save", &["mainline", "daily", "progress"]),
+    ("--resume", &["mainline"]),
+    ("--tui", &["play", "mainline", "daily", "boss"]),
+    ("--out", &["frames"]),
+];
+
+/// 认得的命令词。闸用它做一件事：**未知命令不归闸管**。
+/// `bogus --seed 1` 该听到"未知命令：bogus"，而不是"--seed 不用于「bogus」"——后者把真问题（打错了命令）说成了假问题。
+const CMDS: &[&str] = &["auto", "boss", "daily", "frames", "help", "mainline", "play", "progress"];
+
+/// 命令 × 这条命令吃几个位置参数。表里没有的命令＝0 个。
+/// 依据是 §2 那格 `progress recover extra`：多余参数今天被按"recover"办，**真把档改了名**。
+const ARITY: &[(&str, usize)] = &[("auto", 1), ("boss", 1), ("progress", 1)];
+
 /// 难度档的可选值，抄进每一条"读不懂"的报错里。解释口只有 `Difficulty::parse` 一个，
 /// 但可选值在报错文案里出现过两处（旧 `parse_difficulty` 与 USAGE 各写一遍）就会漂 ⇒ 收成一处。
 const DIFFICULTIES: &str = "easy|normal|hard|expert";
 
-/// 未知长选项一律报错：`auto 1 --bos all` 静默当普通对局跑完，比一条错误难查得多。
+/// 未知选项一律当场拒。两个洞一起补：
+/// ① 从前只测 `--` 前缀 ⇒ `play -x` 静默开打一局；② 带值旗标的**值**不参与判断，
+/// 所以 `--out -tmp` 里那个 `-tmp` 仍是目录名、不会被误判成选项（它与 `positionals` 共用同一套"跳过值"的规则）。
 fn reject_unknown_flags(args: &[String]) {
-    for a in args.iter() {
-        if a.starts_with("--") && !VALUE_FLAGS.contains(&a.as_str()) && !BOOL_FLAGS.contains(&a.as_str()) && a != "--help" {
+    let mut it = args.iter();
+    // 首词只有在不是选项时才是命令词——与 `positionals` 同一条判据，两处不许各写一份。
+    if args.first().is_some_and(|a| !a.starts_with('-')) {
+        it.next();
+    }
+    while let Some(a) = it.next() {
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+            continue;
+        }
+        if a.starts_with('-') && !BOOL_FLAGS.contains(&a.as_str()) && !HELP_FLAGS.contains(&a.as_str()) {
             println!(
                 "✖ 未知选项：{a}（可用 {} / {}）",
                 VALUE_FLAGS.join(" / "),
@@ -115,21 +160,24 @@ fn positionals(args: &[String]) -> Vec<String> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("play");
-    if matches!(cmd, "help" | "--help" | "-h") {
+    // `help` 仍是命令词；`-h`／`--help` 是全局旗标，任何位置出现都印帮助。
+    if cmd == "help" || args.iter().any(|a| HELP_FLAGS.contains(&a.as_str())) {
         println!("{USAGE}");
         return;
     }
     reject_unknown_flags(&args);
+    // 无命令词、直接给标志（`midline --seed 42`）＝ play，旧版即如此，不当未知命令。
+    let cmd = if cmd.starts_with('-') { "play" } else { cmd };
+    // **先问作用域，再问值读不读得懂**：`daily --difficulty 1` 该听到的是"daily 不读 --difficulty"，
+    // 而不是"1 读不懂"——后者暗示换成 `--difficulty easy` 就行，而它对 daily 一样什么都不做。
+    // 顺序反过来时，越界的旗标会先按值报错，把"这条命令根本不接它"这层信息吃掉。
+    gate_flag_scope(cmd, &args);
+    gate_arity(cmd, &args);
     let (seed_given, faction_given) = parse_opts(&args);
     // 对局那一族的默认＝种子 7·烬火（`USAGE` 里写死的那两个数）；`auto` 用它自己的夹具默认，见 `meta::auto_battles`。
     let seed = seed_given.unwrap_or(7);
     let faction = faction_given.unwrap_or(Faction::Ember);
     let diff = parse_difficulty(&args);
-    // 无命令词、直接给标志（`midline --seed 42`）＝ play，旧版即如此，不当未知命令。
-    let cmd = if cmd.starts_with('-') { "play" } else { cmd };
-    gate_save_flags(cmd, &args);
-    gate_tui(cmd, &args);
-    gate_out(cmd, &args);
     // 画帧档：Text 是默认，`--tui` 只切这一档，其余（遭遇/落盘/阶段机）两条路共用同一台 host。
     let frame = if has_flag(&args, "--tui") { meta::Frame::Tui } else { meta::Frame::Text };
     match cmd {
@@ -165,45 +213,39 @@ fn main() {
     }
 }
 
-/// 存档选项的作用域。`--save` 是"档放哪"，`progress` 也得认（否则只能去猜默认路径）；
-/// `--resume` 只对主线有意义（每日不落进度）。带着不认的标志必须报错——
-/// "以为存了、其实没存"是这一族里最难查的失败。
-fn gate_save_flags(cmd: &str, args: &[String]) {
-    let save_ok = matches!(cmd, "mainline" | "daily" | "progress");
-    let resume_ok = cmd == "mainline";
-    for (flag, ok) in [("--save", save_ok), ("--resume", resume_ok)] {
-        if !ok && has_flag(args, flag) {
-            println!("✖ {flag} 不用于「{cmd}」：只有 mainline / daily 落盘，play 与 boss/auto 是跳打。");
+/// 作用域闸：旗标不在 `READS` 给这条命令的名单里 ⇒ 当场拒，报出它到底被谁读。
+/// "以为存了、其实没存"、"以为开了 TUI、其实没开"、"以为换了阵营、其实没换"是同一种失真，
+/// 用一处表挡住比三道闸各挡一段可靠。
+fn gate_flag_scope(cmd: &str, args: &[String]) {
+    if !CMDS.contains(&cmd) {
+        return;
+    }
+    for (flag, ok) in READS {
+        if !ok.contains(&cmd) && has_flag(args, flag) {
+            println!("✖ {flag} 不用于「{cmd}」：它只被 {} 读。", ok.join(" / "));
             std::process::exit(2);
         }
     }
 }
 
-/// `--tui` 的作用域：切换到 **TUI 画帧**这一档，四条对局命令全程可用
-/// （`play` 无限梯 / `mainline` / `daily` / `boss`——L3-d 起整局爬梯已并入统一 host，不再局限单关跳打）。
-/// `auto`（无壳冒烟）与 `progress`（只读档）没有"一屏盘面"可重绘，带着 `--tui` 一律报错退出，
-/// **不静默回退成文本路**——"以为开了 TUI、其实没开"是最难查的失真。
-fn gate_tui(cmd: &str, args: &[String]) {
-    if !has_flag(args, "--tui") {
+/// 位置参数超量 ⇒ 当场拒。多余的参数不猜、不忽略：`progress recover extra` 那一格今天会把
+/// `recover` 之外的词连同 `recover` 一起办，那不是显示失真，是**动了盘**。
+fn gate_arity(cmd: &str, args: &[String]) {
+    if !CMDS.contains(&cmd) {
         return;
     }
-    if !matches!(cmd, "play" | "mainline" | "daily" | "boss") {
-        println!("✖ --tui 只作用于对局命令（play / mainline / daily / boss）：「{cmd}」没有可逐帧重绘的对局。");
+    let want = ARITY.iter().find(|(c, _)| *c == cmd).map_or(0, |(_, n)| *n);
+    let got = positionals(args).len();
+    if got > want {
+        println!("✖ 「{cmd}」最多接 {want} 个参数（收到 {got} 个）：多余的参数不猜、不忽略。");
         std::process::exit(2);
     }
 }
 
-/// `--out` 的作用域。它是**帧文件的落点**，不是存档位置，所以两条都要响亮：
-/// ① 别的命令带着它 ⇒ 报错。"以为出图了、其实没出"与"以为存了、其实没存"是同一族失真。
-/// ② 只有 `frames` 要它，且 `frames` **不给就报错**——没有"当前目录"这种默认落点可猜，
-///    一次倒几十个文件到别人正在干活的地方，比一条错误难查得多。
-fn gate_out(cmd: &str, args: &[String]) {
-    if cmd != "frames" && has_flag(args, "--out") {
-        println!("✖ --out 不用于「{cmd}」：只有 frames 出帧文件，其它命令的画面走 stdout。");
-        std::process::exit(2);
-    }
-}
-
+/// 帧文件的落点，`--out` 的唯一解释口。`frames` **不给就报错**——没有"当前目录"这种默认落点可猜，
+/// 一次倒几十个文件到别人正在干活的地方，比一条错误难查得多。
+/// （原先这里还有一道 `gate_out` 管"别的命令不许带 `--out`"，那半句已进 `READS`；
+/// 而"不给就报错"这半句与本函数第一支完全同话 ⇒ 两处同话就是第二套真值，闸整体删掉。）
 fn out_dir(args: &[String]) -> PathBuf {
     match value_flag(args, "--out") {
         Flag::Absent => bad_out(None),
@@ -262,8 +304,11 @@ enum Flag<'a> {
     Missing,
 }
 
+/// 带值长选项的**唯一**读法：没给 / 给了值 / 给了但缺值。缺值必须报错，不能静默当成没给。
+/// 重复给同一个旗标＝**最后一个赢**（`rposition`）。从前这里按第一个赢，而 `parse_opts` 那个循环按最后一个赢——
+/// 两套规则并存时，`--save a --save b` 与 `--seed 1 --seed 2` 的赢家不同，而没有任何一处文档说过这件事。
 fn value_flag<'a>(args: &'a [String], name: &str) -> Flag<'a> {
-    match args.iter().position(|a| a == name) {
+    match args.iter().rposition(|a| a == name) {
         None => Flag::Absent,
         Some(i) => match args.get(i + 1) {
             Some(v) if !v.starts_with("--") => Flag::Value(v),
@@ -342,36 +387,30 @@ fn bad_opt(got: Option<&str>, flag: &str, want: &str) -> ! {
 /// `--seed N` / `--faction 1|2|3` 的读数。**不给** ⇒ `None`；**给了但读不懂** ⇒ 报错退出 rc=2。
 /// 静默回退的代价：`--seed 4x` 跑出来的那局根本不是你要复现的那局，而输出里没有任何地方说命令被改写过；
 /// `--faction 9` 更糟——回退到烬火是换掉整张卡表，头报却照样写着"烬火教团"，看着就像你打的就是那个阵营。
-/// 与 `--save` 同一口径（见 `save_path`）。重复给同一个旗标＝**最后一个赢**（扫到argv 末尾）。
+/// 与 `--save` 同一口径（见 `save_path`）。走的是与其余带值旗标**同一个** `value_flag`（last-wins 因此只有一套规则）。
 ///
 /// 默认值**不在这里**：`play` 那一族默认「种子 7·烬火」，`auto` 那一族默认「1000 起、每轮 +1」。
 /// 两个是各自命令的口径，谁也不许拿对方的默认当自己的——从前 `auto` 就是不看这里，
 /// 于是 `auto --seed 7` 的头报印 `seed=1000`：一行自称"可复现"的输出，复现的是别人那一局。
 fn parse_opts(args: &[String]) -> (Option<u64>, Option<Faction>) {
-    let mut seed: Option<u64> = None;
-    let mut faction: Option<Faction> = None;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--seed" => {
-                let raw = it.next();
-                match raw.and_then(|s| s.parse::<u64>().ok()) {
-                    Some(v) => seed = Some(v),
-                    None => bad_opt(raw.map(String::as_str), "--seed", "非负整数"),
-                }
-            }
-            "--faction" => {
-                let raw = it.next();
-                faction = match raw.map(String::as_str) {
-                    Some("1") => Some(Faction::Ember),
-                    Some("2") => Some(Faction::Frost),
-                    Some("3") => Some(Faction::Shadow),
-                    other => bad_opt(other, "--faction", "1|2|3"),
-                }
-            }
-            _ => {}
-        }
-    }
+    let seed = match value_flag(args, "--seed") {
+        Flag::Absent => None,
+        Flag::Missing => bad_opt(None, "--seed", "非负整数"),
+        Flag::Value(raw) => match raw.parse::<u64>() {
+            Ok(v) => Some(v),
+            Err(_) => bad_opt(Some(raw), "--seed", "非负整数"),
+        },
+    };
+    let faction = match value_flag(args, "--faction") {
+        Flag::Absent => None,
+        Flag::Missing => bad_opt(None, "--faction", "1|2|3"),
+        Flag::Value(raw) => match raw {
+            "1" => Some(Faction::Ember),
+            "2" => Some(Faction::Frost),
+            "3" => Some(Faction::Shadow),
+            other => bad_opt(Some(other), "--faction", "1|2|3"),
+        },
+    };
     (seed, faction)
 }
 
