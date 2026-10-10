@@ -1,0 +1,35 @@
+# midline - 《中线》安卓薄壳（丁′：壳也用 Rust，源码级融合）
+# Copyright (C) 2026 FlexiAtom
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# 本 crate 不进主仓的构建图：根 `Cargo.toml` 没有 `[workspace]`，所以 `cargo build`
+# 在主仓跑时不会把它算进来，主仓那条机检 `this_program_ships_no_reusable_api_surface`
+# 的扫描面（`src/*.rs` + `main.rs` 的 mod 表）也一字不改。它的守门检在
+# `scripts/shell-export-surface.sh`，不在主仓那条检里。
+
+[package]
+name = "midline-shell-android"
+version = "0.1.0"
+edition = "2024"          # 必须与主仓一致：save.rs 的 let-chain 在 2021 下编不过（实测）
+publish = false
+
+[lib]
+# 只出 cdylib。加 "rlib" 会额外产出一份带 .rmeta 的可 `use` 构件——分发面只有一张 `.so`，
+# 这里连"构建目录里多一个可复用产物"都不留（原理见 android-rust-shell-fused-source §2 P2）。
+crate-type = ["cdylib"]
+
+# 引擎零第三方依赖这条约定的原文是「壳可以带，引擎不行」。本帧壳也不带：
+# 入口胶水直接对 NDK 的 libandroid/liblog 下 FFI 声明，布局由 layout_check.c 对着真头校。
+[dependencies]

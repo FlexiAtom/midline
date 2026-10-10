@@ -1,0 +1,33 @@
+# midline - 《中线》安卓薄壳的交叉编译配置
+# 逐条借自 ~/rust/rust-beast-sdk-android/.cargo/config.toml（那仓真装过机、真签过名）。
+# 借的理由：NDK r29 只留带 API 号的包装脚本，rustc 默认找的裸名字在本机不存在——
+# 那条坑是别人已经踩过并记下来的，重新试一遍要花掉一整个下午且不产生新知识。
+#
+# 相对借来的那份，本文件只多一格 rustflags：本壳的入口胶水直接对 libandroid/liblog 下
+# FFI 声明（不经过任何 crates.io 绑定），所以这两个库得由我们自己挂上。
+
+[target.aarch64-linux-android]
+linker = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+rustflags = ["-C", "link-arg=-landroid", "-C", "link-arg=-llog"]
+
+[target.armv7-linux-androideabi]
+linker = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+rustflags = ["-C", "link-arg=-landroid", "-C", "link-arg=-llog"]
+
+[target.x86_64-linux-android]
+linker = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+rustflags = ["-C", "link-arg=-landroid", "-C", "link-arg=-llog"]
+
+[target.i686-linux-android]
+linker = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android21-clang"
+rustflags = ["-C", "link-arg=-landroid", "-C", "link-arg=-llog"]
+
+# cc-rs 按旧式名字（aarch64-linux-android-clang++）找编译器，NDK r29 只剩带 API 号的包装脚本。
+# 本壳没有 C 依赖，理论上用不到这组；留着是因为它同时是"以后壳侧要编任何 C 时不再踩一遍"的护栏。
+[env]
+CC_aarch64_linux_android = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+CXX_aarch64_linux_android = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++"
+CC_armv7_linux_androideabi = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+CXX_armv7_linux_androideabi = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang++"
+CC_x86_64_linux_android = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+CXX_x86_64_linux_android = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang++"
