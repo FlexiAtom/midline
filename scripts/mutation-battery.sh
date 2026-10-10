@@ -1263,7 +1263,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        let seed = 1000 + i as u64;'))"
 run
 
-echo "### M153 把「首词只有在不是选项时才算命令词」那条判据退回无条件 skip ⇒ 实测 **1** 红：红在「无命令词那条路不许吞掉自己的值」那尺。这条牙量的是最坏的一种泄漏：闸装上之后，那个泄漏的表现会从「没人看见」变成「合法调用被误拒」——midline --seed 42 会报「play 最多接 0 个参数」。本帧后半把它从两份收成一处（positionals 改由 option_tokens 派生），所以摘这里＝闸与 arity 同时退，而'只退 positionals 那一处'这种错法从此在文件里无处可写——这是收成一处本身的证据，不是损失"
+echo "### M153 把「首词只有在不是选项时才算命令词」那条判据退回无条件 skip ⇒ 实测 **2** 红（抬头起初预测 1 红，整族读数改的是抬头）：一条红在「无命令词那条路不许吞掉自己的值」那尺——midline --seed 42 会报「play 最多接 0 个参数」，那是闸装上之后最坏的一种泄漏表现（从「没人看见」变成「合法调用被误拒」）；第二条红在「-h 在首词要印帮助」那尺，因为首词被无条件跳掉之后，帮助扫描看不见那个 -h——它共读同一条判据。第二条不是噪声：本帧后半把跳值规则收成一处（positionals、帮助扫描、未知选项闸共读 option_tokens），摘这一处＝三条消费者同时退，红数 1→2 正是「一份规则」换成「三处共读」的价码；而'只退 positionals 那一处'这种错法从此在文件里无处可写——这是收成一处本身的证据，不是损失"
 restore; py "
 p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
 g='    if args.first().is_some_and(|a| !a.starts_with(\x27-\x27)) {\n        it.next();\n    }\n'
