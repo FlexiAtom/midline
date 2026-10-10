@@ -1175,12 +1175,12 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    let shown = hp;'))"
 run
 
-echo "### M142 把业火点亮时让位的右锚退回常态值（lit 那一支从 34 改成 14，未点亮那支不动）⇒ 实测 **1** 红：红在 canvas 那条方块不压字测＝本帧第 ③ 处失真的牙。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住"
+echo "### M142 把业火点亮时让位那一支整个摘掉（点亮与未点亮同走常态内缩，未点亮那支的数不动）⇒ 实测 **1** 红：红在 canvas 那条方块不压字测＝本帧第 ③ 处失真的牙。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住。其十二 把这几个数收进 md3 之后，本条的落点从字面量换成了那支行——摘的仍是同一件事"
 restore; py "
 p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
-a='        let marks_x = x + w - if lit { 34 } else { 14 };'
+a='        let marks_x = x + w - if lit { badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD };'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,'        let marks_x = x + w - 14;'))"
+open(p,'w',encoding='utf8').write(s.replace(a,'        let marks_x = x + w - layout::CELL_PAD;'))"
 run
 
 echo "### M143 摘掉 marks.dedup 那一行（开端牌的两个字段各推一次，撞词不再去重）⇒ 实测 **1** 红：红在 canvas 那条「开端只说一次」测＝本帧第 ⑤ 处失真的牙。这条测的正反两面都是要的：正面数那个词恰出现一次，反面拿一张 造＋升级＋战吼 的牌钉三个标记全在——所以摘掉 dedup 会红，把 dedup 写成「只留第一个标记」也会红，两种坏法各撞一次"
@@ -1285,4 +1285,44 @@ p='$D/src/main.rs'; s=open(p,encoding='utf8').read()
 a='    if !CMDS.contains(&cmd) {\\n        println!(\\x22✖ 未知命令：{cmd}\\x22);\\n        println!(\\x22{USAGE}\\x22);\\n        std::process::exit(2);\\n    }\\n'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M156 把间距档 XS 从 8 推到 9（栅格基数、其余各档、文档全不动）⇒ 实测 **1** 红：红在 md3 那条 4dp 栅格尺（XS＝9 除不尽 4）。这条牙量的是「自定的数也得被栅格整除」这件事本身：结构照抄 MD3、数值自定是 其十二 立的口径，而没有这把尺，把任意一档随手 +1 在全部读数里都是静默的——栅格不是审美口号，它是「任意两格留白之差恒为栅格整数倍」那条可判性质"
+restore; py "
+p='$D/src/md3.rs'; s=open(p,encoding='utf8').read()
+a='    pub const XS: i32 = 8;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    pub const XS: i32 = 9;'))"
+run
+
+echo "### M157 把 ON_SURFACE 从 #e4e7f0 推暗到 #6a6f78（形状仍是合法的六位十六进制、其余色全不动）⇒ 实测 **1** 红：红在 md3 那条 AA 配对尺。这张表的色是**自定**的，所以「配对达标」不能靠我眼睛判——它全靠 WCAG 相对亮度那支算式背书，而那条算式自己由另一条测校准（#808080 真读数 0.2159）。摘掉这一格的后果不是「颜色不好看」，是深色底上的正文对比度掉到 4.5:1 之下：可达性声明从「算过的」退化成「说过的」"
+restore; py "
+p='$D/src/md3.rs'; s=open(p,encoding='utf8').read()
+a='    pub const ON_SURFACE: &str = \x22#e4e7f0\x22;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    pub const ON_SURFACE: &str = \x22#6a6f78\x22;'))"
+run
+
+echo "### M158 把断点上界 COMPACT_MAX_DP 从 600dp 推到 900dp（MEDIUM 那档、换算函数、真机读数全不动）⇒ 实测 **1** 红：红在 md3 那条 density 尺——同一支测里两条判据各撞一次（601dp 该进 medium 却被判成 compact；名字序等于大小序那条也塌），红数按测计＝1。这条牙守的是安卓那条路的门槛：真机 720px 宽＝360dp，界值一旦漂过 360 而尺不喊，接下来所有按档排布的版式都会拿错档"
+restore; py "
+p='$D/src/md3.rs'; s=open(p,encoding='utf8').read()
+a='    pub const COMPACT_MAX_DP: i32 = 600;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    pub const COMPACT_MAX_DP: i32 = 900;'))"
+run
+
+echo "### M159 把状态层 HOVER 从 0.08 改成与 FOCUS 同值 0.10（其余四档、混合函数全不动）⇒ 实测 **1** 红：红在 md3 那条状态层秩序尺（名字序必须**严格**等于大小序）。它量的是 #132 那格的前提：悬停与按下若同值，交互态就少一态——而那是一句「实现了却看不出实现」的账，只在被摘的时候才现形"
+restore; py "
+p='$D/src/md3.rs'; s=open(p,encoding='utf8').read()
+a='    pub const HOVER: f64 = 0.08;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    pub const HOVER: f64 = 0.10;'))"
+run
+
+echo "### M160 往 canvas 的生产面塞回一条本地常数（一个带十六进制色值的 const，读它的人一个也没有）⇒ 实测 **1** 红：红在 md3 那条「版式真值只许一个家」的机检（它同时命中 色值 与 本地常数 两格，仍是一条测）。这颗牙是 其十二 自己欠的：那条机检是本帧新立的，没有它，把 #130 决策日志那句「正解是一条机检」写成一条永真的检也无人能证伪——而这条测尾部还挂着一把反空虚对照（md3 自己须有 ≥20 条色值常数），所以「把被扫文件删空」这条路同样是红的"
+restore; py "
+p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+a='use crate::view::{Board, CardView};'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,a+'\nconst PAPER: &str = \x22#ffffff\x22;'))"
 run
