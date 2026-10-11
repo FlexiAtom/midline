@@ -550,6 +550,83 @@ mod tests {
         assert_eq!(crate::render::render_board(&typed.view()), crate::render::render_board(&gestured.view()), "同一行两次执行，盘面必须一字不差");
     }
 
+    /// 从快照自己数第一个空格——**不读 `Layout`**，所以这一支与手势那侧的算式是两份独立推导。
+    /// 两份推导落到同一个数字上才有对撞的意义；共用一份几何的话，这条测就只是在测空气。
+    fn first_free_slot(v: &Board) -> Option<usize> {
+        v.player_front.iter().position(|c| c.is_none())
+    }
+
+    /// 端到端的那台**同一机器**：A 局逐手敲键盘行，B 局逐手两次点按产出那一行。
+    /// 每一步先比**产出的串**（两侧各自独立算出 idx 与列号），再比 `render` 全文、再比 `svg_frame` 全帧字节。
+    /// 这条量的是"输入可以换来源"里最难的一种错：坐标换算差一格，产出的行仍是合法形状、仍能 parse，
+    /// 只是落进了隔壁那列——单点测（`the_gesture_table_is_a_subset_of_the_command_vocabulary`）只走一手，
+    /// 看不出一路走下来的漂移；这里连打若干手，一次分叉就当场红。
+    ///
+    /// 每三手敲一次 `e`：手势表只立两指落子，过回合**没有**手势，两侧都走打字——这恰恰是"输出形状＝
+    /// `Host::read` 那一行"换来的：没有手势的动作不必先造一个事件类型。过回合也让抽牌、攻击、阵亡
+    /// 真进到这条尺里（不落 `e` 的话 18 手全挤在同一回合，盘面根本不动，比的其实是两次同样的拒绝）。
+    #[test]
+    fn the_tap_path_and_the_typed_path_drive_one_and_the_same_battle() {
+        let mut gestured = normal();
+        let mut typed = normal();
+        let mut picker = Picker::default();
+        let (mut tapped, mut accepted) = (0, 0);
+        let opening = crate::render::render_board(&gestured.view());
+
+        for step in 0..18 {
+            let (gv, tv) = (gestured.view(), typed.view());
+            let l = layout_of(&gv);
+            let free = step % 3 != 2;
+            let gesture_line = match (free, first_free_slot(&gv), gv.hand.is_empty()) {
+                (true, Some(slot), false) => {
+                    let idx = step % gv.hand.len();
+                    let card = l.rect_of(Region::Hand(idx)).expect("有手牌就有矩形");
+                    assert_eq!(picker.tap(&l, card.x + 1, card.y + 1), Tap::Selected(idx), "第 {step} 手：点第 {idx} 张手牌没选中它");
+                    let cell = l.rect_of(Region::PlayerCell(slot)).expect("我方每格都有矩形");
+                    match picker.tap(&l, cell.x + 1, cell.y + 1) {
+                        Tap::Line(s) => {
+                            tapped += 1;
+                            Some(s)
+                        }
+                        other => panic!("第 {step} 手：选中再点 P{} 该产出一行，实到 {other:?}", slot + 1),
+                    }
+                }
+                _ => None,
+            };
+            let typed_line = if free {
+                match (first_free_slot(&tv), tv.hand.is_empty()) {
+                    // 先取列号再格式化：直接把 `slot + 1` 当最后一个实参传进 format! 就会与生产行同形，
+                    // 撞掉 M162 那颗牙的「全仓恰命中一次」锚（预检当场喊「补丁失败」，不是静默转绿）。
+                    (Some(slot), false) => {
+                        let col = slot + 1;
+                        Some(format!("p {} P{}\n", step % tv.hand.len(), col))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            let (g, t) = match (gesture_line.as_deref(), typed_line.as_deref()) {
+                (Some(g), Some(t)) => (g, t),
+                (None, None) => ("e\n", "e\n"),
+                (g, t) => panic!("第 {step} 手：一侧有落点一侧没有（手势 {g:?}／打字 {t:?}）——两局到这里已经分叉"),
+            };
+            assert_eq!(g, t, "第 {step} 手：两次点按产出的那行与手敲的那行不是同一串");
+            if matches!(command::execute(&mut gestured, command::parse(g)), command::Exec::Done) {
+                accepted += 1;
+            }
+            command::execute(&mut typed, command::parse(t));
+
+            assert_eq!(crate::render::render_board(&gestured.view()), crate::render::render_board(&typed.view()), "第 {step} 手之后 文本面已分叉");
+            assert_eq!(crate::canvas::svg_frame(&gestured.view(), 7, "two-paths"), crate::canvas::svg_frame(&typed.view(), 7, "two-paths"), "第 {step} 手之后 帧字节已分叉");
+        }
+        assert!(tapped >= 2, "反空虚：全程几乎没有一次是两次点按产出的行（实到 {tapped}）——手势那半在空转");
+        assert!(accepted > 0, "反空虚：一次都没成交 ⇒ 这条比的只是两次同样的拒绝");
+        assert_ne!(opening, crate::render::render_board(&gestured.view()), "反空虚：18 手打完盘面仍是开局那一幅 ⇒ 两条路都在原地，逐手比字节等于没比");
+        assert_eq!(picker.selected(), None, "一路点下来不该留下一枚没人认领的选中态");
+    }
+
     /// 敌方一侧、中线、日志接不了点。理由在词表上：没有一条战斗内命令以它们为参数。
     /// 这条同时是反空虚：它**逐区**过，把 `is_control` 写成恒真会在第一个敌方格上红。
     #[test]

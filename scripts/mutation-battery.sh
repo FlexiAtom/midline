@@ -575,7 +575,7 @@ a='入继承堆 ❌（每关固定发放）'
 assert s.count(a)==1
 open(p,'w',encoding='utf8').write(s.replace(a,'入继承堆 ❌'))"
 DOC="$D/doc.md" run
-echo "### M67 引擎侧把继承堆那行的开端剔除换成恒真 ⇒ 应红在 ⑤ 否定式 cell 的封闭名单 ＋ meta.rs 那条行为测（§六 入列后实测 **5 红**：⑤ 名单＋ai.rs:907＋meta.rs:590＋session 的 EOF 行为测＋§六 复现测——同一条变异的红字数绑定「哪几章有推导器／复现测」这个前提，章数增加时既有读数会漂）"
+echo "### M67 引擎侧把继承堆那行的开端剔除换成恒真 ⇒ 应红在 ⑤ 否定式 cell 的封闭名单 ＋ meta.rs 那条行为测（§六 入列后曾量 5 红；其六 升级定价入列之后整族现量 **6 红**：⑤ 名单＋ai.rs:907＋meta.rs:590＋session 的 EOF 行为测＋§六 复现测＋session 那条 paid_upgrade 行为测——开端混进堆之后 up 0 升的正是第 0 张开端，「inherit[0].upgrades 该是 1」当场红。同一条变异的红字数绑定「哪几支测恰好读这一行」这个前提，测增加时既有读数会漂，行号是当时的快照、按测名读）"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='v.retain(|c| !c.is_starter());'
@@ -972,7 +972,7 @@ a='\"thr\" => c.def.threshold = (c.def.threshold - 1).max(1),'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'\"thr\" => c.def.threshold = (c.def.threshold - 2).max(1),'))"
 run
-echo "### M115 把 *up_used = true 写成 = false（真行为回归：通关限1张那道闸永远置不回，第二次 up 不再被拒）⇒ 实测 **2 红**：既有「the_upgrade_gate_is_the_phase_not_the_index」@command.rs:509（第二次 up 没被拒）＋§十一 推导器 ⑤ @model.rs:1289「写 *up_used = true 的行实测 0 处」"
+echo "### M115 把 *up_used = true 写成 = false（真行为回归：通关限1张那道闸永远置不回，第二次 up 不再被拒）⇒ 实测 **3 红**：既有「the_upgrade_gate_is_the_phase_not_the_index」@command.rs:509（第二次 up 没被拒）＋§十一 推导器 ⑤ @model.rs:1289「写 *up_used = true 的行实测 0 处」＋其六 入列的「a_failed_upgrade_does_not_burn_the_once_per_clear_lot」@command.rs:553 那句「升成了才置闸」——那条测前半截「钱不够不许置闸」在这支变异下是**假绿**（恒 false 当然满足 not used），红的是后半截同一趟阶段钱到位那次；读数从 2 漂到 3 是其六 那帧入列的测带出的连带红，第十七步·其二 整族复跑才量到"
 restore; py "
 p='$D/src/command.rs'; s=open(p,encoding='utf8').read()
 a='*up_used = true;'
@@ -1077,7 +1077,7 @@ n='while up > 0 {'
 assert s.count(n)==1, s.count(n)
 open(p,'w',encoding='utf8').write(s.replace(n,'while up > 0 && false {'))"
 run
-echo "### M129 把规则③ 的向上吞放宽成「越过非注释行也继续吞到文件顶」（else 分支同样标记并上行）⇒ 实测 **18** 红（预测「正向半边被咬＋若干章」，量清「若干」＝17）：rule_three 正向半边（真锚被误吞）＋17 条各章反向覆盖推导器（§三／§四／§五／§六／§七／§八／§九／§十／§十一／§十二／§十三／§十四／§十五／§十六／§十七／§廿二／§廿三）——压在 cfg(test) 上方的真生产锚整段消失，凡以该锚做认领的章当场红。正证「遇第一非注释行即停、不越界」这条边界是有牙的：放宽＝机检自己造出假缺口"
+echo "### M129 把规则③ 的向上吞放宽成「越过非注释行也继续吞到文件顶」（else 分支同样标记并上行）⇒ 实测 **19** 红（原量 18，其八 §廿 推导器入列后章尺从 17 到 18，整族复跑现量多出的那一条正是 every_row_of_section20_ai_design）：rule_three 正向半边（真锚被误吞）＋18 条各章反向覆盖推导器（§三／§四／§五／§六／§七／§八／§九／§十／§十一／§十二／§十三／§十四／§十五／§十六／§十七／§廿／§廿二／§廿三）——压在 cfg(test) 上方的真生产锚整段消失，凡以该锚做认领的章当场红。正证「遇第一非注释行即停、不越界」这条边界是有牙的：放宽＝机检自己造出假缺口"
 restore; py "
 p='$D/src/model.rs'; s=open(p,encoding='utf8').read()
 n='''                    } else {
@@ -1311,7 +1311,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    pub const COMPACT_MAX_DP: i32 = 900;'))"
 run
 
-echo "### M159 把状态层 HOVER 从 0.08 改成与 FOCUS 同值 0.10（其余四档、混合函数全不动）⇒ 实测 **1** 红：红在 md3 那条状态层秩序尺（名字序必须**严格**等于大小序）。它量的是 #132 那格的前提：悬停与按下若同值，交互态就少一态——而那是一句「实现了却看不出实现」的账，只在被摘的时候才现形"
+echo "### M159 把状态层 HOVER 从 0.08 改成与 FOCUS 同值 0.10（其余四档、混合函数全不动）⇒ 实测 **3** 红：md3 那条状态层秩序尺（名字序必须**严格**等于大小序）＋第十七步·其二 控件层两把新尺——the_layers_read_their_own_coefficients_and_press_wins 断言 悬停≠聚焦、the_state_layer_bakes_into_one_solid_color 断言 两态算出的实心 hex 不等。读数从 1 到 3 是本帧新增尺咬的，正是「少一态」这件事在呈现层与控件层各有一处可看见；红字单位仍是测不是层。它量的是 #132 那格的前提：悬停与按下若同值，交互态就少一态——而那是一句「实现了却看不出实现」的账，只在被摘的时候才现形"
 restore; py "
 p='$D/src/md3.rs'; s=open(p,encoding='utf8').read()
 a='    pub const HOVER: f64 = 0.08;'
@@ -1365,4 +1365,12 @@ p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
 a='        if pressed != at {\n            return Tap::Ignore;\n        }\n'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M166 落子之后不销选中账（PlayerCell 那支的 self.selected.take() 换成 self.selected，产出的那一行一字不动）⇒ 实测 **2** 红：一条红在控件层那条「选中再点我方格产一行」的单点尺（产出之后 selected 还在，「落点成了就别留着那份选中态」当场红）；另一条红在端到端那条「两次点按与手敲走同一台机器」的尺（选中账没销，下一手重点第 idx 张时被读成**取消**选中，产不出一行 ⇒ 与打字那侧当场分叉）。这条量的是「选中态是一次性的」：take 与 copy 在**产出的那行字**上完全看不出差别，只有连打两手才现形。写它正是 第十七步·其二 那条端到端尺逼出来的：单点测只走一手，这一格在它里面永绿"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='match self.selected.take() {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'match self.selected {'))"
 run
