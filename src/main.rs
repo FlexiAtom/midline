@@ -28,6 +28,7 @@ mod render;
 mod rng;
 mod save;
 mod session;
+mod touch;
 mod tui;
 mod view;
 

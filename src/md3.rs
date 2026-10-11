@@ -126,6 +126,13 @@ pub mod color {
         [nib(b[1]) * 16 + nib(b[2]), nib(b[3]) * 16 + nib(b[4]), nib(b[5]) * 16 + nib(b[6])]
     }
 
+    /// `rgb` 的逆：三通道回到 `#rrggbb`。混色算出的实心色必须以这张表自己的写法出来，
+    /// 否则桌面帧里会出现第二种色写法（`rgb(…)`、十进制三元组一类），三个解析器给三种结果。
+    pub fn hex(rgb: [u8; 3]) -> String {
+        let [r, g, b] = rgb;
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+
     const fn nib(b: u8) -> u8 {
         match b {
             b'0'..=b'9' => b - b'0',
@@ -172,8 +179,10 @@ pub mod lane {
 }
 
 /// 状态层。MD3 表达交互态的方式不是改底色，而是在底色上叠一层 `on_X` 色并按下面的透明度混合。
-/// 这五个数是照规范记的 ⇒ #132 的事件驱动层只该出现这几个数，不该自己发明新档。
+/// 这五个数是照规范记的 ⇒ 控件层只该出现这几个数，不该自己发明新档。
 pub mod state {
+    use crate::md3::color;
+
     /// 悬停 8%。
     pub const HOVER: f64 = 0.08;
     /// 聚焦 10%（键盘／手柄焦点环同值，靠描边形状区分）。
@@ -188,8 +197,9 @@ pub mod state {
     pub const DISABLED_CONTAINER: f64 = 0.12;
 
     /// 按 MD3 口径把状态层混进底色：`out = base*(1-a) + overlay*a`，四舍五入。
-    /// 桌面 SVG 走 `fill-opacity`、安卓栅格走这支函数——两后端必须算出同一个颜色，
-    /// 否则"同一状态在两个壳里读出两个色"就是开了第二真值源。
+    /// 两个后端共用这支函数——桌面 SVG 从前走 `fill-opacity`，本帧起也走这里：真机那条路是
+    /// 帧缓冲写像素、没有合成器替做 alpha，一个走混合、一个走属性，就是"同一状态在两个壳里
+    /// 读出两个色"那种第二真值源。
     pub fn blend(base: [u8; 3], overlay: [u8; 3], a: f64) -> [u8; 3] {
         let mut out = [0u8; 3];
         let mut i = 0;
@@ -199,6 +209,12 @@ pub mod state {
             i += 1;
         }
         out
+    }
+
+    /// 色串进、色串出：`rgb` × `blend` × `hex` 那一串调用收成一支，两个后端因此共用**整条算式**，
+    /// 不只是共用那五个系数。`a = 0` 时须原样回到底色串（无态层那一帧的可比性靠这一条）。
+    pub fn blend_hex(base: &str, overlay: &str, a: f64) -> String {
+        color::hex(blend(color::rgb(base), color::rgb(overlay), a))
     }
 }
 
@@ -727,53 +743,62 @@ mod tests {
     }
 
     /// **真值来源的机检**（#130 决策日志立的那颗牙）：视觉常数只许住在 md3。
-    /// 扫 `src/canvas.rs` 的生产面，三条同时成立才算过：
-    /// ① 没有 `#rrggbb`；② 没有 `const` 声明；③ 数字位只许是 `0`／`1`／`2` 这三个结构数（除以二、下标起算一类）。
+    /// 扫**呈现面**的生产代码（`canvas.rs` 画、`touch.rs` 算几何与手势），四条同时成立才算过：
+    /// ① 没有 `#rrggbb`；② 没有 `const` 声明；③ 数字位只许是 `0`／`1`／`2` 这三个结构数（除以二、下标起算一类）；
+    /// ④ 每份文件的生产面**真的有几行被扫到**（空文件扫不出东西，那条检就会从"干净"退化成"没得扫"）。
     /// 第③条把色值、圆角、字号、行距、段长、透明度全关进表里——连写在 SVG 属性串里的裸数也一并拦。
     /// 两类豁免，都是**写明的**而不是"数不到"：标识符里的数字不算数（`i32`／`f64`／`u8` 这类类型名，
     /// 以及牌面文案里的 `P1`～`P4`），判据是"紧跟在字母或下划线之后"；单个 `0`／`1`／`2` 与形如 `x.0`
     /// 的小数溜得过去（`stroke-width="2"` 那一格就是），所以这条拦的是"漏进一个没名字的数"，
     /// 拦不住"把表里已有的数抄成字面量"——后者归引用纪律与本档目视。
-    /// 末了那条反空虚检查拿"md3 自己确实有色"作对照：否则 `canvas.rs` 被删空也能骗过前三条。
+    /// 为什么要从一份扩成两份：几何的家一搬进 `touch.rs`，只扫 `canvas.rs` 就等于把尺子留在旧门口——
+    /// 新家里漏一个裸数，当场无人管，而"版式真值只有一个家"这句话恰好在那一刻开始说谎。
+    /// 末了那条反空虚检查拿"md3 自己确实有色"作对照：否则呈现面被删空也能骗过前三条。
     #[test]
     fn visual_constants_have_one_home() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let src = std::fs::read_to_string(manifest.join("src/canvas.rs")).expect("没有 src/canvas.rs：这条检扫谁？");
-
         let mut offenders: Vec<String> = Vec::new();
-        for (no, raw) in src.lines().enumerate() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with("//") {
-                continue;
-            }
-            if line.starts_with("#[cfg(test)]") {
-                break;
-            }
-            let bytes = line.as_bytes();
-            let ident = |b: u8| b.is_ascii_alphabetic() || b == b'_';
-            let mut i = 0;
-            while i < bytes.len() {
-                if bytes[i] == b'#' && bytes.len() >= i + 7 && bytes[i + 1..i + 7].iter().all(|b| b.is_ascii_hexdigit()) {
-                    offenders.push(format!("{:>3}: 色值 {}", no + 1, line));
-                }
-                if bytes[i].is_ascii_digit() {
-                    let mut j = i;
-                    while j < bytes.len() && bytes[j].is_ascii_digit() {
-                        j += 1;
-                    }
-                    let in_identifier = i > 0 && ident(bytes[i - 1]);
-                    let structural = j - i == 1 && matches!(bytes[i], b'0' | b'1' | b'2');
-                    if !in_identifier && !structural {
-                        offenders.push(format!("{:>3}: 裸数 {} ← {}", no + 1, &line[i..j], line));
-                    }
-                    i = j;
+        for file in ["canvas.rs", "touch.rs"] {
+            let src = std::fs::read_to_string(manifest.join("src").join(file))
+                .unwrap_or_else(|e| panic!("没有 src/{file}：这条检扫谁？（{e}）"));
+            let mut seen = 0usize;
+
+            for (no, raw) in src.lines().enumerate() {
+                let line = raw.trim();
+                if line.is_empty() || line.starts_with("//") {
                     continue;
                 }
-                i += 1;
+                if line.starts_with("#[cfg(test)]") {
+                    break;
+                }
+                seen += 1;
+                let bytes = line.as_bytes();
+                let ident = |b: u8| b.is_ascii_alphabetic() || b == b'_';
+                let mut i = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'#' && bytes.get(i + 1..i + 7).is_some_and(|h| h.iter().all(|b| b.is_ascii_hexdigit())) {
+                        offenders.push(format!("{file}:{:>3}: 色值 {}", no + 1, line));
+                    }
+                    if bytes[i].is_ascii_digit() {
+                        let mut j = i;
+                        while j < bytes.len() && bytes[j].is_ascii_digit() {
+                            j += 1;
+                        }
+                        let in_identifier = i > 0 && ident(bytes[i - 1]);
+                        let structural = j - i == 1 && matches!(bytes[i], b'0' | b'1' | b'2');
+                        if !in_identifier && !structural {
+                            offenders.push(format!("{file}:{:>3}: 裸数 {} ← {}", no + 1, &line[i..j], line));
+                        }
+                        i = j;
+                        continue;
+                    }
+                    i += 1;
+                }
+                if line.starts_with("const ") || line.starts_with("pub const ") {
+                    offenders.push(format!("{file}:{:>3}: 本地常数 {}", no + 1, line));
+                }
             }
-            if line.starts_with("const ") || line.starts_with("pub const ") {
-                offenders.push(format!("{:>3}: 本地常数 {}", no + 1, line));
-            }
+            assert!(seen > 0, "src/{file} 的生产面一行都没扫到：这条检在它身上是空转");
         }
         assert!(offenders.is_empty(), "视觉常数漏出 md3 之外（版式真值只许一个家）：\n{}", offenders.join("\n"));
 

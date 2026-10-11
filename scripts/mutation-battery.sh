@@ -1326,3 +1326,43 @@ a='use crate::view::{Board, CardView};'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,a+'\nconst PAPER: &str = \x22#ffffff\x22;'))"
 run
+
+echo "### M161 把命中框的右界从半开改成闭（x < 右界 ⇒ x <= 右界）⇒ 实测 **2** 红：一条红在控件层那条「含左上、不含右下」的矩形尺（右边那条边是与隔壁的接缝，不算）；第二条红在「点中心必中这一格」那条——它反面还钉了一句「右边界那一格不该还算这张牌」，两条判据各撞一次，红数按测计＝2。半开半闭不是洁癖：两格相邻时共享的那条缝若两侧都算，一次点就同时命中两格，而 hit() 取最上面那块——表现是**左边那格点不中**；反过来两侧都不算会漏掉一整列像素。这类 off-by-one 在离线帧上完全看不见（帧字节一个不动），只有拿坐标撞矩形的测才量得到"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        x >= self.x && x <= self.x + self.w && y >= self.y && y < self.y + self.h'))"
+run
+
+echo "### M162 把落点命令的列号从 P1 起算退回 P0 起算（「, slot + 1))」换成「, slot))」，其余一字不动）⇒ 实测 **1** 红：红在控件层那条「手势产的那行字与手敲的那行字同解」的尺。这一格是本帧最坏的一种错法：P0 不是合法列名，command::parse 读不懂就退回拒绝，于是点第一格落进第二格、点第四格报「读不懂」——而整条链路上没有任何一个数在自身层面不自洽（slot 与 idx 都是真数），只有把产出的那行字交给引擎判一次才看得出来。所以这条测共用了 tui 那条老尺的思路：不查手势像不像手势，查手势交回的东西是不是命令"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a=', slot + 1))'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,', slot))'))"
+run
+
+echo "### M163 把态层取值从「最后一个」改回「第一个」（layer_of 摘掉 .rev()，表与升序约定都不动）⇒ 实测 **1** 红：红在控件层那条「三档各接自己的系数、且按下胜出」的尺。MD3 把 FOCUS 与 PRESS 记成同一个数，所以优先级不可能靠系数排——它全靠绘制侧读表的这一端。摘掉 .rev() 之后同一格的焦点环会盖住按下态：手指按在一格上，那一格却显示「没按」的形状，而这在帧上仍是合法颜色（两档同值），只有直接问「这一格最后是哪一层」才量得到"
+restore; py "
+p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+a='marks.iter().rev().find('
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'marks.iter().find('))"
+run
+
+echo "### M164 摘掉 marks() 尾部那道按矩形筛陈旧区名的闸（三份态与优先级全不动）⇒ 实测 **1** 红：红在控件层那条「手牌变短后残留的选中序号不点亮任何东西」的尺。这条牙的存在理由是一格真机才会现形的错：落一张牌之后手牌少一张，而 selected 还指着那个序号——不筛就直接在缩短的行上画焦点环，画在**别人那张牌**头上。它同样是帧字节测不到的（那帧没被重画，只是下一帧多了一块亮）"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='        out.retain(|(g, _)| l.rect_of(*g).is_some());\n'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M165 摘掉 release() 里「按下区与抬起区必须是同一块」那道判据（take 与手势表全不动）⇒ 实测 **1** 红：红在控件层那条「按在 A 抬在 B 不算一次点」的尺。摘掉它等于把滑动手势当成点击：手指从手牌拖到我方格再抬，本该什么也不做（滑动是另一条命令，而那条命令本帧没有），改完会当场把那张牌落进抬起时那一列——一次「划过去」变成一次「下单」。这条与 M162 各钉 release 的一支：M162 钉产出串的最后一个字节，这条钉产出前那道闸"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='        if pressed != at {\n            return Tap::Ignore;\n        }\n'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run

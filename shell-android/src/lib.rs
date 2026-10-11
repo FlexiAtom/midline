@@ -54,6 +54,8 @@ mod rng;
 mod save;
 #[path = "../../src/session.rs"]
 mod session;
+#[path = "../../src/touch.rs"]
+mod touch;
 #[path = "../../src/tui.rs"]
 mod tui;
 #[path = "../../src/view.rs"]
