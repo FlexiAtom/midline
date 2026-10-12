@@ -91,6 +91,20 @@ struct WindowBuffer {
     reserved: [u32; 6],
 }
 
+/// NDK `ARect`（`android/rect.h`，`native_window.h`／`native_activity.h` 都把它带进来）：
+/// **四个 int32、无填充**，且语义是「left 含、right 不含」——`right-left` 才是宽度。
+/// 这一格是给 `onContentRectChanged` 的：系统把"你能画的矩形"通过这个结构交下来，
+/// 而本壳从前把那个指针整个忽略（回调登记了，正文只打一句名字）。画面到不到边这件事
+/// 只有一个证人，就是它——所以现在是**把四个数打出来**，不是拿它去算任何东西。
+#[cfg(target_os = "android")]
+#[repr(C)]
+struct Area {
+    left: c_int,
+    top: c_int,
+    right: c_int,
+    bottom: c_int,
+}
+
 /// NDK 的像素格式真值在 `hardware_buffer.h`，**与 legacy HAL 的旧编号不一致**（旧表里 3=565，
 /// 这里 3 是 RGB_888、4 才是 RGB_565）。上一帧按旧表把真机报的 `fmt=4` 当 4 字节写，
 /// 每个"行"跨了两条真实行，缓冲整个写花（本档 §3.8.1 的失手记录）。
@@ -289,9 +303,36 @@ unsafe extern "C" fn on_input_queue_destroyed(
 
 unsafe extern "C" fn on_content_rect_changed(
     _activity: *mut ANativeActivity,
-    _rect: *const c_void,
+    rect: *const c_void,
 ) {
-    note(c"onContentRectChanged");
+    // 从前这条只登记、不读——回调进来打一句 `onContentRectChanged` 就完了，那个 `ARect*` 里
+    // 四个数没人看过。现在把它们打出来：这是系统对"你能画的矩形"唯一的现读证人，而本帧问的
+    // 恰好就是这句话（挖孔区那条 52 到不到边）。**只印不裁**：壳里没有任何一处版面拿它当输入，
+    // 拿它当输入的下一步是 hit-test（#132），那时再决定它归谁持。
+    #[cfg(target_os = "android")]
+    if rect.is_null() {
+        warn(c"onContentRectChanged: rect pointer is NULL");
+    } else {
+        let r = unsafe { &*(rect as *const Area) };
+        unsafe {
+            ndk::__android_log_print(
+                LOG_INFO,
+                TAG.as_ptr(),
+                c"onContentRectChanged l=%d t=%d r=%d b=%d (%dx%d)".as_ptr(),
+                r.left,
+                r.top,
+                r.right,
+                r.bottom,
+                r.right - r.left,
+                r.bottom - r.top,
+            )
+        };
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = rect;
+        note(c"onContentRectChanged");
+    }
 }
 
 unsafe extern "C" fn on_configuration_changed(_activity: *mut ANativeActivity) {
@@ -598,3 +639,13 @@ const _: () = assert!(std::mem::size_of::<WindowBuffer>() == 48);
 const _: () = assert!(std::mem::offset_of!(WindowBuffer, stride) == 8);
 const _: () = assert!(std::mem::offset_of!(WindowBuffer, format) == 12);
 const _: () = assert!(std::mem::offset_of!(WindowBuffer, bits) == 16);
+// `ARect` 那四个 int32：漏一个填充就把 (left,top,right,bottom) 读成 (left,top,top,right)。
+// 与 `WindowBuffer` 同一口径——这几行只证明我自己的声明自洽，真头那一侧由 layout_check.c 对质。
+#[cfg(target_os = "android")]
+const _: () = assert!(std::mem::size_of::<Area>() == 16);
+#[cfg(target_os = "android")]
+const _: () = assert!(std::mem::offset_of!(Area, top) == 4);
+#[cfg(target_os = "android")]
+const _: () = assert!(std::mem::offset_of!(Area, right) == 8);
+#[cfg(target_os = "android")]
+const _: () = assert!(std::mem::offset_of!(Area, bottom) == 12);

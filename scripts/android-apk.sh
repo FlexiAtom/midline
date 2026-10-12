@@ -95,7 +95,7 @@ cat > "$STAGE/AndroidManifest.xml" <<EOF
     <application android:label="${LABEL}" android:hasCode="false">
         <activity android:name="android.app.NativeActivity"
                   android:label="${LABEL}"
-                  android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+                  android:theme="@style/MidlineNative"
                   android:exported="true"
                   android:screenOrientation="sensorLandscape"
                   android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|uiMode|density|navigation">
@@ -109,6 +109,28 @@ cat > "$STAGE/AndroidManifest.xml" <<EOF
 </manifest>
 EOF
 
+# 挖孔区这一条只许有**一处**声明，且必须声明在**主题**里，不是 manifest 那条属性。
+# 这是本帧两次装机量出来的，不是查文档查出来的：manifest 上写 `android:windowLayoutInDisplayCutoutMode=
+# "shortEdges"` 那一版，产物里确实存成了枚举整数（`aapt2 dump xmltree` 现读 `windowLayoutInDisplayCutoutMode
+# (0x01010586)=1`），可 `dumpsys window windows` 里本壳的 mAttrs 是
+# `…sim={adjust=resize forwardNavigation} disableCutout=false…`——**没有** `layoutInDisplayCutoutMode` 这个
+# token（同一份 dump 里 com.dragon.read 那行明明白白带着 `layoutInDisplayCutoutMode=shortEdges`），
+# 窗口帧 `frame=[Rect(0, 52 - 720, 1600)]`，另有一只 `Letterbox_left_…`(contentSize=52x720) 替我们填那道缝，
+# 壳里读到的仍是 `onNativeWindowCreated 1548x720` ⇒ **值没走到 WindowManager**。
+# 换成主题这一条：mAttrs 出现 `layoutInDisplayCutoutMode=shortEdges`，`onNativeWindowCreated 1600x720`，
+# `onContentRectChanged l=52 t=0 r=1600 b=720`。主题走的是客户端 `Window#generateLayout` 读
+# `R.styleable.Window` 的路，LayoutParams 的值本来就在那儿写进去的——manifest 那条留着只会让人以为它在管事，
+# 所以摘掉（一处声明，一条路）。
+mkdir -p "$STAGE/res/values"
+cat > "$STAGE/res/values/theme.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="MidlineNative" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>
+EOF
+
 echo "== cargo build --release --target $RUST_TARGET（壳 crate；自本帧起带**一件**第三方：ab_glyph 字体链）"
 ( cd "$SHELL_DIR" && cargo build --release --target "$RUST_TARGET" )
 SO="$SHELL_DIR/target/$RUST_TARGET/release/lib${LIB_NAME}.so"
@@ -117,9 +139,14 @@ SO="$SHELL_DIR/target/$RUST_TARGET/release/lib${LIB_NAME}.so"
 mkdir -p "$STAGE/lib/$ABI_DIR"
 cp "$SO" "$STAGE/lib/$ABI_DIR/lib${LIB_NAME}.so"
 
+echo "== aapt2 compile res/（本帧起包里有**一份**资源：那份主题；manifest 指 @style/MidlineNative，缺它 link 直接失败）"
+"$BUILD_TOOLS/aapt2" compile --dir "$STAGE/res" -o "$STAGE/res.zip"
+
 echo "== aapt2 link（含 -A 资产目录：字体走 assets/ 通道，不走 include_bytes!）"
+# 资源走**位置参数**而不是 `-R`：`-R` 是 overlay 语义，新造一份 style 会被它当场毙
+# （现读：`error: resource style/MidlineNative does not override an existing resource`）。
 "$BUILD_TOOLS/aapt2" link -o "$STAGE/unaligned.apk" -I "$PLATFORM" \
-  --manifest "$STAGE/AndroidManifest.xml" -A "$ASSETS"
+  --manifest "$STAGE/AndroidManifest.xml" -A "$ASSETS" "$STAGE/res.zip"
 
 # 只装 lib/，不装 classes.dex（hasCode=false）
 ( cd "$STAGE" && zip -q -r unaligned.apk "lib" )
@@ -154,6 +181,27 @@ awk -v r="$raw" -v c="$comp" -v a="$(stat -c%s "$APK")" \
   'BEGIN{printf "   字体条目现量：%d B 未压 → %d B 实存（%.1f%% 的原价）／整只 APK %d B\n", r, c, c*100/r, a}'
 # 反向一格：本壳 manifest 写 hasCode="false"，dex 出现就说明有人偷偷加了 Java 面。
 unzip -l "$APK" | grep -q 'classes\.dex' && die "产物里出现 classes.dex（本壳不该有 Java）" || true
+
+# 产物回读：主题里那条 item 到底存成了什么。三层判据，缺一不装：
+# ① **属性 id 从 -I 的那份 android.jar 现取**（`javap` 读 `android.R$attr`），不手写十六进制、
+#    也不从我们的源里抄——"包里的这个 id 就是平台所说的那个 attr"这件事必须有一个**外部证人**。
+# ② 值必须是枚举整数 `=1`（shortEdges）。框架类型是 TYPE_ENUM、系统取的是 `getInt`，所以
+#    "aapt2 把 `shortEdges` 当字符串塞进包"与"塞成整数 1"两种产物，名字都在、装机都不报错——
+#    **只有后者画面会到边**。前者是静默失效，读值才咬得住。
+# ③ parent 必须仍是那只全屏主题：换主题等于把整套餐具（标题栏、全屏位、状态栏）一起换掉，
+#    指错 parent 时画面会安静地变成别的样子，而这一帧问的恰好是"到不到边"。
+command -v javap >/dev/null || die "找不到 javap：属性 id 就没有外部证人，这一格不许按我抄的数走。"
+CUTOUT_DEC="$(javap -constants -cp "$PLATFORM" 'android.R$attr' \
+             | sed -n 's/.*windowLayoutInDisplayCutoutMode = \([0-9]*\);/\1/p' | head -1)"
+[ -n "$CUTOUT_DEC" ] || die "从 $PLATFORM 里读不出 windowLayoutInDisplayCutoutMode 的值 ⇒ 换 android.jar 或改名了，别按旧 id 判。"
+CUTOUT_ID="$(printf '0x%08x' "$CUTOUT_DEC")"
+RES_DUMP="$("$BUILD_TOOLS/aapt2" dump resources "$APK" 2>/dev/null | grep -A6 'style/MidlineNative' || true)"
+[ -n "$RES_DUMP" ] || die "产物 resources.arsc 里没有 style/MidlineNative ⇒ manifest 指的 @style 是个空名，装机直接起不来。"
+printf '%s\n' "$RES_DUMP" | grep -q "${CUTOUT_ID}=1" \
+  || die "MidlineNative 里没有 ${CUTOUT_ID}=1（现读：$(printf '%s' "$RES_DUMP" | tr '\n' ' ')）⇒ 系统 getInt 会退回默认值，画面照样不到边。"
+printf '%s\n' "$RES_DUMP" | grep -q 'parent=0x0103000a' \
+  || die "MidlineNative 的 parent 不是 0x0103000a（Theme.Black.NoTitleBar.Fullscreen）⇒ 换主题换了别的东西。"
+echo "   主题那条落下：style/MidlineNative 里 $CUTOUT_ID=1（id 现取自 $PLATFORM），parent 仍是那只全屏主题"
 
 abis="$("$BUILD_TOOLS/aapt2" dump badging "$APK" 2>/dev/null | sed -n "s/^native-code: //p" | tr -d "'")"
 echo "OK: $APK  [${abis:-无 native-code 声明}]  $(stat -c %s "$APK") 字节"

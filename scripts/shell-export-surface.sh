@@ -130,6 +130,7 @@ if [ -x "$CLANG" ]; then
   if "$CLANG" --sysroot="$SYSROOT" -c -o "$LOGDIR/layout-check.o" "$SHELL_DIR/layout_check.c" 2>"$LOGDIR/layout-check.log"; then
     ok "layout_check.c 对 NDK 头通过：ANativeActivity=80B／Callbacks=128B／16 条回调偏移；
        ANativeWindow_Buffer=48B（width0 height4 stride8 format12 bits16 reserved24）；
+       ARect=16B（left0 top4 right8 bottom12，四个 int32 无填充）；
        像素枚举 RGBA8888=1 RGBX8888=2 RGB888=3 RGB565=4；AASSET_MODE_BUFFER=3；
        off_t=8B／getLength→off_t／read→int"
   else

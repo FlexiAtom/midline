@@ -79,6 +79,11 @@ restore_shell() {
 pys() { local e rc before after; before="$(cat "$D"/shell-android/src/*.rs 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/shell-android/src/*.rs 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何壳侧字节"; return 0; }
 shout() { if [ -n "$SHELL_FAIL" ]; then printf '!! 壳侧 lane 没有落点（%s）⇒ 下面不算读数\n' "$SHELL_FAIL"; return 1; fi; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，读数一律不算落点\n' "$PATCH_FAIL"; return 1; fi; return 0; }
 # 探针 lane：host-frame 自带「填充列必须一格未动」那道检（main.rs:93–111），**不吃真机也不吃截屏**就能红
+# 这里那两个数是**步长填充的证人**，不是当前机型形状：本帧挖孔区那格之后真机现读已是
+# `buffer 1600x720 stride=1600`（stride==w，那 4 列填充没了），把探针换成 1600x720 会让 M167 变哑——
+# 它要量的正是「把步长乘数从 stride 换成 w」这一刀，所以必须留在一格 stride≠w 的形状上。
+# 新尺寸那侧由分开的读数兜：`host-frame 1600x720` 的 digest/k/off 与设备侧对撞（第十八步·其三），
+# 两条各管一件事，别拿一条冒充另一条。
 srun() { shout || return 0; local o rc; o="$(cd "$D/probes/host-frame" && cargo run --release --offline -q -- 1548x720 1552 "$D/host-frame.ppm" 2>&1)"; rc=$?; printf '%s\n' "$o" | grep -vE '^[[:space:]]*$' | tail -4; printf 'rc=%s\n' "$rc"; }
 # 色值检 lane：调守门检 §8 那**同一份**谓词（scripts/color-literal-scan.py），不在这里抄一遍正则
 crun() { shout || return 0; local o rc; o="$(python3 "$ROOT/scripts/color-literal-scan.py" "$D/shell-android/src" 2>&1)"; rc=$?; [ -n "$o" ] && printf '%s\n' "$o" | sed "s#$D#<D>#g" | tail -4; printf 'rc=%s\n' "$rc"; }
@@ -1412,7 +1417,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'match self.selected {'))"
 run
 
-echo "### M167 把壳侧 fill_bg 的行步长从「缓冲区 stride」换成「画面宽度 w」（text.rs 里 chunks_mut 的那个乘数，取色、版面、字形一格没动）⇒ 实测 host 探针当场 rc=1，喊出「步长填充被动过」并给第一格索引。真机现读是 buffer 1548×720 而 stride=1552，那 4 列不属于画面：按 w 走会让每行往前挪 4 列、越往后错得越多，屏上的症状是「画面斜了」。落点走探针而不走测面，因为探针里那道「填充列必须一格未动」是**唯一不吃真机、也不吃截屏**就能红的证人；像素对撞遇到同一种错只会红满屏，归因不出是步长还是种子"
+echo "### M167 把壳侧 fill_bg 的行步长从「缓冲区 stride」换成「画面宽度 w」（text.rs 里 chunks_mut 的那个乘数，取色、版面、字形一格没动）⇒ 实测 host 探针当场 rc=1，喊出「步长填充被动过」并给第一格索引。锚的是 其一 那帧的真机现读 buffer 1548×720 而 stride=1552：那 4 列不属于画面，按 w 走会让每行往前挪 4 列、越往后错得越多，屏上的症状是「画面斜了」。第十八步·其三 之后机型形状换成了 1600×720 而 stride=1600（挖孔区让开后填充没了，stride==w），**这条 lane 仍按 1548×720/1552 跑**——探针的 argv 就是步长填充的证人本身，换成新形状它当场变哑；新尺寸的两侧同数另由像素对撞兜（见该条 README）。落点走探针而不走测面，因为探针里那道「填充列必须一格未动」是**唯一不吃真机、也不吃截屏**就能红的证人；像素对撞遇到同一种错只会红满屏，归因不出是步长还是种子"
 restore_shell; pys "
 p='$D/shell-android/src/text.rs'; s=open(p,encoding='utf8').read()
 a='dst.chunks_mut(stride * 4)'

@@ -76,6 +76,18 @@ _Static_assert(offsetof(ANativeWindow_Buffer, stride) == 8, "buffer stride");
 _Static_assert(offsetof(ANativeWindow_Buffer, format) == 12, "buffer format");
 _Static_assert(offsetof(ANativeWindow_Buffer, bits) == 16, "buffer bits");
 _Static_assert(offsetof(ANativeWindow_Buffer, reserved) == 24, "buffer reserved");
+/* 挖孔区那一格：`onContentRectChanged` 递进来的、`ANativeWindow_lock` 回读的 dirty rect 都是
+ * **同一个 `ARect`**（`android/rect.h`，四个 int32、无填充；语义 left 含、right 不含）。
+ * entry.rs 里那份叫 `Area`，是照头**独立**抄的第二份——两边各自自洽就能一起错，所以这里让真头再开口一次。
+ * 本帧问的正是"系统给的那条 52 到底是什么形状、在哪一边"，而唯一的现读证人就是这个结构。 */
+#include <android/rect.h>
+
+_Static_assert(sizeof(ARect) == 16, "ARect size");
+_Static_assert(offsetof(ARect, left) == 0, "rect left");
+_Static_assert(offsetof(ARect, top) == 4, "rect top");
+_Static_assert(offsetof(ARect, right) == 8, "rect right");
+_Static_assert(offsetof(ARect, bottom) == 12, "rect bottom");
+
 /* NDK 的像素枚举与 legacy HAL 的旧编号不是一套（这里 3=RGB_888、4=RGB_565）。上一帧按旧编号
  * 把真机报的 fmt=4 当 4 字节写，整块缓冲写花——那三格数字就是那次的证人。 */
 _Static_assert(AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM == 1, "RGBA_8888");

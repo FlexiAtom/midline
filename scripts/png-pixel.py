@@ -253,11 +253,71 @@ def diff(rows_p, rows_d, ch_p, ch_d, pw, ph, ox, oy, exclude):
     return n, (exact, le1, le2), worst, (None if box[2] < 0 else tuple(box)), skipped
 
 
+def blocks(rows_p, rows_d, ch_p, ch_d, pw, ph, ox, oy, tol, exclude):
+    """差 > tol 的格子做 **4-邻域连通块**，每块带两侧各自的众数色。
+
+    为什么要有这一格：排除矩形必须由**测量**给出，手填等于"把没解释的东西写进尺里"。
+    第十八步·其一 那六块是手量的矩形＋事后逐块数格；这里把"量"这一步收进尺：
+    下一帧截屏换了形状（悬浮件挪位、挖孔到边、我们画漏一块），先跑 blocks，读数自己会指到块上。
+    返回 (差格总数, [(格数, x0, y0, x1, y1, host 众数色, 设备众数色), …]) 按格数降序。"""
+    from collections import Counter
+
+    exclude = exclude or []
+    bad = set()
+    for y in range(ph):
+        dy = oy + y
+        if dy >= len(rows_d):
+            break
+        pr, dr = rows_p[y], rows_d[dy]
+        for x in range(pw):
+            dx = ox + x
+            if dx >= len(dr) // ch_d:
+                break
+            if _in_any(dx, dy, exclude):
+                continue
+            i, j = x * ch_p, dx * ch_d
+            d = max(abs(a - b) for a, b in zip(pr[i : i + 3], dr[j : j + 3]))
+            if d > tol:
+                bad.add((dx, dy))
+    out = []
+    seen = set()
+    for start in bad:
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        blk = []
+        while stack:
+            x, y = stack.pop()
+            blk.append((x, y))
+            for nb in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if nb in bad and nb not in seen:
+                    seen.add(nb)
+                    stack.append(nb)
+        xs = [p[0] for p in blk]
+        ys = [p[1] for p in blk]
+        cp = Counter()
+        cd = Counter()
+        for x, y in blk:
+            # blk 存的是**设备**坐标 (dx,dy)：host 那侧行列都要各自减掉定位偏移，
+            # 否则整块读数会平移一格（其一 那次偏移是 (52,0)，正是最容易把这条读错的情形）。
+            cp[rows_p[y - oy][(x - ox) * ch_p : (x - ox) * ch_p + 3]] += 1
+            cd[rows_d[y][x * ch_d : x * ch_d + 3]] += 1
+        out.append(
+            (len(blk), min(xs), min(ys), max(xs), max(ys),
+             "#%02x%02x%02x" % tuple(cp.most_common(1)[0][0]),
+             "#%02x%02x%02x" % tuple(cd.most_common(1)[0][0]))
+        )
+    out.sort(reverse=True)
+    return len(bad), out
+
+
 def main(argv):
     if len(argv) < 3:
         raise SystemExit(
             "用法：png-pixel.py size <png> | px <png> x,y [x,y ...] | hex <png> <tol> x,y,#RRGGBB [...] "
-            "| diff <设备.png> <host.ppm> [exclude=X0,Y0,X1,Y1]... [dot=边长]"
+            "| diff <设备.png> <host.ppm> [exclude=X0,Y0,X1,Y1]... [dot=边长] "
+            "| blocks <设备.png> <host.ppm> [tol=N] [exclude=...]（差>tol 的格子分连通块，含两侧众数色）"
         )
     cmd, path = argv[1], argv[2]
     width, height, channels, rows = load(path)
@@ -296,6 +356,40 @@ def main(argv):
                 "记账按现量格数，别拿矩形面积当排除量"
             )
         return 0 if n and eq == n else 1
+
+    if cmd == "blocks":
+        ppm = argv[3]
+        tol = 2
+        exclude = []
+        for extra in argv[4:]:
+            if extra.startswith("exclude="):
+                exclude.append(tuple(int(v) for v in extra[len("exclude=") :].split(",")))
+            elif extra.startswith("tol="):
+                tol = int(extra[len("tol=") :])
+        pw, ph, chp, rowsp = load_ppm(ppm)
+        dw, dh, chd, rowsd = load(path)
+        size = corner_size(rowsp, chp)
+        at = locate(rowsp, rowsd, chp, chd, pw, ph, size)
+        if at is None:
+            raise SystemExit(f"设备图里找不到那块 {size}×{size} 定位点，分块无从对齐")
+        ox, oy = at
+        n, comps = blocks(rowsp, rowsd, chp, chd, pw, ph, ox, oy, tol, exclude)
+        print(
+            f"blocks 设备 {dw}x{dh} ← PPM {pw}x{ph} @({ox},{oy})  tol={tol}"
+            + (f"  排除 {len(exclude)} 个矩形" if exclude else "")
+        )
+        print(f"  差 > {tol} 共 {n} 格，连通块 {len(comps)} 个")
+        for c in comps[:15]:
+            cnt, x0, y0, x1, y1, hp, hd = c
+            print(
+                f"  {cnt:>7} 格  ({x0},{y0})-({x1},{y1})  {x1 - x0 + 1}x{y1 - y0 + 1}"
+                f"  host={hp}  设备={hd}"
+            )
+        if len(comps) > 15:
+            print(f"  …另有 {len(comps) - 15} 块未列（都计入上面的总数）")
+        tot = sum(c[0] for c in comps)
+        print(f"  列出的块合计 {tot} 格／全部 {n} 格（差≤tol 的格子不参与分块，所以这个和应等于 n）")
+        return 0
 
     if cmd == "size":
         print(f"{width}x{height}")
