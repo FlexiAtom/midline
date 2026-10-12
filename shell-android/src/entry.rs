@@ -23,8 +23,8 @@
 //! 两道尺共用一张表，所以"我以为的布局"与"平台实际的布局"一旦分叉必有一边红。
 //!
 //! 本帧起它多一件事：**把一帧真的画到屏上**。呈现走的是自写 `ANativeWindow_Buffer` 那条
-//! （价目表 ① 路，本档 §3.8.1 已证五区纯色逐字节到屏），字形由 `text.rs` 栅格，字体字节
-//! 从 APK 资产通道读入（`AAssetManager`），所以壳仍然零 dex、零 Java、零第三方平台绑定。
+//! （价目表 ① 路，本档 §3.8.1 已证五区纯色逐字节到屏），盘面由 `frame.rs` 栅格、字形由 `text.rs`
+//! 栅格，字体字节从 APK 资产通道读入（`AAssetManager`），所以壳仍然零 dex、零 Java、零第三方平台绑定。
 
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -309,8 +309,9 @@ unsafe extern "C" fn on_low_memory(_activity: *mut ANativeActivity) {
 #[cfg(target_os = "android")]
 const FONT_ASSET: &std::ffi::CStr = c"fonts/ui.otf";
 
-// 两行字、字号、版面三数与定位点边长都**不在这里**——它们在 `text.rs`，与 host 侧对撞工具共享
-// 同一份源码（复制一份数字的对撞不算对撞）。这里只留平台侧的那一条路径名。
+// 盘面、字号、色值、圆角、定位点边长都**不在这里**——它们在 `frame.rs`／`text.rs`／`md3.rs`，
+// host 侧对撞工具 `#[path]` 引的是同一份源码（复制一份数字的对撞不算对撞）。
+// 本文件只留平台侧的那一条路径名，和"何时锁、何时放"。
 #[cfg(target_os = "android")]
 struct Scene {
     face: crate::text::Face,
@@ -361,71 +362,59 @@ unsafe fn read_asset(mgr: *mut c_void) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// 两行字的三档耗时：先**懒**栅格（只栅这次画得到的字），再**全**栅格（把子集里所有字形灌进
-/// 图集），然后把同一行再画一次（这次图集全热）。三格打在同一行日志里，就是 §5 L7 尾巴上
-/// "图集与缓存"那件工程件的读数——host 与真机跑的是同一份 `text.rs`，差的就是机器。
+/// 一帧真盘面的两档耗时：**懒**栅格一遍（只栅这一帧落得到的字），重铺底色，再画**同一帧**
+/// 一遍（这次图集全热）。两档打在同一行日志里，就是 §5 L7 尾巴上"图集与缓存"那件工程件的
+/// 读数——host 与真机跑的是同一份 `frame.rs`，差的就是机器。
+///
+/// 中间那次 `fill_bg` 不是洁癖：态层（`Block{opacity}`）是就地混色、没有合成器兜着，
+/// 直接在第一遍的结果上再画一遍会让那些带**越画越深**，"热档"读到的就不是同一帧了。
+/// 副作用是上屏的那一帧来自热档——冷/热同函数、同参数、同图集终态，两侧对撞读的还是同一张。
 #[cfg(target_os = "android")]
-fn paint_text(
-    dst: &mut [u8],
-    w: usize,
-    h: usize,
-    stride: usize,
-    why: &std::ffi::CStr,
-    bg_ms: f64,
-) -> bool {
+fn paint_board(dst: &mut [u8], w: usize, h: usize, stride: usize, why: &std::ffi::CStr, bg_ms: f64) -> bool {
     let mut guard = SCENE.lock().unwrap_or_else(|p| p.into_inner());
     let Some(scene) = guard.as_mut() else { return false };
     let Scene { face, atlas } = scene;
-    use crate::text::{EM_BODY, EM_HEAD, LINE_BODY, LINE_HEAD};
-    let ink = crate::md3::color::rgb(crate::md3::color::ON_SURFACE);
-    // 版面三个数由 `text::layout()` 给——host 侧对撞工具调的是同一个函数，两侧不许各算各的。
-    let (x, b1, b2) = crate::text::layout();
+    let frame = crate::frame::demo_frame();
 
     let t = std::time::Instant::now();
-    let r1 = atlas.blit(face, dst, w, stride, h, LINE_HEAD, x, b1, EM_HEAD, ink);
-    let r2 = atlas.blit(face, dst, w, stride, h, LINE_BODY, x, b2, EM_BODY, ink);
+    let cold = crate::frame::paint(&frame, face, atlas, dst, w, h, stride);
     let cold_ms = t.elapsed().as_secs_f64() * 1000.0;
-    let cold_rasters = atlas.rasters();
 
+    crate::text::fill_bg(dst, w, h, stride);
     let t = std::time::Instant::now();
-    let added = atlas.fill_eager(face, EM_HEAD);
-    let eager_ms = t.elapsed().as_secs_f64() * 1000.0;
-    let atlas_bytes = atlas.bytes();
-
-    let t = std::time::Instant::now();
-    let _ = atlas.blit(face, dst, w, stride, h, LINE_HEAD, x, b1, EM_HEAD, ink);
-    let _ = atlas.blit(face, dst, w, stride, h, LINE_BODY, x, b2, EM_BODY, ink);
+    crate::frame::paint(&frame, face, atlas, dst, w, h, stride);
     let warm_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    let Some(a) = r1 else {
-        warn(c"blit drew nothing — subset lacks the line");
-        return false;
-    };
-    let b = r2.unwrap_or_default();
     // 推进宽度这一格是给 #133 的：引擎那张表写的是 CJK=1.0／ASCII=0.55（`typo::ADVANCE_*`），
-    // 真字体里"advance ÷ em"到底是多少，只有引了这条链才量得出来。
-    let adv_cjk = (face.advance(face.glyph_of('中').unwrap_or_default(), EM_HEAD) / EM_HEAD) as f64;
-    let adv_latin = (face.advance(face.glyph_of('D').unwrap_or_default(), EM_BODY) / EM_BODY) as f64;
+    // 真字体里"advance ÷ em"到底是多少，只有引了这条链才量得出来（量法住 `frame::advance_probe`）。
+    let (adv_cjk, adv_latin) = crate::frame::advance_probe(face);
     unsafe {
         ndk::__android_log_print(
             LOG_INFO, TAG.as_ptr(),
-            c"%s bg=%.2f cold=%.2f(+%u) eager=%.2f(+%u) atlas=%dB warm=%.2f adv=%.4f/%.4f ink=%dx%d %dx%d".as_ptr(),
+            c"%s bg=%.2f cold=%.2f warm=%.2f k=%.4f off=%dx%d prims=%u+%u blank=%u empty=%u digest=%016llx rasters=%u atlas=%dB adv=%.4f/%.4f".as_ptr(),
             why.as_ptr(),
             bg_ms,
             cold_ms,
-            cold_rasters,
-            eager_ms,
-            added,
-            atlas_bytes as u32,
             warm_ms,
+            cold.scale as f64,
+            cold.off_x,
+            cold.off_y,
+            cold.blocks,
+            cold.labels,
+            cold.blank_labels,
+            cold.empty_blocks,
+            crate::frame::frame_digest(&frame),
+            cold.rasters,
+            atlas.bytes() as u32,
             adv_cjk,
             adv_latin,
-            a.width() as u32,
-            a.height() as u32,
-            b.width() as u32,
-            b.height() as u32,
         )
     };
+    // 一格空面不叫"画过了"：一帧里既没方块也没字，多半是指令表那侧空跑，屏上是纯底色。
+    if cold.blocks == 0 && cold.labels == 0 {
+        warn(c"frame carried no prims — bg only");
+        return false;
+    }
     true
 }
 /// 一次装好一份 scene（资产字节 → `Face`）。失败就是**没字**，不是"字很小"——所以每一格失败
@@ -471,7 +460,7 @@ unsafe fn ensure_scene(activity: *mut ANativeActivity) {
     *guard = Some(Scene { face, atlas: crate::text::Atlas::new() });
 }
 
-/// 锁→画→放。**这一格第一次把 Rust 算出来的字形铺进 `ANativeWindow_Buffer`**，所以每一步的
+/// 锁→画→放。**这一格第一次把引擎算出来的整张盘面铺进 `ANativeWindow_Buffer`**，所以每一步的
 /// 现读尺寸都进日志：真机给的是 `stride > width`（§3.8.1 现读 736 对 720）还是别的，当场可见。
 #[cfg(target_os = "android")]
 unsafe fn paint(window: *mut c_void, why: &'static std::ffi::CStr) {
@@ -526,7 +515,7 @@ unsafe fn paint(window: *mut c_void, why: &'static std::ffi::CStr) {
         let t = std::time::Instant::now();
         crate::text::fill_bg(dst, w, h, stride);
         let bg_ms = t.elapsed().as_secs_f64() * 1000.0;
-        paint_text(dst, w, h, stride, why, bg_ms)
+        paint_board(dst, w, h, stride, why, bg_ms)
     } else {
         note(c"no scene: bg only");
         crate::text::fill_bg(dst, w, h, stride);

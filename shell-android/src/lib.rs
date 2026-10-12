@@ -24,42 +24,16 @@
 //! 导出面纪律：本 crate 对外只应露出**平台强制**的入口符号（`ANativeActivity_onCreate`）。
 //! 守它的是 `scripts/shell-export-surface.sh`，不是主仓那条检——主仓绿不证明壳没拓宽。
 
-// 壳现在只挂了入口回调，引擎那批模块的大部分项还没被调用，`dead_code` 会淹掉输出。
-// 这是"壳尚未接上呈现面"的真实状态，不是需要修的缺陷，所以按整体豁免处理而非逐条 `#[allow]`。
+// 引擎那批模块里，本帧真被壳调用的只有 `display`／`battle`／`meta`／`model` 那条呈现链，
+// 其余项还没人调，`dead_code` 会淹掉输出。这是"壳尚未接上全部面"的真实状态，不是需要修的
+// 缺陷，所以按整体豁免处理而非逐条 `#[allow]`（哪天真要收窄，应该收窄的是调用而不是豁免）。
 #![allow(dead_code)]
 
-#[path = "../../src/ai.rs"]
-mod ai;
-#[path = "../../src/battle.rs"]
-mod battle;
-#[path = "../../src/boss.rs"]
-mod boss;
-#[path = "../../src/canvas.rs"]
-mod canvas;
-#[path = "../../src/command.rs"]
-mod command;
-#[path = "../../src/md3.rs"]
-mod md3;
-#[path = "../../src/meta.rs"]
-mod meta;
-#[path = "../../src/model.rs"]
-mod model;
-#[path = "../../src/progress.rs"]
-mod progress;
-#[path = "../../src/render.rs"]
-mod render;
-#[path = "../../src/rng.rs"]
-mod rng;
-#[path = "../../src/save.rs"]
-mod save;
-#[path = "../../src/session.rs"]
-mod session;
-#[path = "../../src/touch.rs"]
-mod touch;
-#[path = "../../src/tui.rs"]
-mod tui;
-#[path = "../../src/view.rs"]
-mod view;
+// 引擎那 17 个模块的 `#[path]` 表**不在这张文件里**，在 `engine-mods.rs`——因为 host 侧的
+// 对撞工具 `probes/host-frame` 要 `include!` 同一张表。抄一份表，就等于允许壳与探针各引各的
+// 模块集，那种漂移的症状是"对撞绿而真机红"，比没尺更糟。
+include!("engine-mods.rs");
 
 mod entry;
+mod frame;
 mod text;

@@ -22,7 +22,7 @@
 # 导出面是什么，看链接器实际留下了什么。
 #
 # 用法：bash scripts/shell-export-surface.sh
-# 退出码：0＝六格全过；非 0＝任一格红（并打印红在哪格与当时的读数）。
+# 退出码：0＝八格全过；非 0＝任一格红（并打印红在哪格与当时的读数）。
 set -u
 cd "$(dirname "$0")/.." || exit 1
 SHELL_DIR=shell-android
@@ -43,7 +43,8 @@ ok()  { say "  [过] $*"; }
 say "== 1. 构建（host ＋ $TARGET）=="
 # 先 clean 再编，因为第 4 格数的是 `target/` 里的文件，而 cargo **增量构建不删旧产物**：
 # 上一轮拿"临时给 crate-type 加 rlib"验这一格的牙，那 4 个 .rlib 留在目录里，此后 cdylib-only
-# 的配置照样被读出 .rlib=4——那时检的是目录的历史，不是本次构建。壳零第三方依赖，整目录重编约十秒。
+# 的配置照样被读出 .rlib=4——那时检的是目录的历史，不是本次构建。壳整目录重编约十秒（第三方只有
+# 字体那条链：ab_glyph 一族，编一次就进 cargo 缓存）。
 if ! (cd "$SHELL_DIR" && cargo clean --quiet) >/tmp/shell-guard-clean.log 2>&1; then
   red "cargo clean 失败，见 /tmp/shell-guard-clean.log"; say "$(tail -3 /tmp/shell-guard-clean.log)"; exit 1
 fi
@@ -170,6 +171,31 @@ sys.exit(1 if bad else 0)
 PY
 then ok "壳里每条 c\"...\" 的 % 序列都能被 printf 语法吃掉（无漏写转换符）"
 else red "上面列出的格式串会被 printf 误读——那行日志等于没量（本帧就是这么坏的）"
+fi
+
+say "== 8. 画面数字只有一个家（壳侧不许自造色值）=="
+# 主仓那条 `visual_constants_have_one_home` 扫的是 `canvas.rs`＋`touch.rs`，**扫不到壳**；
+# 而它的谓词是"禁 `#rrggbb`、禁 `const`、禁裸数"，把壳那三个文件纳进去会当场误红一片——
+# 壳里的 `4`／`u8::MAX`／`[u8; 3]` 是**缓冲几何数**，不是画面数字，两者本质不同。
+# 所以这一格不换那条检的口径，改成量它真正要的那件事：**色值只有一个来源**。
+# 判据按字面量形态取，不按名字猜：`#RRGGBB`（六个十六位）与 `rgb(数字,` 这两种写法，
+# 出现在壳的任何一行里，就意味着有人在壳里抄了一份颜色，而不是问 `md3` 要。
+if python3 - "$SHELL_DIR/src" <<'PY'
+import re, sys, pathlib
+HEX = re.compile(rb'#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?(?![0-9a-zA-Z])')
+NUMRGB = re.compile(rb'\brgb\(\s*\d')
+bad = 0
+for p in sorted(pathlib.Path(sys.argv[1]).glob('*.rs')):
+    for n, line in enumerate(p.read_bytes().split(b'\n'), 1):
+        for m in list(HEX.findall(line)) + list(NUMRGB.findall(line)):
+            print(f"      {p.name}:{n} 出现字面量色值 {m.decode(errors='replace')}")
+            bad += 1
+if bad:
+    print(f"      共 {bad} 处")
+sys.exit(1 if bad else 0)
+PY
+then ok "壳的色值全部向 md3 要，没有一处自己抄了个颜色"
+else red "上面那几行在壳里抄了色值——同一状态在两个壳里会读出两个色，这正是本帧要消灭的债"
 fi
 
 say "== 结论 =="

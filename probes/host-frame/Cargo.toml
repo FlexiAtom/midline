@@ -1,0 +1,38 @@
+# midline - 《中线》安卓薄壳（丁′：壳也用 Rust，源码级融合）
+# Copyright (C) 2026 FlexiAtom
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# host 侧**对撞工具**：把壳那份 `frame.rs` 原样编进一个可执行文件，产出一张 PPM，
+# 与真机截屏逐像素对撞（`two-d-shell-board-frame` §2 第一条的证人）。
+#
+# 它**不进任何守门检**，也不进根构建图（主仓无 `[workspace]`，这个目录自带 lock）。
+# 它是尺不是产品：判据是"两侧同一份源码"，所以这里一行画面决定都不写，只 `include!` 表、
+# 只 `#[path]` 引壳侧那两个模块。代价如实登记在档 §3——**这张表若漂了，症状是对撞红，
+# 不是产品测红**，所以它红了先查引源，再查像素。
+
+[package]
+name = "midline-host-frame"
+version = "0.1.0"
+edition = "2024"          # 与壳、主仓一致，理由同 shell-android/Cargo.toml
+publish = false
+
+[[bin]]
+name = "host-frame"
+path = "src/main.rs"
+
+# 与壳同一件：`text.rs` 要 `ab_glyph`。这里不重挑版本——两处必须解到同一个 0.2.32，
+# 否则"两侧同一份源码"就成了一句假话（字体栅格器换了版本，字形的墨就不该拿去对撞）。
+[dependencies]
+ab_glyph = "0.2.32"

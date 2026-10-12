@@ -39,46 +39,41 @@ use std::collections::HashMap;
 /// 57 dp 的汉字（墨宽约 53 px）离上限还很远，撑不下的那一档是给连字/斜体的西文留的余量。
 const ATLAS_W: u32 = 512;
 
-// ── 本帧载荷：两行字、字号、版面三数、底色 ──────────────────────────────────
+// ── 本层仅剩的一颗缓冲几何数 ───────────────────────────────────────────────
 //
-// 这组常量住这里而**不住 `entry.rs`**，理由只有一个：**复制一份数字的对撞不算对撞**。
-// host 侧的比对工具（`#[path]` 引本模块）与真机走的必须是同一份源码，否则两侧各自自洽、
-// 差值读出来却不知该怪谁——那正是本仓在布局尺上付过学费的那一格。
-// 平台侧（窗口锁、资产读、logcat）仍全在 `entry.rs`。
-
-/// 盘面第一行。选字的原则是"必含最难的那几档"：全角方块字、笔画密的 `平衡`、以及中英混排。
-pub const LINE_HEAD: &str = "中文平衡";
-/// 第二行：`2D` 是半角拉丁（走 `ADVANCE_ASCII` 那档），结尾的 `衡` 再回到全角，用来露出行尾对齐。
-pub const LINE_BODY: &str = "中线 2D 衡";
-
-/// 一帧两行的字号，全部取自引擎那张阶梯——壳不许自己造字号数，那是 `md3::typo` 唯一的住所。
-pub const EM_HEAD: f32 = crate::md3::typo::DISPLAY_SMALL as f32; // 36
-pub const EM_BODY: f32 = crate::md3::typo::TITLE_LARGE as f32; // 22
+// 上一帧这一节里还有两行字、两档字号和一个 `layout()`：那件工程的问题是"字形能不能上屏"。
+// 本帧问题换成了"**这张盘面**能不能上屏"，载荷因此从壳自带的字串换成了引擎发下来的
+// `display::Frame`，那两个 `LINE_*` 就失去了存在的理由（留着它们，壳就又自己选了一遍画面）。
+// "复制一份数字的对撞不算对撞"这条纪律没失效，它换了执行者：现在两侧同读的是 `frame.rs`。
 
 /// 左上角那颗定位点的边长。它**不是版式数**（不进 `md3`），用途只有一个：截屏里找到它的颜色，
 /// 就拿到了"缓冲(0,0) 落在屏幕哪一行"的现读位移，字形对撞先减它。
 pub const DOT: usize = 8;
 
-/// 版面三数：左边距、第一行基线、第二行基线。真机与 host 各调一次，读回来的整数必须相同。
-pub fn layout() -> (i32, i32, i32) {
-    let x = crate::md3::space::XL;
-    let b1 = (DOT + EM_HEAD.round() as usize) as i32;
-    let b2 = b1 + EM_BODY.round() as i32 + crate::md3::space::M;
-    (x, b1, b2)
-}
-
 /// 底色＝`md3::color::SURFACE`；左上角那颗 `DOT×DOT` 是 `md3::color::MIDLINE`。
-/// 只写 RGB 三格、alpha 恒 255——RGBA8888 的 alpha 若留 0，合成层会把整帧当全透明丢掉。
 pub fn fill_bg(dst: &mut [u8], w: usize, h: usize, stride: usize) {
     let bg = crate::md3::color::rgb(crate::md3::color::SURFACE);
     let dot = crate::md3::color::rgb(crate::md3::lane::MIDLINE);
     for (y, row) in dst.chunks_mut(stride * 4).take(h).enumerate() {
         for (x, px) in row.chunks_exact_mut(4).enumerate().take(w) {
-            let c = if y < DOT && x < DOT { dot } else { bg };
-            px[..3].copy_from_slice(&c);
-            px[3] = 255;
+            paint_px(px, if y < DOT && x < DOT { dot } else { bg }, u8::MAX);
         }
     }
+}
+
+/// 一个像素的覆写：RGB 逐通道按覆盖率混，alpha 一律写满。**全仓只有这一处写 RGBA 字节。**
+///
+/// 字节数与 alpha 那格的取值都由目标切片自己说（`u8::MAX` 而不是 `255`），这不是洁癖：守门检
+/// 第 8 节扫"画面数字有没有漏出 `md3`"，把 `3`／`4`／`255` 这类**缓冲几何**数写成字面量，那格
+/// 每次都得先人工分辨"这是字节偏移还是有人抄了个颜色"——误红看多了就等于没有尺。
+/// alpha 必须显式写：留 0 的话合成层把整帧当全透明丢掉（§3.8.1 那格白屏就是这么来的）。
+/// 墨只带三个通道正是这条口径的形状：透明度只有一个入口，就是 `a`。
+#[inline]
+pub fn paint_px(out: &mut [u8], ink: [u8; 3], a: u8) {
+    for (c, v) in out.iter_mut().zip(ink) {
+        *c = blend(*c, v, a);
+    }
+    *out.last_mut().unwrap() = u8::MAX;
 }
 
 /// 覆盖率 → 8 位 alpha。`round` 而不是截断：截断会让最淡的那一档 AA（f<1/255）整批归零，
@@ -233,6 +228,17 @@ impl Face {
         self.font.as_scaled(self.px_scale(em)).h_advance(GlyphId(gid))
     }
 
+    /// 整串的推进宽度（**只量，不栅格**）。右对齐那档靠它把落笔点往左挪。
+    ///
+    /// 它不走图集是刻意的：量宽度不该付一次 `outline_glyph` 的钱，也不该把"只为对齐而读过的字"
+    /// 塞进缓存。未映射的字符按 `blit` 同口径跳过——两侧（量与画）对"哪些字算数"必须同判。
+    pub fn advance_width(&self, text: &str, em: f32) -> f32 {
+        text.chars()
+            .filter_map(|ch| self.glyph_of(ch))
+            .map(|gid| self.advance(gid, em))
+            .sum()
+    }
+
     /// 栅格一个字。锚在 (0,0)，所以 `dx/dy` 就是 `px_bounds.min`。
     pub fn raster(&self, gid: u16, em: f32) -> Option<Raster> {
         let outlined = self.font.outline_glyph(Glyph {
@@ -266,7 +272,7 @@ impl Face {
 ///
 /// 为什么要图集而不是每次现栅格：一次 `outline_glyph` 要走 CFF 那台栈机，而一帧里同一个字会
 /// 被画很多次（血条上的数字、牌名）。图集把这件事变成**每字号每字一次**，代价换成内存——
-/// 两档的差价就是 `fill_eager` 与 `rasters()` 那两格读数。
+/// 本帧的读数是同一张盘面**冷跑一次**与**热跑一次**的差价（`entry.rs` 把那两格打进 logcat）。
 #[derive(Default)]
 pub struct Atlas {
     buf: Vec<u8>,
@@ -283,7 +289,7 @@ impl Atlas {
         Self::default()
     }
 
-    /// 已发生过的真栅格次数。首帧全栅格与懒建的差价全靠它对账。
+    /// 已发生过的真栅格次数。空格这类无轮廓的字形**不计**（它没走那台栈机）。
     pub fn rasters(&self) -> u32 {
         self.rasters
     }
@@ -298,13 +304,32 @@ impl Atlas {
     }
 
     /// 取格，没有就栅格一张并塞进图集（shelf 打包：当前行放不下就另起一行）。
+    ///
+    /// **"有推进宽度但没轮廓"的字形（空格、不印字的控制符）也进缓存**，宽高记 0。两个理由一轻一重：
+    /// 轻的是它每帧都要重走一遍 `outline_glyph`；重的是**它的推进宽度没处取**——上一版直接 `continue`，
+    /// 于是"中线 2D 衡"那样的混排行里空格不占位，字全挤在一起，而这件事在屏上只是"稍窄一点"，
+    /// 没人会报修。`advance_width` 量的可是这些字，两侧对"哪些字算数"必须同判。
     pub fn get_or_rasterize(&mut self, face: &Face, gid: u16, em: f32) -> Option<&Cell> {
         let key = (gid, em.to_bits());
         if self.cells.contains_key(&key) {
             return self.cells.get(&key);
         }
-        let r = face.raster(gid, em)?;
         let advance = face.advance(gid, em);
+        let Some(r) = face.raster(gid, em) else {
+            self.cells.insert(
+                key,
+                Cell {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                    dx: 0,
+                    dy: 0,
+                    advance,
+                },
+            );
+            return self.cells.get(&key);
+        };
         self.rasters += 1;
         if self.cursor_x + r.w > ATLAS_W {
             self.cursor_y += self.row_h;
@@ -338,15 +363,6 @@ impl Atlas {
             },
         );
         self.cells.get(&key)
-    }
-
-    /// 把字体里所有字形一次性栅格进来（"首帧全栅格"那一档），返回新栅格了几个字。
-    pub fn fill_eager(&mut self, face: &Face, em: f32) -> u32 {
-        let before = self.rasters;
-        for gid in 1..face.glyph_count() as u16 {
-            self.get_or_rasterize(face, gid, em);
-        }
-        self.rasters - before
     }
 
     /// 摆一行字进 `dst`（32 位 RGBA、行步长按**像素**计）。`baseline` 是缓冲坐标里那行的基线。
@@ -391,10 +407,7 @@ impl Atlas {
                         continue;
                     }
                     let o = (py as usize) * (stride * 4) + (px as usize) * 4;
-                    dst[o] = blend(dst[o], ink[0], a);
-                    dst[o + 1] = blend(dst[o + 1], ink[1], a);
-                    dst[o + 2] = blend(dst[o + 2], ink[2], a);
-                    dst[o + 3] = 255;
+                    paint_px(&mut dst[o..o + 4], ink, a);
                 }
             }
             let (x0, y0) = (ox.max(0), oy.max(0));

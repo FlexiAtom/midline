@@ -90,6 +90,36 @@ def load(path: str):
     return size, height, channels, rows
 
 
+def load_ppm(path: str):
+    """读 P6（二进制 RGB）PPM，返回 (width, height, channels, rows)，与 `load` 同形。
+
+    host 侧对撞工具 `probes/host-frame` 出的就是这张格式：它只要 stdlib 能写、能读，
+    不引 PNG 编码器（zlib 压缩对"逐像素是否相同"这句判据不提供任何东西）。
+    """
+    data = open(path, "rb").read()
+    if not data.startswith(b"P6"):
+        raise SystemExit(f"{path} 不是 P6 PPM")
+    # 头是 "P6\n<w> <h>\n<max>\n"，按空白切四段（本项目产出的那份不含注释，故不实现 # 注释）。
+    tok, i, out = [], 0, []
+    while len(out) < 4:
+        while i < len(data) and data[i : i + 1].isspace():
+            i += 1
+        j = i
+        while j < len(data) and not data[j : j + 1].isspace():
+            j += 1
+        out.append(data[i:j].decode())
+        i = j
+    w, h, maxv = int(out[1]), int(out[2]), int(out[3])
+    if maxv != 255:
+        raise SystemExit(f"只认 8 位通道（读到 maxval={maxv}）")
+    body = data[i + 1 :]
+    need = w * h * 3
+    if len(body) < need:
+        raise SystemExit(f"{path} 像素体短了：{len(body)} < {need}")
+    stride = w * 3
+    return w, h, 3, [body[y * stride : y * stride + stride] for y in range(h)]
+
+
 def pixel(rows, channels, x, y):
     o = x * channels
     row = rows[y]
@@ -99,11 +129,174 @@ def pixel(rows, channels, x, y):
     return v, v, v
 
 
+def corner_size(rows_p, ch_p):
+    """量 PPM 左上角那块纯色正方形的边长（不写死 8：写死就等于尺跟着代码跑，改了不报）。"""
+    corner = rows_p[0][:ch_p]
+    w = len(rows_p[0]) // ch_p
+    xr = 0
+    while xr < w and bytes(rows_p[0][xr * ch_p : xr * ch_p + ch_p]) == corner:
+        xr += 1
+    yr = 0
+    while yr < len(rows_p) and bytes(rows_p[yr][:ch_p]) == corner:
+        yr += 1
+    return min(xr, yr)
+
+
+def _mode_color(rows, ch, w, h):
+    """采样取众数色（每 5 格取 1）：对撞要比的是"有墨的格子"，底色就是那块正方形的多数派。"""
+    from collections import Counter
+
+    c = Counter()
+    for y in range(0, h, 5):
+        r = rows[y]
+        for x in range(0, min(w, len(r) // ch), 5):
+            c[r[x * ch : x * ch + 3]] += 1
+    return c.most_common(1)[0][0] if c else b"\x00\x00\x00"
+
+
+def _in_any(dx, dy, exclude):
+    return any(x0 <= dx <= x1 and y0 <= dy <= y1 for x0, y0, x1, y1 in exclude)
+
+
+def ink_ratio(rowsp, rowsd, chp, chd, pw, ph, ox, oy, exclude):
+    """两侧"非底色格数"之比。逐像素全等是强判据，这一格是**归因**判据：
+    比值为 0 说明设备侧一片空白（没到屏），>1.2 多半是行错位或多画了一层。"""
+    exclude = exclude or []
+    bgp = _mode_color(rowsp, chp, pw, ph)
+    bgd = _mode_color([rowsd[oy + y] for y in range(min(ph, len(rowsd) - oy))], chd, pw, ph)
+    hp = hd = 0
+    for y in range(ph):
+        dy = oy + y
+        if dy >= len(rowsd):
+            break
+        pr, dr = rowsp[y], rowsd[dy]
+        for x in range(pw):
+            dx = ox + x
+            if dx >= len(dr) // chd:
+                break
+            if _in_any(dx, dy, exclude):
+                continue
+            if pr[x * chp : x * chp + 3] != bgp:
+                hp += 1
+            if dr[dx * chd : dx * chd + 3] != bgd:
+                hd += 1
+    return (hd / hp) if hp else float("nan")
+
+
+def locate(rows_p, rows_d, ch_p, ch_d, w, h, size):
+    """在设备图里找出 PPM 左上角那块 `size×size` 色块的**左上角坐标**。
+
+    为什么不让人的截图偏移量手填：那块色块正是 `text::fill_bg` 画在缓冲 (0,0) 的定位点，
+    它的存在就是为了回答"我们的缓冲第一格落在屏幕哪一格"。手填偏移等于把这把尺交给人眼。
+
+    两边的通道数可以不同（host 的 PPM 是 3，screencap 的 PNG 常是 4），所以比对走"每格取前三字节"，
+    先把设备每行的 R 分量抽成一条平面做粗筛，命中再逐格验——直接按字节 `find` 整行会把 alpha 卷进来。
+    """
+
+    def ppx(x, y):
+        o = x * ch_p
+        return rows_p[y][o : o + 3]
+
+    def dpx(x, y):
+        o = x * ch_d
+        return rows_d[y][o : o + 3]
+
+    want = ppx(0, 0)
+    for y, row in enumerate(rows_d):
+        rplane = row[0::ch_d]
+        base = 0
+        while True:
+            x = rplane.find(want[:1], base)
+            if x < 0:
+                break
+            base = x + 1
+            if x + size > w or y + size > len(rows_d) or dpx(x, y) != want:
+                continue
+            if all(dpx(x + k, y + j) == ppx(k, j) for j in range(size) for k in range(size)):
+                return x, y
+    return None
+
+
+def diff(rows_p, rows_d, ch_p, ch_d, pw, ph, ox, oy, exclude):
+    """逐像素对撞：返回 (比对格数, 全等差档计数, 最大单通道差, 差异 bbox, 被排除格数)。"""
+    exclude = exclude or []
+    n = exact = le1 = le2 = worst = skipped = 0
+    box = [1 << 30, 1 << 30, -1, -1]
+    for y in range(ph):
+        dy = oy + y
+        if dy >= len(rows_d):
+            break
+        pr, dr = rows_p[y], rows_d[dy]
+        for x in range(pw):
+            dx = ox + x
+            if dx >= len(dr) // ch_d:
+                break
+            if _in_any(dx, dy, exclude):
+                skipped += 1
+                continue
+            i, j = x * ch_p, dx * ch_d
+            if ch_p == ch_d == 3:
+                d = max(abs(pr[i] - dr[j]), abs(pr[i + 1] - dr[j + 1]), abs(pr[i + 2] - dr[j + 2]))
+            else:
+                d = max(abs(a - b) for a, b in zip(pr[i : i + 3], dr[j : j + 3]))
+            n += 1
+            worst = max(worst, d)
+            if d == 0:
+                exact += 1
+            elif d <= 1:
+                le1 += 1
+            elif d <= 2:
+                le2 += 1
+            else:
+                box[0], box[1] = min(box[0], dx), min(box[1], dy)
+                box[2], box[3] = max(box[2], dx), max(box[3], dy)
+    return n, (exact, le1, le2), worst, (None if box[2] < 0 else tuple(box)), skipped
+
+
 def main(argv):
     if len(argv) < 3:
-        raise SystemExit("用法：png-pixel.py size <png> | px <png> x,y[,x,y...] | hex <png> x,y #RRGGBB[,x,y,#RRGGBB...]")
+        raise SystemExit(
+            "用法：png-pixel.py size <png> | px <png> x,y [x,y ...] | hex <png> <tol> x,y,#RRGGBB [...] "
+            "| diff <设备.png> <host.ppm> [exclude=X0,Y0,X1,Y1]... [dot=边长]"
+        )
     cmd, path = argv[1], argv[2]
     width, height, channels, rows = load(path)
+    if cmd == "diff":
+        ppm = argv[3]
+        exclude = []
+        dot = None
+        for extra in argv[4:]:
+            if extra.startswith("exclude="):
+                exclude.append(tuple(int(v) for v in extra[len("exclude=") :].split(",")))
+            elif extra.startswith("dot="):
+                dot = int(extra[len("dot=") :])
+        pw, ph, chp, rowsp = load_ppm(ppm)
+        dw, dh, chd, rowsd = load(path)
+        size = dot or corner_size(rowsp, chp)
+        at = locate(rowsp, rowsd, chp, chd, pw, ph, size)
+        if at is None:
+            raise SystemExit(
+                f"设备图里找不到那块 {size}×{size} 定位点——两种可能：壳没画（logcat 里 painted=0），"
+                f"或这条对撞尺的定位点口径已随 fill_bg 改动（那就先改尺，别先改画面）"
+            )
+        ox, oy = at
+        n, (eq, le1, le2), worst, box, skipped = diff(rowsp, rowsd, chp, chd, pw, ph, ox, oy, exclude)
+        ratio = ink_ratio(rowsp, rowsd, chp, chd, pw, ph, ox, oy, exclude)
+        print(
+            f"diff 设备 {dw}x{dh} ← PPM {pw}x{ph} @({ox},{oy}) 比对 {n} 格"
+            f"{'，排除 %d 格（%d 个矩形）' % (skipped, len(exclude)) if exclude else ''}\n"
+            f"  全等 {eq}（{100.0 * eq / max(n, 1):.4f}%）  差≤1 {le1}  差≤2 {le2}  其余 {n - eq - le1 - le2}"
+            f"  单通道最大差 {worst}\n"
+            f"  墨量比 {ratio:.4f}（设备/ host，>1 或 <1 都说明有一侧整片没画或画多了）"
+            f"  差异 bbox {box if box else '无'}"
+        )
+        if exclude and skipped < sum((x1 - x0 + 1) * (y1 - y0 + 1) for x0, y0, x1, y1 in exclude):
+            print(
+                "  [注意] 实际排除格数 < 各矩形面积之和——要么矩形互相重叠，要么有矩形超出比对画面。"
+                "记账按现量格数，别拿矩形面积当排除量"
+            )
+        return 0 if n and eq == n else 1
+
     if cmd == "size":
         print(f"{width}x{height}")
         return 0

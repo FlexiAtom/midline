@@ -1,6 +1,7 @@
 # Rust 构建／测试中间产物
 /target
 /shell-android/target
+/probes/host-frame/target
 **/*.rs.bk
 *.rlib
 *.rmeta
