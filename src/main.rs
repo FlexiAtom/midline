@@ -20,6 +20,7 @@ mod battle;
 mod boss;
 mod canvas;
 mod command;
+mod display;
 mod md3;
 mod meta;
 mod model;

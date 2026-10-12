@@ -13,27 +13,30 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//! 2D 帧编码器：把一份 `Board` 快照画成一张**看得见的** SVG（纯色矩形＋文字，本仓第一件文件形状的呈现物）。
+//! 2D 帧的 **SVG 编码器**：把 `display::Frame` 那张呈现指令表编成一份 XML 文档。
 //!
 //! 形状声明：它只画**静态一帧**——没有动画、没有音效。存在的理由不是"做个好看界面"，
 //! 而是给设计交一件**共有的实物**：同一句文字描述有两个读者就有两份想象，一张图只有一份。
 //!
-//! 上游只有三条，且都不许绕过：
-//! - **数据**：所有数都从 `view::Board` 拿，一个引擎字段都不直读——口径与 `render`／`tui` 相同，不开第二真相源。
-//!   列数不写死在版式里，而是从快照的数组长度取（`enemy_back.len()`）：那一维本来就是盘面形状，
-//!   在编码器里再钉一次，就成了"引擎改了棋盘列数、图还在画四列"这种最难看的失真。
-//! - **几何**：每个矩形、每条基线都从 `crate::touch::layout_of` 拿。本模块**一行位置算术都不写**——
-//!   从前它一边画一边推 y 游标，于是"画在哪"与"点在哪"是两个模块里各算一遍的两份算术。
-//!   合成一处之后，`touch` 那条 `the_regions_that_take_a_tap_are_the_regions_that_got_drawn` 才量得出东西。
-//! - **版式**：所有视觉常数（色值、圆角、字号、线宽、虚线段长）都从 `crate::md3` 拿，本层不发明数
-//!   （`md3::tests::visual_constants_have_one_home` 当场红，理由与口径见那个模块的抬头）。
+//! ## 本层只许做一件事：把指令写成语法
+//! "画什么"全部住在 `crate::display`，本模块一行都不参与。这不是分层好看，是**双输出**的前提：
+//! 桌面上的 SVG 与真机上的像素必须读同一份决策，否则两边各自自洽、差值读出来不知该怪谁
+//! （同一族坑在几何那侧付过学费，见 `touch::layout_of` 的抬头）。所以本层能出现的判断只有
+//! "这种指令用哪个标签写"，不能有"这一格该不该画""这个数取哪一档"。
 //!
-//! 规则锚：本模块**不写**文档锚点，理由与 `tui` 那条相同——排布不新增任何规则真值，写锚会去动反向覆盖尺的生产面读数。
-//! 版式里几句像规则的措辞（后排不可攻击、中线不可越过）**不是**这里定的，是照抄 `render` 既有文案。
+//! 三条上游（口径与 `display` 完全相同，因为本层只碰最后一条）：
+//! - **数据**与**几何**：都经 `display::frame_prims` 拿，本模块一个快照字段都不直读。
+//! - **版式**：只有 `md3::svg`（XML 声明与命名空间）与 `md3::layout`（虚线段长）两族本层必须点名，
+//!   因为它们是**语法**的一部分而不是画面的一个决定；色值、圆角、字号一律由指令表带下来。
+//!   `md3::tests::visual_constants_have_one_home` 扫本文件非注释区，裸数与 `#rrggbb` 都算违反。
+//!
+//! 规则锚：本模块**不写**文档锚点，理由与 `display`／`tui` 那两条相同——编码不新增任何规则真值，
+//! 写锚会去动反向覆盖尺的生产面读数。
 
-use crate::md3::{color, lane, layout, shape, state, svg, typo};
-use crate::touch::{self, Hand, Layer, Rect, Region, layout_of};
-use crate::view::{Board, CardView};
+use crate::display::{self, Anchor, Edge, Frame, Prim};
+use crate::md3::{color, layout, svg, typo};
+use crate::touch::{Layer, Region};
+use crate::view::Board;
 
 /// XML 文本转义。牌名／技能名是 `&'static str`，但快照是数据不是字面量——
 /// 转义这一层不许省：哪天一张卡名里出现 `&`，整张图就从"画错了"降级成"后面全不渲染"。
@@ -51,159 +54,57 @@ fn esc(s: &str) -> String {
     out
 }
 
-fn text(x: i32, y: i32, size: i32, fill: &str, anchor_end: bool, s: &str) -> String {
-    let a = if anchor_end { "end" } else { "start" };
-    format!(r##"<text x="{x}" y="{y}" font-size="{size}" fill="{fill}" text-anchor="{a}">{}</text>"##, esc(s))
-}
-
-/// 一块矩形的画法：填充、描边色、圆角、描边宽**四件一起传**。
-/// 合成一个类型是为了让 `rect` 不再靠位置参数数到第九个；四件全由调用方从 `shape`／`layout` 取，
-/// 本层不默认任何一档——默认值就是第二个家，它会让"这格是 8dp 圆角"这件事在两个地方各写一遍。
-/// `fill` 取 `&str` 而不是 `&'static str`：态层混出来的是运行时算的一个色串，不是表里的常数。
-#[derive(Copy, Clone)]
-struct Paint<'a> {
-    fill: &'a str,
-    stroke: &'a str,
-    radius: i32,
-    width: i32,
-}
-
-fn rect(cell: Rect, p: Paint<'_>, dashed: bool) -> String {
-    let dash = if dashed { format!(r##" stroke-dasharray="{} {}""##, layout::DASH_ON, layout::DASH_OFF) } else { String::new() };
-    format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{}" fill="{}" stroke="{}" stroke-width="{}"{dash}/>"##, p.radius, p.fill, p.stroke, p.width, x = cell.x, y = cell.y, w = cell.w, h = cell.h)
-}
-
-/// 一条水平条：底槽满宽，填充按 value/cap 截断（负数与超上限都夹住，不画成溢出）。
-fn bar(cell: Rect, value: i32, cap: i32, fill: &str) -> String {
-    let filled = if cap <= 0 { 0 } else { value.max(0).min(cap) * cell.w / cap };
-    let track = format!(r##"<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}" stroke="{}" stroke-width="{}"/>"##, cell.x, cell.y, cell.w, cell.h, shape::EXTRA_SMALL, color::SURFACE_CONTAINER, color::OUTLINE_VARIANT, layout::STROKE_HAIRLINE);
-    let spent = format!(r##"<rect x="{}" y="{}" width="{filled}" height="{}" rx="{}" fill="{fill}"/>"##, cell.x, cell.y, cell.h, shape::EXTRA_SMALL);
-    track + &spent
-}
-
-/// 持业者读数：负值夹到 0、见底要标"烛尽"。这不是美化——文本路 `candle_bar` 就是这么印的，
-/// 同一状态在两个壳里读出 `-1` 与 `0 烛尽` 两个数，等于悄悄开了第二套呈现口径。
-fn candle_readout(hp: i32, cap: i32) -> String {
-    let shown = hp.max(0);
-    format!("{shown}/{cap}{}", if hp <= 0 { " · 烛尽" } else { "" })
-}
-
-/// 业火足额标记块左界相对格右边的内缩：块宽加内缩，一处算清，别在两处各写一遍同一个和。
-fn badge_inset() -> i32 {
-    layout::FLAME_MARK + layout::FLAME_INSET
-}
-
-/// 底色 × 态层 = 一个**实心**色。没有层时原样回到底色串（那一帧因此与控件层毫不相干，可比 md5）；
-/// 有层时按 MD3 口径混色。混色算式住在 `md3::state::blend_hex`，桌面与安卓共用它——
-/// 桌面从前可以走 `fill-opacity`，但真机那条路是帧缓冲写像素、没有合成器替做 alpha，
-/// 一个走混合一个走属性，就是"同一状态在两个壳里读出两个色"那种第二真值源。
-fn layered(base: &str, layer: Option<Layer>) -> String {
-    match layer {
-        None => base.to_string(),
-        Some(l) => state::blend_hex(base, color::ON_SURFACE, l.alpha()),
-    }
-}
-
-/// 这一格该盖哪一层。`marks` 按优先级**升序**给出（见 `touch::Picker::marks`）⇒ 这里取最后一个命中：
-/// 焦点与按下在 MD3 里同值，只有次序能让按下仍然看得见。
-pub(crate) fn layer_of(marks: &[(Region, Layer)], region: Region) -> Option<Layer> {
-    marks.iter().rev().find(|(g, _)| *g == region).map(|(_, l)| *l)
-}
-
-/// 一张在场牌的格子：名字、值/阈值、费/焰、标记（造·开端·升级）、技能串。
-/// 位置与面积全在 `cell` 里（它就是命中框），本层只往上面摆字。
-/// 描边**不随态层变**：MD3 的状态层盖在容器上，描边是边界，跟着亮会读成"边框也在动"那种新信号。
-fn card_cell(cell: Rect, c: &CardView, fill: &str, edge: &'static str) -> String {
-    let x = cell.x;
-    let y = cell.y;
-    let w = cell.w;
-    let paint = Paint { fill, stroke: if c.crafted { lane::CRAFT } else { edge }, radius: shape::SMALL, width: layout::STROKE_BOUNDARY };
-    let mut s = rect(cell, paint, false);
-    s.push_str(&text(x + layout::CELL_PAD, y + layout::CELL_ROW1, typo::TITLE_LARGE, color::ON_SURFACE, false, c.name));
-    s.push_str(&text(x + layout::CELL_PAD, y + layout::CELL_ROW2, typo::HEADLINE_MEDIUM, color::ON_SURFACE, false, &format!("{} / {}", c.hp, c.threshold)));
-    s.push_str(&text(x + layout::CELL_PAD, y + layout::CELL_ROW3, typo::BODY_LARGE, lane::META, false, &format!("费{} 焰{}", c.cost, c.flame)));
-    let mut marks: Vec<String> = Vec::new();
-    if c.crafted {
-        marks.push("造".to_string());
-    }
-    if c.starter {
-        marks.push("开端".to_string());
-    }
-    if c.upgrades > 0 {
-        marks.push(format!("升级+{}", c.upgrades));
-    }
-    if c.trait_label != "无" {
-        marks.push(c.trait_label.to_string());
-    }
-    // 开端牌的 `starter` 与 `trait_label` 会撞成同一个词（快照两个字段、中文一个说法），印两遍是噪声不是信息。
-    marks.dedup();
-    // 业火足额标记：一个实心小块，不配文字——它是给眼睛看的状态，不是第三条数值。
-    let lit = c.flame >= c.threshold;
-    // 标记占右上角那一格，属性串是右对齐的：不腾出这块宽度，长属性（`战吼:同列+2焰`）会被方块压住尾字。
-    if !marks.is_empty() {
-        let marks_x = x + w - if lit { badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD };
-        s.push_str(&text(marks_x, y + layout::CELL_ROW1, typo::BODY_LARGE, lane::CRAFT, true, &marks.join("·")));
-    }
-    if !c.skills.is_empty() {
-        s.push_str(&text(x + w - layout::CELL_PAD, y + layout::CELL_ROW3, typo::LABEL_LARGE, lane::META, true, &c.skills.join("+")));
-    }
-    if lit {
-        let badge = Paint { fill: lane::FLAME, stroke: lane::FLAME, radius: shape::NONE, width: layout::STROKE_HAIRLINE };
-        let mark = Rect::new(x + w - badge_inset(), y + layout::FLAME_INSET, layout::FLAME_MARK, layout::FLAME_MARK);
-        s.push_str(&rect(mark, badge, false));
-    }
-    s
-}
-
-/// 空格子：虚线框加一个点。它**照样有面积**——"这儿能放"是位置信息，接得住一次命中。
-fn empty_cell(cell: Rect, layer: Option<Layer>) -> String {
-    let base = layered(lane::EMPTY_FILL, layer);
-    let paint = Paint { fill: &base, stroke: color::OUTLINE_VARIANT, radius: shape::SMALL, width: layout::STROKE_BOUNDARY };
-    let mut s = rect(cell, paint, true);
-    s.push_str(&text(cell.x + cell.w / 2, cell.y + cell.h / 2 + layout::CELL_PAD_NARROW, typo::TITLE_LARGE, lane::EMPTY_MARK, false, "·"));
-    s
-}
-
-/// 一横排若干格（空格照画，位置本身就是信息）。
-/// 矩形来自几何表、卡来自快照，两者按序并排：长度对不上时静默丢掉一半就是"少画一格不报错"那条老坑，
-/// 所以这里当场断言（`debug_assert`），而不是留给目视。
-fn card_row(cells: &[(Region, Rect)], cards: &[Option<CardView>], fill: &str, edge: &'static str, marks: &[(Region, Layer)]) -> String {
-    debug_assert_eq!(cells.len(), cards.len(), "几何表与快照的格数不一致：两份盘面");
-    let mut s = String::new();
-    for ((region, cell), card) in cells.iter().zip(cards.iter()) {
-        let layer = layer_of(marks, *region);
-        s.push_str(&match card {
-            Some(c) => card_cell(*cell, c, &layered(fill, layer), edge),
-            None => empty_cell(*cell, layer),
-        });
-    }
-    s
-}
-
-/// 手牌行：一格一张，序号就是落点命令里的那个 idx。截断预算来自几何（它是格宽的函数）。
-fn hand_row(hand: &Hand, cards: &[CardView], marks: &[(Region, Layer)]) -> String {
-    debug_assert_eq!(hand.cells.len(), cards.len(), "几何表与快照的手牌数不一致：两份盘面");
-    let mut s = String::new();
-    for (i, ((region, cell), c)) in hand.cells.iter().zip(cards.iter()).enumerate() {
-        let x = cell.x;
-        let y = cell.y;
-        let fill = layered(lane::PLAYER_FILL, layer_of(marks, *region));
-        let paint = Paint { fill: &fill, stroke: lane::PLAYER_EDGE, radius: shape::SMALL, width: layout::STROKE_HAIRLINE };
-        let pad = x + layout::CELL_PAD_NARROW;
-        let mut card = rect(*cell, paint, false);
-        card.push_str(&text(pad, y + layout::HAND_ROW1, typo::LABEL_LARGE, color::ON_PRIMARY_CONTAINER, false, &format!("[{}]", i)));
-        card.push_str(&text(pad, y + layout::HAND_ROW2, typo::TITLE_LARGE, color::ON_SURFACE, false, &touch::fit(c.name, hand.name_budget)));
-        card.push_str(&text(pad, y + layout::HAND_ROW3, typo::BODY_MEDIUM, lane::META, false, &format!("费{} 值{} 阈{}", c.cost, c.hp, c.threshold)));
-        if c.flame > 0 {
-            card.push_str(&text(x + cell.w - layout::CELL_PAD_NARROW, y + layout::HAND_ROW3, typo::BODY_MEDIUM, lane::FLAME, true, &format!("焰{}", c.flame)));
+/// 一条指令 → 一个节点。**属性顺序是文档形状的一部分**，改动它等于改动每一张已归档的帧文件。
+fn emit(p: &Prim) -> String {
+    match p {
+        Prim::Block { x, y, w, h, radius, fill, edge, opacity } => {
+            let mut s = format!(r##"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{radius}" fill="{fill}""##);
+            if let Some(e) = edge {
+                s.push_str(&stroke(e));
+            }
+            if let Some(o) = opacity {
+                s.push_str(&format!(r##" opacity="{o}""##));
+            }
+            s.push_str("/>");
+            s
         }
-        s.push_str(&card);
+        Prim::Label { x, y, em, fill, anchor, text } => {
+            let a = match anchor {
+                Anchor::Start => "start",
+                Anchor::End => "end",
+            };
+            format!(r##"<text x="{x}" y="{y}" font-size="{em}" fill="{fill}" text-anchor="{a}">{}</text>"##, esc(text))
+        }
     }
-    s
 }
 
-/// 一帧盘面 → 一份完整 SVG 文档。**纯函数、零 IO**。
-/// `seed` 与 `scene` 只进标题行：帧文件要能自证是哪一桌打出来的，否则一堆图摆在一起无人能对上号。
+/// 描边怎么写：`stroke-dasharray` 只在虚线时出现，且排在 `stroke-width` 之后（同从前）。
+fn stroke(e: &Edge) -> String {
+    let Edge { stroke, width, dashed } = e;
+    let dash = if *dashed {
+        format!(r##" stroke-dasharray="{} {}""##, layout::DASH_ON, layout::DASH_OFF)
+    } else {
+        String::new()
+    };
+    format!(r##" stroke="{stroke}" stroke-width="{width}"{dash}"##)
+}
+
+/// 一张指令表 → 一份完整 SVG 文档。**纯函数、零 IO。**
+/// 外壳（XML 声明、`<svg>` 根、铺满画布的底色矩形）在编码器这一侧：那是 XML 的写法，不是画面的决定。
+fn svg_of(f: &Frame) -> String {
+    let mut out = String::new();
+    out.push_str(svg::PROLOG);
+    out.push('\n');
+    out.push_str(&format!(r##"<svg xmlns="{}" width="{}" height="{}" viewBox="0 0 {} {}" font-family="{}">"##, svg::NS, f.width, f.height, f.width, f.height, typo::FONT_FAMILY));
+    out.push_str(&format!(r##"<rect width="{}" height="{}" fill="{}"/>"##, f.width, f.height, color::SURFACE));
+    for p in &f.prims {
+        out.push_str(&emit(p));
+    }
+    out.push_str("</svg>\n");
+    out
+}
+
+/// 一帧盘面 → 一张 SVG 文档。`seed` 与 `scene` 只进标题行（口径见 `display::frame_prims`）。
 pub(crate) fn svg_frame(v: &Board, seed: u64, scene: &str) -> String {
     svg_frame_marked(v, seed, scene, &[])
 }
@@ -212,75 +113,8 @@ pub(crate) fn svg_frame(v: &Board, seed: u64, scene: &str) -> String {
 /// `marks` 为空 ⇒ 与 `svg_frame` **逐字节**相同：控件层不许反过来污染呈现真值，
 /// 那件事由 `touch::tests::the_control_layer_adds_nothing_when_nothing_is_pressed` 钉住，
 /// 而改前／改后两批帧文件的 md5 对撞记在 档 §2。
-/// 画布高度**不写死**——它由 `layout_of` 从"这一帧实际排到哪儿"推出来：Boss 规则句比盘面任何一行都长，
-/// 钉死高度就等于要么留一截空白、要么把那句挤成看不见的半句。
 pub(crate) fn svg_frame_marked(v: &Board, seed: u64, scene: &str, marks: &[(Region, Layer)]) -> String {
-    let l = layout_of(v);
-    let mut s = String::new();
-
-    s.push_str(&text(l.left_x, l.title_y, typo::HEADLINE_SMALL, color::ON_SURFACE, false, &format!("《中线》2D 帧 · {scene} · seed {seed}")));
-    s.push_str(&text(l.right_x, l.title_y, typo::HEADLINE_SMALL, lane::META, true, &format!("第 {} 回合", v.player.turn)));
-
-    for (line, baseline) in &l.rule {
-        s.push_str(&text(l.left_x, *baseline, typo::TITLE_LARGE, lane::MIDLINE, false, line));
-    }
-
-    // 敌方持业者 1~2 根并排：业力只在第一根（共用一池），第二根带受击列区。
-    for (holder, h) in l.holders.iter().zip(v.enemy_holders.iter()) {
-        let mut label = format!("{} {}", h.name, candle_readout(h.hp, h.cap));
-        if let Some(k) = h.karma {
-            label.push_str(&format!(" · 业力 {}", k));
-        }
-        if let Some((a, b)) = h.column_zone {
-            label.push_str(&format!(" · 第{}-{}列直击此柱", a, b));
-        }
-        s.push_str(&text(holder.x, holder.y, typo::TITLE_LARGE, lane::ENEMY_FRONT_EDGE, false, &label));
-        s.push_str(&bar(holder.rect(), h.hp, h.cap, lane::ENEMY_FRONT_EDGE));
-    }
-
-    s.push_str(&text(l.left_x, l.back.label_y, typo::BODY_LARGE, color::OUTLINE_VARIANT, false, "敌方后排 · 不可攻击"));
-    s.push_str(&card_row(&l.back.cells, &v.enemy_back, lane::ENEMY_BACK_FILL, color::OUTLINE_VARIANT, marks));
-    s.push_str(&text(l.left_x, l.enemy.label_y, typo::BODY_LARGE, lane::ENEMY_FRONT_EDGE, false, "敌方前排 · 可攻击"));
-    s.push_str(&card_row(&l.enemy.cells, &v.enemy_front, lane::ENEMY_FRONT_FILL, lane::ENEMY_FRONT_EDGE, marks));
-
-    // 中线：一条实色带，不是描边——它要的是"过不去"那种视觉重量，描边给不了。
-    let band = format!(r##"<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}" opacity="{}"/>"##, l.midline.x, l.midline.y, l.midline.w, l.midline.h, shape::NONE, lane::MIDLINE, lane::MIDLINE_BAND_SPOT);
-    s.push_str(&band);
-    s.push_str(&text(l.center_x, l.midline_text_y, typo::BODY_MEDIUM, lane::ON_MIDLINE, false, "中线 · 绝对边界（任何卡牌不能越过）"));
-
-    s.push_str(&text(l.left_x, l.player.label_y, typo::BODY_LARGE, lane::PLAYER_EDGE, false, "我方 P1-P4 · 全部可攻击"));
-    s.push_str(&card_row(&l.player.cells, &v.player_front, lane::PLAYER_FILL, lane::PLAYER_EDGE, marks));
-
-    // 我方持业者：与敌方对称，同一支 bar、同一套读数口径。
-    let mut me = format!("我方持业者 {}", candle_readout(v.player.hp, v.player.cap));
-    me.push_str(&format!(" · 业力 {}", v.player.karma));
-    s.push_str(&text(l.player_holder.x, l.player_holder.y, typo::TITLE_LARGE, lane::PLAYER_EDGE, false, &me));
-    s.push_str(&bar(l.player_holder.rect(), v.player.hp, v.player.cap, lane::PLAYER_EDGE));
-
-    s.push_str(&text(l.left_x, l.hand.label_y, typo::BODY_LARGE, lane::META, false, &format!("手牌 {} 张（序号＝落点命令里的 idx）", v.hand.len())));
-    match l.hand.placeholder {
-        Some(place) => s.push_str(&text(place.x, place.y, typo::BODY_LARGE, color::OUTLINE_VARIANT, false, "（空）")),
-        None => s.push_str(&hand_row(&l.hand, &v.hand, marks)),
-    }
-
-    s.push_str(&text(l.left_x, l.piles_y, typo::BODY_LARGE, lane::META, false, &format!("继承堆 {} 张（自动抽） · 开端堆 {} 张", v.draw_pile_len, v.starter_pile_len)));
-
-    // 日志尾：引擎日志本来就是文本，这里只做转义、截行，不重排。
-    s.push_str(&format!(r##"<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}" stroke="{}" stroke-width="{}"/>"##, l.log.x, l.log.y, l.log.w, l.log.h, shape::SMALL, color::SURFACE_CONTAINER, color::OUTLINE_VARIANT, layout::STROKE_HAIRLINE));
-    let start = v.log.len().saturating_sub(layout::LOG_LINES);
-    for (i, entry) in v.log[start..].iter().enumerate() {
-        let line_y = l.log_first_y + i as i32 * l.log_step;
-        s.push_str(&text(l.log_text_x, line_y, typo::BODY_MEDIUM, color::ON_SURFACE, false, &touch::fit(entry.trim_start(), l.log_budget)));
-    }
-
-    let mut out = String::new();
-    out.push_str(svg::PROLOG);
-    out.push('\n');
-    out.push_str(&format!(r##"<svg xmlns="{}" width="{}" height="{}" viewBox="0 0 {} {}" font-family="{}">"##, svg::NS, l.width, l.height, l.width, l.height, typo::FONT_FAMILY));
-    out.push_str(&format!(r##"<rect width="{}" height="{}" fill="{}"/>"##, l.width, l.height, color::SURFACE));
-    out.push_str(&s);
-    out.push_str("</svg>\n");
-    out
+    svg_of(&display::frame_prims(v, seed, scene, marks))
 }
 
 #[cfg(test)]
@@ -288,9 +122,13 @@ mod tests {
     use super::layout::*;
     use super::typo::*;
     use super::*;
+    use crate::md3::lane;
+    use crate::md3::shape::*;
     use crate::battle::{Battle, Difficulty, Row};
     use crate::boss::BossId;
     use crate::model::{faction_cards, CardInst, Faction};
+    use crate::touch::Rect;
+    use crate::view::CardView;
 
     fn normal() -> Battle {
         Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
@@ -381,84 +219,6 @@ mod tests {
         assert_eq!(frame.matches(&cell_box).count(), slots, "格子总数＝槽位数（空格也要画框）");
     }
 
-    /// 业火足额标记：**恰好**在 flame ≥ threshold 时出现，一格一块。
-    /// 这条钉的是"图上那个记号真的对应引擎那两个数"，不是"记号好不好看"。
-    #[test]
-    fn the_flame_marker_appears_exactly_when_the_cell_is_at_threshold() {
-        let mut v = normal().view();
-        assert_eq!(frame_markers(&svg_frame(&v, 7, "m")), 0, "空盘没有可标的格");
-
-        let mut lit = CardView { name: "足", cost: 1, hp: 5, threshold: 3, flame: 3, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
-        v.player_front[0] = Some(lit.clone());
-        assert_eq!(frame_markers(&svg_frame(&v, 7, "m")), 1, "焰＝阈 算足额");
-
-        lit.flame = 2;
-        v.player_front[1] = Some(lit);
-        assert_eq!(frame_markers(&svg_frame(&v, 7, "m")), 1, "焰<阈 不许亮");
-
-        let other = CardView { name: "差", cost: 1, hp: 5, threshold: 9, flame: 0, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
-        v.enemy_front[0] = Some(other);
-        assert_eq!(frame_markers(&svg_frame(&v, 7, "m")), 1, "敌方格也走同一支笔画，不许多出一块");
-    }
-
-    /// 足额块的搜索串由 `FLAME_MARK` 算出，不抄字面量——否则改了 token 这条测照样绿，就成了给旧读数背书。
-    fn frame_markers(frame: &str) -> usize {
-        let needle = format!(r##"width="{FLAME_MARK}" height="{FLAME_MARK}""##);
-        frame.matches(&needle).count()
-    }
-
-    /// 烛的读数与文本路同口径：负值夹到 0、见底标"烛尽"。
-    /// 引擎在超额削烛那一刻确实把 `-1` 交出来（帧 r7 末格实测），原样印上去就是拿一个眼睛读不懂的数当呈现。
-    #[test]
-    fn the_candle_readout_clamps_below_zero_and_marks_the_extinguished_wick() {
-        assert_eq!(candle_readout(14, 20), "14/20", "常态读数不加任何装饰");
-        assert_eq!(candle_readout(0, 20), "0/20 · 烛尽", "见底要标出来");
-        assert_eq!(candle_readout(-1, 20), "0/20 · 烛尽", "负值夹到 0，不把超额伤害原样画出去");
-    }
-
-    /// 业火方块占右上角，属性串是右对齐的 ⇒ 点亮时锚点必须让到方块左侧，否则长属性（`战吼:同列+2焰`）
-    /// 的尾字会被方块压住——这一条就是那次压字事故的牙：锚点只要往回挪到常态那个数，断言当场红。
-    #[test]
-    fn the_flame_badge_never_sits_on_top_of_the_trait_text() {
-        let lit = CardView { name: "火星", cost: 2, hp: 1, threshold: 3, flame: 3, upgrades: 0, crafted: false, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
-        let dim = CardView { flame: 0, ..lit.clone() };
-        let cell_w = 300;
-        let mark_box = format!(r##"width="{FLAME_MARK}" height="{FLAME_MARK}""##);
-        let marks_needle = format!(r##"y="{CELL_ROW1}" font-size="{BODY_LARGE}""##);
-
-        let s = card_cell(Rect::new(0, 0, cell_w, CELL_H), &lit, lane::PLAYER_FILL, lane::PLAYER_EDGE);
-        let badge_x = attr_before(&s, &mark_box).expect("足额格要画方块");
-        let marks_x = attr_before(&s, &marks_needle).expect("有属性串就要画出来");
-        assert!(marks_x <= badge_x, "属性串右界 {marks_x} 不得越过方块左界 {badge_x}（越过去＝方块压在字上）");
-
-        // 不点亮时不该白让这块宽度：字要贴着常态的右边距。
-        let t = card_cell(Rect::new(0, 0, cell_w, CELL_H), &dim, lane::PLAYER_FILL, lane::PLAYER_EDGE);
-        assert_eq!(attr_before(&t, &marks_needle).expect("属性串要画出来"), cell_w - CELL_PAD, "没点亮就不该让位");
-    }
-
-    /// 从 `needle` 处往回找最近的那个 `x="N"`，取回 N。只用来读几何断言需要的坐标，不是 SVG 解析器。
-    fn attr_before(s: &str, needle: &str) -> Option<i32> {
-        let at = s.find(needle)?;
-        let head = &s[..at];
-        let tail = head.rsplit(r##"x=""##).next()?;
-        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-        digits.parse().ok()
-    }
-
-    /// 开端牌不许把"开端"印两遍：快照里 `starter` 与 `trait_label` 是两个字段、中文是同一个说法，
-    /// 各自往右上角推一次就成 `开端 · 开端`（首版实测就是这样，交付图上一眼可见）。
-    #[test]
-    fn a_starter_card_says_it_once_not_twice() {
-        let starter = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: true, trait_label: "开端", skills: vec![] };
-        let s = card_cell(Rect::new(0, 0, 300, CELL_H), &starter, lane::PLAYER_FILL, lane::PLAYER_EDGE);
-        assert_eq!(s.matches("开端").count(), 1, "同一个词印两遍＝噪声：{s}");
-
-        // 反面对照：不同来源的两个词该都留下，不许把 dedup 写成"只留第一个标记"。
-        let both = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, flame: 0, upgrades: 1, crafted: true, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
-        let t = card_cell(Rect::new(0, 0, 300, CELL_H), &both, lane::PLAYER_FILL, lane::PLAYER_EDGE);
-        assert!(t.contains("造·升级+1·战吼:同列+2焰"), "三个不同来源的标记要连起来全在：{t}");
-    }
-
     /// Boss 规则句**整句**要进图：折行可以，丢字不行。那句是规则本体，不是装饰文案。
     /// 折行本身住在 `touch::layout_of`（行数决定后面所有 y），这条从帧那侧证明一个字没丢。
     #[test]
@@ -491,9 +251,71 @@ mod tests {
         for (name, token) in [("ON_SURFACE", color::ON_SURFACE), ("OUTLINE_VARIANT", color::OUTLINE_VARIANT), ("SURFACE", color::SURFACE), ("lane::MIDLINE", lane::MIDLINE)] {
             assert!(frame.contains(token), "{name} 没进这一帧：版式表与编码器已经分叉");
         }
-        let default_corner = format!(r##"rx="{}""##, shape::SMALL);
+        let default_corner = format!(r##"rx="{}""##, SMALL);
         assert!(frame.contains(&default_corner), "格子圆角没取 shape::SMALL：有人改了默认角却没改表");
-        let unused_corner = format!(r##"rx="{}""##, shape::EXTRA_LARGE);
+        let unused_corner = format!(r##"rx="{}""##, EXTRA_LARGE);
         assert!(!frame.contains(&unused_corner), "帧里冒出了表里没派上用场的 {unused_corner} 圆角");
+    }
+
+    /// **本层存在的全部理由**那一格的另一半：编码器不许自己增删画面。
+    /// 指令表里几条，文档里就有几个节点，一块对一块——尺寸与颜色逐条撞，不是"整体看起来一样"。
+    /// 从前这两件事写在同一个函数里所以无从分离，这条检也就无从成立；分层之后它才有对象。
+    #[test]
+    fn the_document_has_exactly_one_node_per_instruction() {
+        let b = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
+        let v = b.view();
+        let f = crate::display::frame_prims(&v, 7, "one-to-one", &[]);
+        let frame = svg_of(&f);
+        let rects = frame.matches("<rect ").count();
+        let texts = frame.matches("<text ").count();
+        let blocks = f.prims.iter().filter(|p| matches!(p, Prim::Block { .. })).count();
+        let labels = f.prims.iter().filter(|p| matches!(p, Prim::Label { .. })).count();
+        // 外壳自己那一块铺底矩形不算指令（它是文档形状的一部分，口径见 `svg_of` 抬头）。
+        assert_eq!(rects, blocks + 1, "块数对不上：文档 {rects}／指令 {blocks}＋外壳 1");
+        assert_eq!(texts, labels, "字数对不上：文档 {texts}／指令 {labels}");
+        for p in &f.prims {
+            let node = emit(p);
+            assert!(frame.contains(&node), "这条指令没被原样写进文档：{node}");
+        }
+    }
+
+    /// 右对齐那条锚点要真的落到 XML 上：`Anchor::End` ⇒ `text-anchor="end"`，反过来也一样。
+    /// 这一件在像素侧是"先量宽再往回让"，在语法侧是一个属性——两份实现是否等价，只有对撞知道，
+    /// 但**属性有没有丢**是本层自己能当场证的，所以留在这儿。
+    #[test]
+    fn both_anchors_survive_the_encoding() {
+        let f = Frame {
+            width: 1,
+            height: 1,
+            prims: vec![
+                Prim::Label { x: 10, y: 20, em: BODY_LARGE, fill: lane::META.to_string(), anchor: Anchor::Start, text: "左".to_string() },
+                Prim::Label { x: 10, y: 20, em: BODY_LARGE, fill: lane::META.to_string(), anchor: Anchor::End, text: "右".to_string() },
+            ],
+        };
+        let out = svg_of(&f);
+        // 期望串由 token 拼出，不抄色值——抄来的那份在 token 改了以后照样绿，那是给旧读数背书。
+        let at = format!(r##"x="10" y="20" font-size="{BODY_LARGE}" fill="{meta}""##, meta = lane::META);
+        assert!(out.contains(&format!(r##"{at} text-anchor="start">左</text>"##)), "start 锚丢了：{out}");
+        assert!(out.contains(&format!(r##"{at} text-anchor="end">右</text>"##)), "end 锚丢了");
+    }
+
+    /// 空格那格的虚线在 SVG 里是一串属性、在像素里是一段一段的描边可画区。
+    /// 本层只钉"这条串写在 `stroke-width` 之后、段长取自表"，因为它一旦写成别的次序，
+    /// 归档里那 17 个帧文件的 md5 会整批漂（尺见 `scripts/byte-baseline.sh`）。
+    #[test]
+    fn the_dash_array_is_written_after_the_width_with_table_values() {
+        let cell = Rect::new(0, 0, 100, 100);
+        let p = Prim::Block {
+            x: cell.x,
+            y: cell.y,
+            w: cell.w,
+            h: cell.h,
+            radius: SMALL,
+            fill: lane::EMPTY_FILL.to_string(),
+            edge: Some(Edge { stroke: color::OUTLINE_VARIANT.to_string(), width: STROKE_BOUNDARY, dashed: true }),
+            opacity: None,
+        };
+        let want = format!(r##"<rect x="0" y="0" width="100" height="100" rx="{SMALL}" fill="{}" stroke="{}" stroke-width="{STROKE_BOUNDARY}" stroke-dasharray="{DASH_ON} {DASH_OFF}"/>"##, lane::EMPTY_FILL, color::OUTLINE_VARIANT);
+        assert_eq!(emit(&p), want, "属性次序或段长漂了");
     }
 }

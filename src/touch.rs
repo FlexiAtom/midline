@@ -679,7 +679,7 @@ mod tests {
         picker.selected = Some(0);
         let marks = picker.marks(&l);
         assert_eq!(marks, vec![(Region::Hand(0), Layer::Hover), (Region::Hand(0), Layer::Focus), (Region::Hand(0), Layer::Press)], "升序返回：绘制侧取最后一个");
-        assert_eq!(crate::canvas::layer_of(&marks, Region::Hand(0)), Some(Layer::Press), "最后一层不是按下＝优先级反了");
+        assert_eq!(crate::display::layer_of(&marks, Region::Hand(0)), Some(Layer::Press), "最后一层不是按下＝优先级反了");
 
         // 只有控件区产层：悬在日志上、按在中线上都不该刷亮什么。
         let mut idle = Picker::default();
