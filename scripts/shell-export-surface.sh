@@ -35,6 +35,11 @@ TARGET=aarch64-linux-android
 # 那正是防绕过立场要挡的东西；少一条（入口没导出）则 APK 根本起不来。
 ALLOWED='ANativeActivity_onCreate'
 
+# 构建与编译探针的落点一律在常驻盘，不进 /tmp：这几份日志是"红在哪格"的唯一证据，
+# 重启即失的目录里留着它们，等于测过但没法复看。
+LOGDIR="${MIDLINE_LOG_DIR:-$HOME/logs/midline/gate}"
+mkdir -p "$LOGDIR" || exit 1
+
 fail=0
 say() { printf '%s\n' "$*"; }
 red() { say "  [红] $*"; fail=1; }
@@ -45,17 +50,17 @@ say "== 1. 构建（host ＋ $TARGET）=="
 # 上一轮拿"临时给 crate-type 加 rlib"验这一格的牙，那 4 个 .rlib 留在目录里，此后 cdylib-only
 # 的配置照样被读出 .rlib=4——那时检的是目录的历史，不是本次构建。壳整目录重编约十秒（第三方只有
 # 字体那条链：ab_glyph 一族，编一次就进 cargo 缓存）。
-if ! (cd "$SHELL_DIR" && cargo clean --quiet) >/tmp/shell-guard-clean.log 2>&1; then
-  red "cargo clean 失败，见 /tmp/shell-guard-clean.log"; say "$(tail -3 /tmp/shell-guard-clean.log)"; exit 1
+if ! (cd "$SHELL_DIR" && cargo clean --quiet) >"$LOGDIR/clean.log" 2>&1; then
+  red "cargo clean 失败，见 $LOGDIR/clean.log"; say "$(tail -3 "$LOGDIR/clean.log")"; exit 1
 fi
 # 必须在 shell-android 里跑 cargo：`.cargo/config.toml` 是按**当前工作目录**发现的，
 # 用 `--manifest-path` 从仓库根调它读不到那份 NDK linker 配置，链接器会退回宿主 `/usr/bin/ld`
 # 并报 `file in wrong format`（本机实测踩过一次，所以这行不是 precaution 而是修案）。
-if ! (cd "$SHELL_DIR" && cargo build --release --offline) >/tmp/shell-guard-host.log 2>&1; then
-  red "host 构建失败，见 /tmp/shell-guard-host.log"; say "$(tail -5 /tmp/shell-guard-host.log)"; exit 1
+if ! (cd "$SHELL_DIR" && cargo build --release --offline) >"$LOGDIR/host.log" 2>&1; then
+  red "host 构建失败，见 $LOGDIR/host.log"; say "$(tail -5 "$LOGDIR/host.log")"; exit 1
 fi
-if ! (cd "$SHELL_DIR" && cargo build --release --offline --target "$TARGET") >/tmp/shell-guard-target.log 2>&1; then
-  red "$TARGET 交叉构建失败，见 /tmp/shell-guard-target.log"; say "$(tail -5 /tmp/shell-guard-target.log)"; exit 1
+if ! (cd "$SHELL_DIR" && cargo build --release --offline --target "$TARGET") >"$LOGDIR/target.log" 2>&1; then
+  red "$TARGET 交叉构建失败，见 $LOGDIR/target.log"; say "$(tail -5 "$LOGDIR/target.log")"; exit 1
 fi
 LIBNAME=libmidline_shell_android.so
 HOST_SO="$SHELL_DIR/target/release/$LIBNAME"
@@ -122,13 +127,13 @@ say "== 6. 布局尺（第二道）：拿 NDK 真头做 _Static_assert =="
 # 本机 NDK sysroot **没有** `system/graphics.h`（那是平台源码那侧的路径），像素枚举要从
 # `android/hardware_buffer.h` 取——写错那张头时整格是"编不过"而不是"断言失败"，读日志要分清这两者。
 if [ -x "$CLANG" ]; then
-  if "$CLANG" --sysroot="$SYSROOT" -c -o /tmp/shell-layout-check.o "$SHELL_DIR/layout_check.c" 2>/tmp/shell-layout-check.log; then
+  if "$CLANG" --sysroot="$SYSROOT" -c -o "$LOGDIR/layout-check.o" "$SHELL_DIR/layout_check.c" 2>"$LOGDIR/layout-check.log"; then
     ok "layout_check.c 对 NDK 头通过：ANativeActivity=80B／Callbacks=128B／16 条回调偏移；
        ANativeWindow_Buffer=48B（width0 height4 stride8 format12 bits16 reserved24）；
        像素枚举 RGBA8888=1 RGBX8888=2 RGB888=3 RGB565=4；AASSET_MODE_BUFFER=3；
        off_t=8B／getLength→off_t／read→int"
   else
-    red "layout_check.c 与 NDK 头对不上——抄写错了或 NDK 换了 ABI："; sed 's/^/      /' /tmp/shell-layout-check.log | head -12
+    red "layout_check.c 与 NDK 头对不上——抄写错了或 NDK 换了 ABI："; sed 's/^/      /' "$LOGDIR/layout-check.log" | head -12
   fi
 else
   red "找不到 NDK clang：$CLANG（这一格不许静默跳过，跳过就等于布局没尺）"
@@ -183,44 +188,8 @@ say "== 8. 画面数字只有一个家（壳侧不许自造色值）=="
 # 第三形是本格第一次跑负样本时才补上的：先只写前两形，往 `frame.rs` 塞一颗
 # `const NEGATIVE_PROBE: [u8; 3] = [0x34, 0x82, 0x8b];` 这条检**照样绿**——那是 §2 反证第四条点名的
 # "裸 (r,g,b)"那一形，尺子当时正瞎。三个数全 ≤2 不算（`[0, 1, 2]` 是下标不是颜色）。
-if python3 - "$SHELL_DIR/src" <<'PY'
-import re, sys, pathlib
-NUM = rb'(0x[0-9a-fA-F]{1,2}|\d{1,3})'
-HEX = re.compile(rb'#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?(?![0-9a-zA-Z])')
-NUMRGB = re.compile(rb'\brgb\(\s*\d')
-NUM3 = re.compile(rb'[\[(]\s*' + NUM + rb'\s*,\s*' + NUM + rb'\s*,\s*' + NUM + rb'\s*(?:,\s*' + NUM + rb'\s*)?[\])]')
-def val(tok):
-    b = tok[2:] if tok[:2] == b'0x' else tok
-    try:
-        return int(b, 16) if tok[:2] == b'0x' else int(b)
-    except ValueError:
-        return 256
-bad = 0
-# 扫描范围与主仓那条检**逐字同口径**（`md3.rs:766`）：跳空行与 `//`（含 `///`）行、遇 `#[cfg(test)]` 即停。
-# 不停在测区前会把夹具坐标 `[10, 20, 30]` 当色值报红，把注释里的 `#3482FF` 也算进去同样是误红——
-# 一条天天误报的检，最后学会的是把它静音，那就等于没有检。
-for p in sorted(pathlib.Path(sys.argv[1]).glob('*.rs')):
-    seen = 0
-    for n, line in enumerate(p.read_bytes().split(b'\n'), 1):
-        s = line.lstrip()
-        if s.startswith(b'#[cfg(test)]'):
-            break
-        if not s or s.startswith(b'//'):
-            continue
-        seen += 1
-        hits = [m.group(0) for m in HEX.finditer(line)] + [m.group(0) for m in NUMRGB.finditer(line)]
-        hits += [m.group(0) for m in NUM3.finditer(line)
-                 if all(val(m.group(k)) <= 255 for k in (1, 2, 3)) and any(val(m.group(k)) > 2 for k in (1, 2, 3))]
-        for m in hits:
-            print(f"      {p.name}:{n} 出现字面量色值 {m.decode(errors='replace')}")
-            bad += 1
-    if seen == 0:
-        print(f"      {p.name} 生产面一行都没扫到 ⇒ 这条检在它身上是空转")
-        bad += 1
-if bad:
-    print(f"      共 {bad} 处")
-sys.exit(1 if bad else 0)
-PY
+# 谓词本体在 `scripts/color-literal-scan.py`——守门检与电池 M168 调**同一份**，不各写一遍正则。
+if python3 scripts/color-literal-scan.py "$SHELL_DIR/src"
 then ok "壳的色值全部向 md3 要，没有一处自己抄了个颜色"
 else red "上面那几行在壳里抄了色值——同一状态在两个壳里会读出两个色，这正是本帧要消灭的债"
 fi

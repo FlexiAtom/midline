@@ -27,33 +27,47 @@ B="$(cd "$(dirname "$0")" && pwd)/mutation-battery.sh"
 REAL="${MIDLINE_REAL_DOC:-$HOME/中线.MD}"
 [ -f "$REAL" ] || { echo "找不到规格文档 $REAL（可用 MIDLINE_REAL_DOC 指定）"; exit 1; }
 
-# 判据唯一化：电池里 run() 的定义行必须恰有一处，否则这条尺的替换就是空替换——静默预检出"全过"最坑。
-n=$(grep -c '^run() {' "$B")
-[ "$n" -eq 1 ] || { echo "电池里 run() 的定义行应有且只有一处，实测 $n 处 ⇒ 本预检的替换判据已失效，请同步本脚本"; exit 1; }
+# 判据唯一化：电池里那四个"跑 cargo／跑 python 检"的入口，定义行必须各恰有一处，否则这条尺的替换就是空替换——
+# 静默预检出"全过"最坑。run() 是引擎侧 167 条的落点；srun/crun/frun 是壳侧三条 lane 的落点
+# （M167 走 host 探针、M168 走守门检 §8 那份谓词、M169 走 frame:: 测面），它们各自真跑一次都是**几十秒到几分钟**的
+# 编译，预检要量的是"补丁有没有打上"，所以四个全换空壳——少换一个，预检就退化成一次整族。
+for f in run srun crun frun; do
+    n=$(grep -c "^$f() {" "$B")
+    [ "$n" -eq 1 ] || { echo "电池里 $f() 的定义行应有且只有一处，实测 $n 处 ⇒ 本预检的替换判据已失效，请同步本脚本"; exit 1; }
+done
 
 T="$(dirname "$B")/.battery-preflight.$$.sh"
 trap 'rm -f "$T"' EXIT
 python3 - "$B" "$T" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
-# 空壳 run() 只做一件事：把 py() 记下的 PATCH_FAIL 喊出来，然后清掉（一条记录只喊一次）。
-noop = ('run() { if [ -n "${PATCH_FAIL:-}" ]; then '
-        "printf '!! 补丁失败（%s）⇒ 这条没有打到码\\n' \"$PATCH_FAIL\"; PATCH_FAIL=\"\"; fi; return 0; }")
+# 空壳只做一件事：把 py()/pys() 记下的 PATCH_FAIL 喊出来，然后清掉（一条记录只喊一次）。
+NEUTRAL = ('run', 'srun', 'crun', 'frun')
+def noop(name):
+    return ('%s() { if [ -n "${PATCH_FAIL:-}" ]; then '
+            "printf '!! 补丁失败（%%s）⇒ 这条没有打到码\\n' \"$PATCH_FAIL\"; PATCH_FAIL=\"\"; fi; return 0; }" % name)
 lines = open(src, encoding='utf8').read().split('\n')
-out = [noop if l.startswith('run() {') else l for l in lines]
-assert sum(1 for l in out if l.startswith('run() {')) == 1
+out = []
+for l in lines:
+    hit = next((f for f in NEUTRAL if l.startswith(f + '() {')), None)
+    out.append(noop(hit) if hit else l)
+for f in NEUTRAL:
+    assert sum(1 for l in out if l.startswith(f + '() {')) == 1, f
 open(dst, 'w', encoding='utf8').write('\n'.join(out))
 PY
 
-echo "### 预检（只打补丁、不跑 cargo）｜红＝某条变异的补丁没打上或内嵌 Python 有语法错"
+echo "### 预检（只打补丁、不跑 cargo／不跑检）｜红＝某条变异的补丁没打上或内嵌 Python 有语法错"
 bash "$T"
 # 记录条数钉死（本帧 D19）：以前这行只打印条数、没人核对，一条记录静默丢失（echo 头被误删、或整条误并）
 # 就会让"预检全过"变成假绿。现在断言 == 期望数；加一条牙就同步改 EXPECTED_RECORDS 这一处。
-EXPECTED_RECORDS=167
+# 171 ＝ M0 引擎对照 + M0b 壳侧对照 + M1…M169（其中 M167–M169 走上面那三个壳侧入口）。
+EXPECTED_RECORDS=171
 N="$(grep -c '^echo "### ' "$B")"
 if [ "$N" -ne "$EXPECTED_RECORDS" ]; then
     printf '!! 记录条数对不上：期望 %s 条，实测 %s 条 ⇒ 有 echo "### " 头被删／多写／整条误并，请核对电池\n' "$EXPECTED_RECORDS" "$N"
     exit 1
 fi
-echo "### 预检结束｜记录共 $N 条（含 M0 对照与 M$((EXPECTED_RECORDS - 1)) 收尾，与 EXPECTED_RECORDS 相符）。上面没有「补丁失败」行＝逐条补丁都真打到了码。"
+# 末条抬头直接取文件里最后一行，不做 EXPECTED_RECORDS-1 那种算术——M0b 插进来之后那种算术就已经是错的了。
+LAST="$(grep '^echo "### ' "$B" | tail -1 | sed 's/^echo "### \([A-Za-z0-9]*\).*/\1/')"
+echo "### 预检结束｜记录共 $N 条（含两条对照，末条 $LAST，与 EXPECTED_RECORDS 相符）。上面没有「补丁失败」行＝逐条补丁都真打到了码。"
 

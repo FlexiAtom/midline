@@ -52,7 +52,44 @@ run() { local o r; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）
 #    于是这类静默 no-op 与 ① 一样在预检里当场喊，不必等整族、也不必靠人读日志。
 py() { local e rc before after; before="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ -n "$before" ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何字节"; return 0; }
 
+# ===== 壳侧三条 lane（M167–M169）=====
+# 上面 167 条量的是**引擎语义**；这三条量的是 第十八步·其一 收尾时那三则只能手工跑的负样本——
+# 像素走步（text.rs 的 stride）、色值检本身有没有牙（守门检 §8）、指令摘要吃不吃位置（frame_digest）。
+# 它们的检面不在主仓 src/ 里，所以 D 那份副本必须**保形**：`#[path]` 按「声明所在文件的目录」解析
+# （engine-mods.rs 里那句 ../../src/），探针再从 probes/host-frame 往上引壳——少拷一层就是一片红，
+# 而那红与变异无关，是口径坏了。所以凡壳侧拷不全、或字体不在（它由 scripts/android-font.sh 产、
+# 落在被 .gitignore 挡住的 /build 下），SHELL_FAIL 就非空，三条 lane 一律喊「没有落点」，
+# **绝不读成「没红」**——那是本文件开头第三种静默失效的同族。
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SHELL_FAIL=""
+restore_shell() {
+  restore; SHELL_FAIL=""
+  mkdir -p "$D/shell-android/src" "$D/shell-android/.cargo" "$D/probes/host-frame/src" "$D/build/assets/fonts" \
+    && cp "$ROOT"/shell-android/Cargo.toml "$ROOT"/shell-android/Cargo.lock "$D/shell-android/" \
+    && cp "$ROOT"/shell-android/.cargo/config.toml "$D/shell-android/.cargo/" \
+    && cp "$ROOT"/shell-android/src/*.rs "$D/shell-android/src/" \
+    && cp "$ROOT"/probes/host-frame/Cargo.toml "$ROOT"/probes/host-frame/Cargo.lock "$D/probes/host-frame/" \
+    && cp "$ROOT"/probes/host-frame/src/main.rs "$D/probes/host-frame/src/" \
+    && cp "$ROOT"/build/assets/fonts/ui.otf "$D/build/assets/fonts/" 2>/dev/null
+  [ -f "$D/shell-android/src/frame.rs" ] || SHELL_FAIL="壳侧源码没拷进副本"
+  [ -f "$D/probes/host-frame/src/main.rs" ] || SHELL_FAIL="${SHELL_FAIL:+$SHELL_FAIL；}探针没拷进副本"
+  [ -f "$D/build/assets/fonts/ui.otf" ] || SHELL_FAIL="${SHELL_FAIL:+$SHELL_FAIL；}字体 build/assets/fonts/ui.otf 不在（先跑 scripts/android-font.sh）"
+}
+# pys()＝壳侧版 py()：no-op 那面牙取的是**壳**那份字节和——这三条不碰主仓 src，照 py() 的口径会当场假喊 no-op
+pys() { local e rc before after; before="$(cat "$D"/shell-android/src/*.rs 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/shell-android/src/*.rs 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何壳侧字节"; return 0; }
+shout() { if [ -n "$SHELL_FAIL" ]; then printf '!! 壳侧 lane 没有落点（%s）⇒ 下面不算读数\n' "$SHELL_FAIL"; return 1; fi; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，读数一律不算落点\n' "$PATCH_FAIL"; return 1; fi; return 0; }
+# 探针 lane：host-frame 自带「填充列必须一格未动」那道检（main.rs:93–111），**不吃真机也不吃截屏**就能红
+srun() { shout || return 0; local o rc; o="$(cd "$D/probes/host-frame" && cargo run --release --offline -q -- 1548x720 1552 "$D/host-frame.ppm" 2>&1)"; rc=$?; printf '%s\n' "$o" | grep -vE '^[[:space:]]*$' | tail -4; printf 'rc=%s\n' "$rc"; }
+# 色值检 lane：调守门检 §8 那**同一份**谓词（scripts/color-literal-scan.py），不在这里抄一遍正则
+crun() { shout || return 0; local o rc; o="$(python3 "$ROOT/scripts/color-literal-scan.py" "$D/shell-android/src" 2>&1)"; rc=$?; [ -n "$o" ] && printf '%s\n' "$o" | sed "s#$D#<D>#g" | tail -4; printf 'rc=%s\n' "$rc"; }
+# 壳测 lane：只过 frame::——在壳里跑整族会连同那 41 条 `#[path]` 引擎测一起红（CARGO_MANIFEST_DIR 变了），
+# 那个数与这条变异无关，是假数（第十八步·其一 的 README 条目里已经写明同一条口径）
+frun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q frame:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
+
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
+# 壳侧三条 lane 的零位（M167–M169 的对照）：探针 rc=0、色值检 rc=0、frame:: 全绿。
+# 这三格里任何一格自己就红，说明副本没保形或字体不在——那 M167–M169 的读数全是假的，先修口径。
+echo "### M0b 壳侧对照（不打补丁：探针 rc=0／色值检 rc=0／frame:: 全绿）"; restore_shell; srun; crun; frun
 echo "### M1 抹掉 md:452 的两处行尾锚点 ⇒ 应红在 §十二 推导器（漏登记）"
 restore; py "
 import re,glob
@@ -1167,25 +1204,25 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    pub fn grant_free_starter(&mut self) {'))"
 run
 
-echo "### M141 摘掉 candle_readout 的夹负（把 max(0) 去掉，其余一字不动）⇒ 实测 **1** 红：红在 canvas 那条读数口径测（the_candle_readout_clamps_below_zero_and_marks_the_extinguished_wick）＝本帧第 ④ 处失真的牙。这条牙存在的理由不是那个负数好不好看：超额削烛那一刻引擎把 -1 原样交给快照，而文本路 render::candle_bar 是夹 0 再标「烛尽」——两个壳读出两个数就是第二套呈现口径，而这类漂移在本仓只有一种抓法：拿一条测钉住口径"
+echo "### M141 摘掉 candle_readout 的夹负（把 max(0) 去掉，其余一字不动）⇒ 实测 **1** 红：红在 display 那条读数口径测（the_candle_readout_clamps_below_zero_and_marks_the_extinguished_wick）＝本帧第 ④ 处失真的牙。这条牙存在的理由不是那个负数好不好看：超额削烛那一刻引擎把 -1 原样交给快照，而文本路 render::candle_bar 是夹 0 再标「烛尽」——两个壳读出两个数就是第二套呈现口径，而这类漂移在本仓只有一种抓法：拿一条测钉住口径"
 restore; py "
-p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
 a='    let shown = hp.max(0);'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    let shown = hp;'))"
 run
 
-echo "### M142 把业火点亮时让位那一支整个摘掉（点亮与未点亮同走常态内缩，未点亮那支的数不动）⇒ 实测 **1** 红：红在 canvas 那条方块不压字测＝本帧第 ③ 处失真的牙。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住。其十二 把这几个数收进 md3 之后，本条的落点从字面量换成了那支行——摘的仍是同一件事"
+echo "### M142 把业火点亮时让位那一支整个摘掉（点亮与未点亮同走常态内缩，未点亮那支的数不动）⇒ 实测 **1** 红：红在 display 那条方块不压字测＝本帧第 ③ 处失真的牙。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住。其十二 把这几个数收进 md3 之后，本条的落点从字面量换成了那支行——摘的仍是同一件事"
 restore; py "
-p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
 a='        let marks_x = x + w - if lit { badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD };'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        let marks_x = x + w - layout::CELL_PAD;'))"
 run
 
-echo "### M143 摘掉 marks.dedup 那一行（开端牌的两个字段各推一次，撞词不再去重）⇒ 实测 **1** 红：红在 canvas 那条「开端只说一次」测＝本帧第 ⑤ 处失真的牙。这条测的正反两面都是要的：正面数那个词恰出现一次，反面拿一张 造＋升级＋战吼 的牌钉三个标记全在——所以摘掉 dedup 会红，把 dedup 写成「只留第一个标记」也会红，两种坏法各撞一次"
+echo "### M143 摘掉 marks.dedup 那一行（开端牌的两个字段各推一次，撞词不再去重）⇒ 实测 **1** 红：红在 display 那条「开端只说一次」测＝本帧第 ⑤ 处失真的牙。这条测的正反两面都是要的：正面数那个词恰出现一次，反面拿一张 造＋升级＋战吼 的牌钉三个标记全在——所以摘掉 dedup 会红，把 dedup 写成「只留第一个标记」也会红，两种坏法各撞一次"
 restore; py "
-p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
 a='    marks.dedup();'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,''))"
@@ -1322,7 +1359,7 @@ run
 echo "### M160 往 canvas 的生产面塞回一条本地常数（一个带十六进制色值的 const，读它的人一个也没有）⇒ 实测 **1** 红：红在 md3 那条「版式真值只许一个家」的机检（它同时命中 色值 与 本地常数 两格，仍是一条测）。这颗牙是 其十二 自己欠的：那条机检是本帧新立的，没有它，把 #130 决策日志那句「正解是一条机检」写成一条永真的检也无人能证伪——而这条测尾部还挂着一把反空虚对照（md3 自己须有 ≥20 条色值常数），所以「把被扫文件删空」这条路同样是红的"
 restore; py "
 p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
-a='use crate::view::{Board, CardView};'
+a='use crate::view::Board;'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,a+'\nconst PAPER: &str = \x22#ffffff\x22;'))"
 run
@@ -1345,7 +1382,7 @@ run
 
 echo "### M163 把态层取值从「最后一个」改回「第一个」（layer_of 摘掉 .rev()，表与升序约定都不动）⇒ 实测 **1** 红：红在控件层那条「三档各接自己的系数、且按下胜出」的尺。MD3 把 FOCUS 与 PRESS 记成同一个数，所以优先级不可能靠系数排——它全靠绘制侧读表的这一端。摘掉 .rev() 之后同一格的焦点环会盖住按下态：手指按在一格上，那一格却显示「没按」的形状，而这在帧上仍是合法颜色（两档同值），只有直接问「这一格最后是哪一层」才量得到"
 restore; py "
-p='$D/src/canvas.rs'; s=open(p,encoding='utf8').read()
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
 a='marks.iter().rev().find('
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'marks.iter().find('))"
@@ -1374,3 +1411,27 @@ a='match self.selected.take() {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'match self.selected {'))"
 run
+
+echo "### M167 把壳侧 fill_bg 的行步长从「缓冲区 stride」换成「画面宽度 w」（text.rs 里 chunks_mut 的那个乘数，取色、版面、字形一格没动）⇒ 实测 host 探针当场 rc=1，喊出「步长填充被动过」并给第一格索引。真机现读是 buffer 1548×720 而 stride=1552，那 4 列不属于画面：按 w 走会让每行往前挪 4 列、越往后错得越多，屏上的症状是「画面斜了」。落点走探针而不走测面，因为探针里那道「填充列必须一格未动」是**唯一不吃真机、也不吃截屏**就能红的证人；像素对撞遇到同一种错只会红满屏，归因不出是步长还是种子"
+restore_shell; pys "
+p='$D/shell-android/src/text.rs'; s=open(p,encoding='utf8').read()
+a='dst.chunks_mut(stride * 4)'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'dst.chunks_mut(w * 4)'))"
+srun
+
+echo "### M168 往壳的生产面塞一颗**死**的裸色值常量（frame.rs 里加一行三个 0–255 的方括号数组，没有任何人读它）⇒ 实测守门检第 8 节 rc=1 并点名那一行。这条量的不是码，是那条检自己有没有牙：它的第三形正是 第十八步·其一 第一次跑这则负样本时才补上的——先只写前两形时这颗常量照样绿，所以「检报绿」当时候不能读成「壳里没有自造色值」。谓词只有一份（scripts/color-literal-scan.py），守门检与电池调同一个文件；在这里抄一遍正则就是造第二份真值——哪天检改了而电池不知道，这条牙就静默作废"
+restore_shell; pys "
+p='$D/shell-android/src/frame.rs'; s=open(p,encoding='utf8').read()
+a='pub fn frame_digest'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'const NEGATIVE_PROBE: [u8; 3] = [0x34, 0x82, 0x8b];\npub fn frame_digest',1))"
+crun
+
+echo "### M169 让 frame_digest 不再吃坐标（Block 那一支把 x 喂成常数 0，y、w、h、radius 一个不动、吃的字节数也不变）⇒ 实测壳测 frame:: 红在「改了坐标读数不变，摘要就没吃位置」那句 assert_ne。这条与 其九 手工那则是同一格牙的两个方向：手工那则改 prim 的 x 看摘要变不变（证那条测会红），本条反过来把摘要改成不吃 x（证那句 assert_ne 后面真有东西守着）。少了它，摘要可以悄悄退化成只吃 width、height 与 prim 条数，两侧对撞照样报同一个数而像素各自漂——那是本帧归因分档整格失效，而它换来的正是「数不同＝引擎或编码器分叉，数同而像素不同＝栅格器分叉」那一句"
+restore_shell; pys "
+p='$D/shell-android/src/frame.rs'; s=open(p,encoding='utf8').read()
+a='for v in [*x, *y, *w, *h, *radius] {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'for v in [0, *y, *w, *h, *radius] {'))"
+frun
