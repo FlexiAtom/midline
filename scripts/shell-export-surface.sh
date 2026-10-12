@@ -178,18 +178,45 @@ say "== 8. 画面数字只有一个家（壳侧不许自造色值）=="
 # 而它的谓词是"禁 `#rrggbb`、禁 `const`、禁裸数"，把壳那三个文件纳进去会当场误红一片——
 # 壳里的 `4`／`u8::MAX`／`[u8; 3]` 是**缓冲几何数**，不是画面数字，两者本质不同。
 # 所以这一格不换那条检的口径，改成量它真正要的那件事：**色值只有一个来源**。
-# 判据按字面量形态取，不按名字猜：`#RRGGBB`（六个十六位）与 `rgb(数字,` 这两种写法，
-# 出现在壳的任何一行里，就意味着有人在壳里抄了一份颜色，而不是问 `md3` 要。
+# 判据按字面量形态取，不按名字猜。三形：`#RRGGBB`（六个十六位）、`rgb(数字,`、
+# 以及**方括号/圆括号里连着三个 0–255 的数**（`[0x34, 0x82, 0x8b]`／`(52,130,139)`，第四个数允许是 alpha）。
+# 第三形是本格第一次跑负样本时才补上的：先只写前两形，往 `frame.rs` 塞一颗
+# `const NEGATIVE_PROBE: [u8; 3] = [0x34, 0x82, 0x8b];` 这条检**照样绿**——那是 §2 反证第四条点名的
+# "裸 (r,g,b)"那一形，尺子当时正瞎。三个数全 ≤2 不算（`[0, 1, 2]` 是下标不是颜色）。
 if python3 - "$SHELL_DIR/src" <<'PY'
 import re, sys, pathlib
+NUM = rb'(0x[0-9a-fA-F]{1,2}|\d{1,3})'
 HEX = re.compile(rb'#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?(?![0-9a-zA-Z])')
 NUMRGB = re.compile(rb'\brgb\(\s*\d')
+NUM3 = re.compile(rb'[\[(]\s*' + NUM + rb'\s*,\s*' + NUM + rb'\s*,\s*' + NUM + rb'\s*(?:,\s*' + NUM + rb'\s*)?[\])]')
+def val(tok):
+    b = tok[2:] if tok[:2] == b'0x' else tok
+    try:
+        return int(b, 16) if tok[:2] == b'0x' else int(b)
+    except ValueError:
+        return 256
 bad = 0
+# 扫描范围与主仓那条检**逐字同口径**（`md3.rs:766`）：跳空行与 `//`（含 `///`）行、遇 `#[cfg(test)]` 即停。
+# 不停在测区前会把夹具坐标 `[10, 20, 30]` 当色值报红，把注释里的 `#3482FF` 也算进去同样是误红——
+# 一条天天误报的检，最后学会的是把它静音，那就等于没有检。
 for p in sorted(pathlib.Path(sys.argv[1]).glob('*.rs')):
+    seen = 0
     for n, line in enumerate(p.read_bytes().split(b'\n'), 1):
-        for m in list(HEX.findall(line)) + list(NUMRGB.findall(line)):
+        s = line.lstrip()
+        if s.startswith(b'#[cfg(test)]'):
+            break
+        if not s or s.startswith(b'//'):
+            continue
+        seen += 1
+        hits = [m.group(0) for m in HEX.finditer(line)] + [m.group(0) for m in NUMRGB.finditer(line)]
+        hits += [m.group(0) for m in NUM3.finditer(line)
+                 if all(val(m.group(k)) <= 255 for k in (1, 2, 3)) and any(val(m.group(k)) > 2 for k in (1, 2, 3))]
+        for m in hits:
             print(f"      {p.name}:{n} 出现字面量色值 {m.decode(errors='replace')}")
             bad += 1
+    if seen == 0:
+        print(f"      {p.name} 生产面一行都没扫到 ⇒ 这条检在它身上是空转")
+        bad += 1
 if bad:
     print(f"      共 {bad} 处")
 sys.exit(1 if bad else 0)
