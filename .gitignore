@@ -28,3 +28,7 @@ scripts/.battery-preflight.*.sh
 
 # APK 组包产物（可复现，不入库；签名键在 ~/.midline-android，比它更不该进来）
 /dist
+
+# 字体子集的暂存区：由 scripts/android-font.sh 从源码现抽码点生成。
+# 不入库是**有意的**——入库的是一份会过期的码点清单＋261 KB 二进制，而缺字在屏上只是"少一笔"。
+/build

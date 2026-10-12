@@ -92,12 +92,15 @@ say "== 4. 不产出可被 \`use\` 的元数据构件 =="
 # cdylib 不发 .rmeta（上一档 P2 实测：拿它当 Rust 依赖 ⇒ error[E0786]）。
 # 本格防的是"有人为了方便把 crate-type 加上 rlib"——加了就当场红，而不是等审计发现。
 # 本格的可信度全靠 §1 那次 clean：没有它，这里数到的是历史上某次构建的剩物。
-n_rmeta=$(find "$SHELL_DIR/target" -maxdepth 4 -name '*.rmeta' | wc -l)
-n_rlib=$(find "$SHELL_DIR/target" -maxdepth 4 -name 'libmidline_shell_android.rlib' | wc -l)
-if [ "$n_rmeta" = 0 ] && [ "$n_rlib" = 0 ]; then
-  ok "target 下 .rmeta=0、本 crate 的 .rlib=0"
+n_rmeta=$(find "$SHELL_DIR/target" -name 'libmidline_shell_android*.rmeta' | wc -l)
+n_rlib=$(find "$SHELL_DIR/target" -name 'libmidline_shell_android*.rlib' | wc -l)
+dep_rmeta=$(find "$SHELL_DIR/target" -name '*.rmeta' | wc -l)
+# crate-type 那张表也现读一次：产物计数会被"这次没构建到"骗过去，这一行不会。
+ct=$(sed -n 's/^[[:space:]]*crate-type[[:space:]]*=[[:space:]]*\[\(.*\)\].*/\1/p' "$SHELL_DIR/Cargo.toml" | tr -d '" ')
+if [ "$n_rmeta" = 0 ] && [ "$n_rlib" = 0 ] && [ "$ct" = "cdylib" ]; then
+  ok "本 crate 的 .rmeta=0、.rlib=0，crate-type 现读=[cdylib]（依赖侧 .rmeta=$dep_rmeta，那是构建中间物，不进产物）"
 else
-  red "出现了可复用元数据：.rmeta=$n_rmeta、.rlib=$n_rlib（crate-type 应当只有 cdylib）"
+  red "出现了可复用元数据：本 crate .rmeta=$n_rmeta、.rlib=$n_rlib、crate-type=[$ct]（应当只有 cdylib）"
 fi
 
 say "== 5. 平台库确实挂上（NEEDED 面）=="
@@ -113,15 +116,60 @@ say "  NEEDED 现量：$need"
 
 say "== 6. 布局尺（第二道）：拿 NDK 真头做 _Static_assert =="
 # entry.rs 那批 offset_of! 只能证明"我自己的声明自洽"；换序漏字段一样全绿。
-# 这一格的外部证人是 /opt/android-ndk 里的那张 native_activity.h。只编不链不跑。
+# 这一格的外部证人是 /opt/android-ndk 里的 native_activity.h／native_window.h／asset_manager.h／
+# hardware_buffer.h。只编不链不跑。
+# 本机 NDK sysroot **没有** `system/graphics.h`（那是平台源码那侧的路径），像素枚举要从
+# `android/hardware_buffer.h` 取——写错那张头时整格是"编不过"而不是"断言失败"，读日志要分清这两者。
 if [ -x "$CLANG" ]; then
   if "$CLANG" --sysroot="$SYSROOT" -c -o /tmp/shell-layout-check.o "$SHELL_DIR/layout_check.c" 2>/tmp/shell-layout-check.log; then
-    ok "layout_check.c 对 NDK 头通过（ANativeActivity=80B、ANativeActivityCallbacks=128B、16 个回调偏移逐个对上）"
+    ok "layout_check.c 对 NDK 头通过：ANativeActivity=80B／Callbacks=128B／16 条回调偏移；
+       ANativeWindow_Buffer=48B（width0 height4 stride8 format12 bits16 reserved24）；
+       像素枚举 RGBA8888=1 RGBX8888=2 RGB888=3 RGB565=4；AASSET_MODE_BUFFER=3；
+       off_t=8B／getLength→off_t／read→int"
   else
     red "layout_check.c 与 NDK 头对不上——抄写错了或 NDK 换了 ABI："; sed 's/^/      /' /tmp/shell-layout-check.log | head -12
   fi
 else
   red "找不到 NDK clang：$CLANG（这一格不许静默跳过，跳过就等于布局没尺）"
+fi
+
+say "== 7. 变参日志的格式串（Rust 的 c-string 字面量没人替你查）=="
+# 本帧真机现读：`upem=%.0`（漏了 `f`）被 printf 读成 `%.0a` → `%a`，打出 `0x2p+9` 还顺手吃掉
+# 下一个字母，`asc=` 变 `sc=`、`ink=` 变 `nk=`。Rust 的 `c"..."` 字面量**不做任何格式检查**，
+# 编译、链接、跑起来全绿，只有 logcat 里那行是坏的——而日志坏掉等于这一帧没量。
+# 所以这一格不许省：把源码里每条 `c"..."` 的 `%` 序列按 C 的语法走一遍，转换符不在合法集里就红。
+if python3 - "$SHELL_DIR/src" <<'PY'
+import re, sys, pathlib
+CONV = set('diuoxXfeEgGaAspc%')
+FLAGS = set('-+ #0')
+bad = 0
+for p in sorted(pathlib.Path(sys.argv[1]).glob('*.rs')):
+    text = p.read_text()
+    for m in re.finditer(r'c"((?:[^"\\]|\\.)*)"', text):
+        fmt = m.group(1); i = 0
+        while i < len(fmt):
+            if fmt[i] != '%':
+                i += 1; continue
+            j = i + 1
+            while j < len(fmt) and fmt[j] in FLAGS: j += 1
+            while j < len(fmt) and fmt[j].isdigit(): j += 1
+            if j < len(fmt) and fmt[j] == '.':
+                j += 1
+                while j < len(fmt) and fmt[j].isdigit(): j += 1
+            for L in ('hh','hl','lh','ll','l','h','z','j','t','L'):
+                if fmt.startswith(L, j):
+                    j += len(L)
+                    break
+            if j >= len(fmt) or fmt[j] not in CONV:
+                line = text[:m.start()].count('\n') + 1
+                got = fmt[j] if j < len(fmt) else '<串尾>'
+                print(f"      {p.name}:{line} 格式串 `%{fmt[i+1:j]}{got}` 的转换符不是 C 的合法档（应为 {''.join(sorted(CONV - {'%'}))} 之一）")
+                bad += 1
+            i = j + 1
+sys.exit(1 if bad else 0)
+PY
+then ok "壳里每条 c\"...\" 的 % 序列都能被 printf 语法吃掉（无漏写转换符）"
+else red "上面列出的格式串会被 printf 误读——那行日志等于没量（本帧就是这么坏的）"
 fi
 
 say "== 结论 =="

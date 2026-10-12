@@ -33,6 +33,9 @@ SDK="${ANDROID_HOME:-/opt/android-sdk}"
 BUILD_TOOLS="$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)"
 PLATFORM="$SDK/platforms/android-34/android.jar"
 OUT="$ROOT/dist"
+# 字体子集的落点（与 scripts/android-font.sh 同一条约定）：**刻意不在 dist/ 里**——dist 有"必须是
+# 全新目录"那道闸，资产若预先躺在里面，每次组包都会先被自己那道闸毙掉。
+ASSETS="${MIDLINE_ASSETS:-$ROOT/build/assets}"
 ABI_DIR="arm64-v8a"
 RUST_TARGET="aarch64-linux-android"
 LIB_NAME="midline_shell_android"
@@ -55,6 +58,11 @@ die() { echo "$*" >&2; exit 1; }
 [ -x "$BUILD_TOOLS/aapt2" ] || die "找不到 aapt2（ANDROID_HOME=$SDK）"
 [ -f "$PLATFORM" ] || die "找不到 $PLATFORM"
 [ -d "$SHELL_DIR" ] || die "找不到壳目录 $SHELL_DIR"
+# 字体是**必需的**，不是可选装饰：没有 ui.otf 的包能签能装，但屏上永远不会有字（壳的 text 面
+# 全靠资产通道里那 310 KB）。缺它就停，而不是"先出一个没字的包"——后者在真机上看着像画坏了，
+# 会把人引向错误的那格（上一帧 fmt=4 写花缓冲就是这种"能跑但错"的代价）。
+[ -f "$ASSETS/fonts/ui.otf" ] || die "找不到字体子集 $ASSETS/fonts/ui.otf ⇒ 先跑 bash scripts/android-font.sh
+（它现抽码点、出三档字节数，并把选中的一档放到这里）。换目录用 MIDLINE_ASSETS。"
 
 # ① 全新目录闸（闸的是**实际要写的那个目录**，所以先解析 MIDLINE_DIST 再判空）
 DIST="${MIDLINE_DIST:-$OUT}"
@@ -89,6 +97,7 @@ cat > "$STAGE/AndroidManifest.xml" <<EOF
                   android:label="${LABEL}"
                   android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
                   android:exported="true"
+                  android:screenOrientation="sensorLandscape"
                   android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|uiMode|density|navigation">
             <meta-data android:name="android.app.lib_name" android:value="${LIB_NAME}"/>
             <intent-filter>
@@ -100,7 +109,7 @@ cat > "$STAGE/AndroidManifest.xml" <<EOF
 </manifest>
 EOF
 
-echo "== cargo build --release --target $RUST_TARGET（壳 crate，零第三方依赖）"
+echo "== cargo build --release --target $RUST_TARGET（壳 crate；自本帧起带**一件**第三方：ab_glyph 字体链）"
 ( cd "$SHELL_DIR" && cargo build --release --target "$RUST_TARGET" )
 SO="$SHELL_DIR/target/$RUST_TARGET/release/lib${LIB_NAME}.so"
 [ -f "$SO" ] || die "缺产物 $SO"
@@ -108,9 +117,9 @@ SO="$SHELL_DIR/target/$RUST_TARGET/release/lib${LIB_NAME}.so"
 mkdir -p "$STAGE/lib/$ABI_DIR"
 cp "$SO" "$STAGE/lib/$ABI_DIR/lib${LIB_NAME}.so"
 
-echo "== aapt2 link"
+echo "== aapt2 link（含 -A 资产目录：字体走 assets/ 通道，不走 include_bytes!）"
 "$BUILD_TOOLS/aapt2" link -o "$STAGE/unaligned.apk" -I "$PLATFORM" \
-  --manifest "$STAGE/AndroidManifest.xml"
+  --manifest "$STAGE/AndroidManifest.xml" -A "$ASSETS"
 
 # 只装 lib/，不装 classes.dex（hasCode=false）
 ( cd "$STAGE" && zip -q -r unaligned.apk "lib" )
@@ -131,6 +140,20 @@ got="$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
       | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr 'A-Z' 'a-z')"
 [ "$got" = "$KS_CERT_SHA256" ] || die "签名指纹与钉住的发布键不符：产物 $got ≠ 预期 $KS_CERT_SHA256"
 echo "签名指纹核对通过 $got"
+
+echo "== zip 条目实价（§3.8.5 那笔按 41.35% 代理比的推算，就地换成产物上的现量）"
+command -v unzip >/dev/null || die "找不到 unzip：这一格只量**已签名的产物**，没它就只能继续推算。"
+# 数据行 8 列：1 Length／2 Method／3 Size／4 压缩比／5 Date／6 Time／7 CRC-32／8 Name。
+# 只收 Method 是 Defl／Stored 的行——表头与分隔线**同样**是 8 列，第一版把这两行也当条目打了出来，
+# 而 ratio 那格我误取了 $6（Time），读出来满屏 "00:00"。
+unzip -v "$APK" | awk '$2 ~ /^(Defl:N|Stored)$/ {printf "   %-38s %9d B → %9d B  %4s\n", $8, $1, $3, $4}'
+set -- $(unzip -v "$APK" | awk '$NF=="assets/fonts/ui.otf" {print $1, $3}')
+raw="${1:-}"; comp="${2:-}"
+[ -n "$raw" ] || die "产物里没有 assets/fonts/ui.otf ⇒ -A 那格没生效，字体没进包（装了也是没字的一只）。"
+awk -v r="$raw" -v c="$comp" -v a="$(stat -c%s "$APK")" \
+  'BEGIN{printf "   字体条目现量：%d B 未压 → %d B 实存（%.1f%% 的原价）／整只 APK %d B\n", r, c, c*100/r, a}'
+# 反向一格：本壳 manifest 写 hasCode="false"，dex 出现就说明有人偷偷加了 Java 面。
+unzip -l "$APK" | grep -q 'classes\.dex' && die "产物里出现 classes.dex（本壳不该有 Java）" || true
 
 abis="$("$BUILD_TOOLS/aapt2" dump badging "$APK" 2>/dev/null | sed -n "s/^native-code: //p" | tr -d "'")"
 echo "OK: $APK  [${abis:-无 native-code 声明}]  $(stat -c %s "$APK") 字节"

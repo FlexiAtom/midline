@@ -22,8 +22,9 @@
 //! - `shell-android/layout_check.c`：拿 NDK clang 对**真头**做 `_Static_assert`，用同一张数字表。
 //! 两道尺共用一张表，所以"我以为的布局"与"平台实际的布局"一旦分叉必有一边红。
 //!
-//! 本帧**不画任何东西、不读任何输入**。它只证明三件事：融合 crate 能编、入口符号在导出表里、
-//! 生命周期回调被平台找到并回来过。呈现面要等人给 2D 设计，落盘时序还挂在 P8/P9 未测。
+//! 本帧起它多一件事：**把一帧真的画到屏上**。呈现走的是自写 `ANativeWindow_Buffer` 那条
+//! （价目表 ① 路，本档 §3.8.1 已证五区纯色逐字节到屏），字形由 `text.rs` 栅格，字体字节
+//! 从 APK 资产通道读入（`AAssetManager`），所以壳仍然零 dex、零 Java、零第三方平台绑定。
 
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -71,23 +72,69 @@ pub struct ANativeActivity {
     pub obbPath: *const c_char,
 }
 
-/// 平台侧的 `ANativeWindow`/`AInputQueue` 在本壳里始终是裸指针：只转交、不解引用（除下面
-/// 取宽高那一处，而那两法也在同一个 extern 块里，边界不散）。
+/// 平台侧的 `AInputQueue` 在本壳里始终是裸指针：只转交、不解引用。`ANativeWindow` 从本帧起
+/// 会被解引用（`ANativeWindow_lock` 写它给的缓冲），但**结构体本身仍是平台所有的**——我们只
+/// 按它给的 `bits/stride/format` 往那块内存里写字节，不 own、不 free。
 static WINDOW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static INPUT_QUEUE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
+/// NDK `ANativeWindow_Buffer`（`android/native_window.h`）：**字段序是 width, height, stride,
+/// format, bits, reserved[6]**，整数在前、指针在后。抄写风险全在这条顺序上——把 `bits` 提前一位
+/// 就变成 bits@8，行步长与格式各挪 8 字节，读到的 stride 其实是 reserved 的第一格。
+#[repr(C)]
+struct WindowBuffer {
+    width: c_int,
+    height: c_int,
+    stride: c_int,
+    format: c_int,
+    bits: *mut c_void,
+    reserved: [u32; 6],
+}
+
+/// NDK 的像素格式真值在 `hardware_buffer.h`，**与 legacy HAL 的旧编号不一致**（旧表里 3=565，
+/// 这里 3 是 RGB_888、4 才是 RGB_565）。上一帧按旧表把真机报的 `fmt=4` 当 4 字节写，
+/// 每个"行"跨了两条真实行，缓冲整个写花（本档 §3.8.1 的失手记录）。
+#[cfg(target_os = "android")]
+const RGBA_8888: c_int = 1;
+#[cfg(target_os = "android")]
+const RGBX_8888: c_int = 2;
+
+/// 一帧的字节宽：只认 4 字节/像素的两档。565 与 RGB_888 不在这一格——本壳用
+/// `ANativeWindow_setBuffersGeometry` 买 RGBA_8888 且实测 `rc=0`（§3.8.1），买不到就如实
+/// 报告"没画"，而不是拿另一套字节宽度去猜。
+#[cfg(target_os = "android")]
+const fn is_rgba32(format: c_int) -> bool {
+    matches!(format, RGBA_8888 | RGBX_8888)
+}
+
 #[cfg(target_os = "android")]
 mod ndk {
-    use std::os::raw::{c_char, c_int, c_void};
+    use super::WindowBuffer;
+    use std::os::raw::{c_char, c_int, c_long, c_void};
 
-    #[allow(dead_code, reason = "声明按 NDK 头成组写，本帧只用到其中三条")]
+    #[allow(dead_code, reason = "声明按 NDK 头成组写，未用到的那几条是下一帧的接口面")]
     unsafe extern "C" {
         pub fn __android_log_print(prio: c_int, tag: *const c_char, fmt: *const c_char, ...) -> c_int;
         /// 这两个调用同时也是 `-landroid` 的真凭据：不引用它，链接器会把 libandroid 按
         /// `--as-needed` 丢掉，NEEDED 面就量不出壳真的挂上了平台库。
         pub fn ANativeWindow_getWidth(window: *mut c_void) -> c_int;
         pub fn ANativeWindow_getHeight(window: *mut c_void) -> c_int;
+        pub fn ANativeWindow_lock(window: *mut c_void, out_buffer: *mut WindowBuffer, in_out_dirty: *const c_void) -> c_int;
+        pub fn ANativeWindow_unlockAndPost(window: *mut c_void) -> c_int;
+        /// `width/height` 传 0 ＝ "沿用窗口自己的尺寸，只换格式"。
+        pub fn ANativeWindow_setBuffersGeometry(window: *mut c_void, width: c_int, height: c_int, format: c_int) -> c_int;
+        /// 字体字节的来路：APK 里的 `assets/`。**AAsset 是不透明句柄**，所以这一组没有布局可抄，
+        /// 只有两个数字要尺——`AASSET_MODE_BUFFER` 的枚举值与 `AAsset_getLength` 的**返回宽度**
+        /// （见 layout_check.c：头里写的是 `off_t`，本机 NDK 现量 8 字节，所以这边必须是 `c_long`。
+        /// 第一版抄成 `c_int`，那是"两侧各自自洽、一起错"的另一格——外部证人开口才拦住的）。
+        pub fn AAssetManager_open(mgr: *mut c_void, filename: *const c_char, mode: c_int) -> *mut c_void;
+        pub fn AAsset_read(asset: *mut c_void, buf: *mut c_void, count: usize) -> c_int;
+        pub fn AAsset_getLength(asset: *mut c_void) -> c_long;
+        pub fn AAsset_close(asset: *mut c_void) -> c_int;
     }
+
+    /// `AAssetManager_open` 的第三种读法：整份进内存。字体就一次读，SEQUENTIAL/RANDOM 都用不上。
+    pub const ASSET_MODE_BUFFER: c_int = 3;
 }
 
 #[cfg(target_os = "android")]
@@ -167,7 +214,7 @@ unsafe extern "C" fn on_save_instance_state(
 }
 
 unsafe extern "C" fn on_native_window_created(
-    _activity: *mut ANativeActivity,
+    activity: *mut ANativeActivity,
     window: *mut c_void,
 ) {
     WINDOW.store(window, Ordering::Release);
@@ -176,7 +223,19 @@ unsafe extern "C" fn on_native_window_created(
         let (w, h) =
             unsafe { (ndk::ANativeWindow_getWidth(window), ndk::ANativeWindow_getHeight(window)) };
         note_size(c"onNativeWindowCreated %dx%d", w, h);
+        // 格式先买再画：真机默认给的是 16 位档（§3.8.1 现读 `fmt=4 stride=736`），而 text 面
+        // 只写 4 字节/像素。买不到就如实说没画，不拿另一套字节宽度去猜。
+        let gr = unsafe { ndk::ANativeWindow_setBuffersGeometry(window, 0, 0, RGBA_8888) };
+        unsafe {
+            ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"setBuffersGeometry(RGBA8888) rc=%d".as_ptr(), gr)
+        };
+        unsafe {
+            ensure_scene(activity);
+            paint(window, c"frame1");
+        }
     }
+    #[cfg(not(target_os = "android"))]
+    let _ = activity;
     #[cfg(not(target_os = "android"))]
     note(c"onNativeWindowCreated");
 }
@@ -187,13 +246,19 @@ unsafe extern "C" fn on_native_window_resized(
 ) {
     WINDOW.store(window, Ordering::Release);
     note(c"onNativeWindowResized");
+    #[cfg(target_os = "android")]
+    unsafe { paint(window, c"frame-resized") };
 }
 
 unsafe extern "C" fn on_native_window_redraw_needed(
     _activity: *mut ANativeActivity,
-    _window: *mut c_void,
+    window: *mut c_void,
 ) {
     note(c"onNativeWindowRedrawNeeded");
+    #[cfg(not(target_os = "android"))]
+    let _ = window;
+    #[cfg(target_os = "android")]
+    unsafe { paint(window, c"frame-redraw") };
 }
 
 /// 头里的硬约束：「You MUST ensure that you do not touch the window object after returning」——
@@ -236,6 +301,244 @@ unsafe extern "C" fn on_configuration_changed(_activity: *mut ANativeActivity) {
 unsafe extern "C" fn on_low_memory(_activity: *mut ANativeActivity) {
     note(c"onLowMemory");
 }
+
+// ── 呈现面（本帧第一件）─────────────────────────────────────────────────────
+//
+// 资产里那份 UI 子集的路径名与 `scripts/android-font.sh` 的输出名一对一；改名要两边一起改，
+// 读不到时这里会打日志，不会静默变成"白屏"。
+#[cfg(target_os = "android")]
+const FONT_ASSET: &std::ffi::CStr = c"fonts/ui.otf";
+
+// 两行字、字号、版面三数与定位点边长都**不在这里**——它们在 `text.rs`，与 host 侧对撞工具共享
+// 同一份源码（复制一份数字的对撞不算对撞）。这里只留平台侧的那一条路径名。
+#[cfg(target_os = "android")]
+struct Scene {
+    face: crate::text::Face,
+    atlas: crate::text::Atlas,
+}
+
+/// 单线程的呈现面也要 `Sync`，因为回调表是框架给的、静态比栈寿命长。锁不竞争，只为类型成立。
+#[cfg(target_os = "android")]
+static SCENE: std::sync::Mutex<Option<Scene>> = std::sync::Mutex::new(None);
+
+/// 读一次资产。`AAsset_read` 返回负数是读失败——这是系统边界（APK 里可能真没这个文件），
+/// 所以它必须被区分出来，而不是当成 0 字节继续走。
+#[cfg(target_os = "android")]
+unsafe fn read_asset(mgr: *mut c_void) -> Option<Vec<u8>> {
+    if mgr.is_null() {
+        warn(c"assetManager is NULL — cannot load font");
+        return None;
+    }
+    let asset = unsafe { ndk::AAssetManager_open(mgr, FONT_ASSET.as_ptr(), ndk::ASSET_MODE_BUFFER) };
+    if asset.is_null() {
+        unsafe {
+            ndk::__android_log_print(
+                LOG_ERROR, TAG.as_ptr(), c"asset %s missing".as_ptr(), FONT_ASSET.as_ptr(),
+            )
+        };
+        return None;
+    }
+    let len = unsafe { ndk::AAsset_getLength(asset) };
+    if len <= 0 {
+        unsafe { ndk::AAsset_close(asset) };
+        unsafe { ndk::__android_log_print(LOG_ERROR, TAG.as_ptr(), c"asset length=%ld".as_ptr(), len) };
+        return None;
+    }
+    let n = len as usize;
+    let mut buf = vec![0u8; n];
+    let got = unsafe { ndk::AAsset_read(asset, buf.as_mut_ptr() as *mut c_void, n) };
+    unsafe { ndk::AAsset_close(asset) };
+    // 两边宽度不同（`getLength` 是 `off_t`，`read` 是 `int`），所以比的是**换算到 i64 之后**的值。
+    if (got as i64) != (len as i64) {
+        unsafe {
+            ndk::__android_log_print(
+                LOG_ERROR, TAG.as_ptr(), c"asset read %lld of %lld".as_ptr(),
+                got as i64, len as i64,
+            )
+        };
+        return None;
+    }
+    Some(buf)
+}
+
+/// 两行字的三档耗时：先**懒**栅格（只栅这次画得到的字），再**全**栅格（把子集里所有字形灌进
+/// 图集），然后把同一行再画一次（这次图集全热）。三格打在同一行日志里，就是 §5 L7 尾巴上
+/// "图集与缓存"那件工程件的读数——host 与真机跑的是同一份 `text.rs`，差的就是机器。
+#[cfg(target_os = "android")]
+fn paint_text(
+    dst: &mut [u8],
+    w: usize,
+    h: usize,
+    stride: usize,
+    why: &std::ffi::CStr,
+    bg_ms: f64,
+) -> bool {
+    let mut guard = SCENE.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(scene) = guard.as_mut() else { return false };
+    let Scene { face, atlas } = scene;
+    use crate::text::{EM_BODY, EM_HEAD, LINE_BODY, LINE_HEAD};
+    let ink = crate::md3::color::rgb(crate::md3::color::ON_SURFACE);
+    // 版面三个数由 `text::layout()` 给——host 侧对撞工具调的是同一个函数，两侧不许各算各的。
+    let (x, b1, b2) = crate::text::layout();
+
+    let t = std::time::Instant::now();
+    let r1 = atlas.blit(face, dst, w, stride, h, LINE_HEAD, x, b1, EM_HEAD, ink);
+    let r2 = atlas.blit(face, dst, w, stride, h, LINE_BODY, x, b2, EM_BODY, ink);
+    let cold_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let cold_rasters = atlas.rasters();
+
+    let t = std::time::Instant::now();
+    let added = atlas.fill_eager(face, EM_HEAD);
+    let eager_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let atlas_bytes = atlas.bytes();
+
+    let t = std::time::Instant::now();
+    let _ = atlas.blit(face, dst, w, stride, h, LINE_HEAD, x, b1, EM_HEAD, ink);
+    let _ = atlas.blit(face, dst, w, stride, h, LINE_BODY, x, b2, EM_BODY, ink);
+    let warm_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let Some(a) = r1 else {
+        warn(c"blit drew nothing — subset lacks the line");
+        return false;
+    };
+    let b = r2.unwrap_or_default();
+    // 推进宽度这一格是给 #133 的：引擎那张表写的是 CJK=1.0／ASCII=0.55（`typo::ADVANCE_*`），
+    // 真字体里"advance ÷ em"到底是多少，只有引了这条链才量得出来。
+    let adv_cjk = (face.advance(face.glyph_of('中').unwrap_or_default(), EM_HEAD) / EM_HEAD) as f64;
+    let adv_latin = (face.advance(face.glyph_of('D').unwrap_or_default(), EM_BODY) / EM_BODY) as f64;
+    unsafe {
+        ndk::__android_log_print(
+            LOG_INFO, TAG.as_ptr(),
+            c"%s bg=%.2f cold=%.2f(+%u) eager=%.2f(+%u) atlas=%dB warm=%.2f adv=%.4f/%.4f ink=%dx%d %dx%d".as_ptr(),
+            why.as_ptr(),
+            bg_ms,
+            cold_ms,
+            cold_rasters,
+            eager_ms,
+            added,
+            atlas_bytes as u32,
+            warm_ms,
+            adv_cjk,
+            adv_latin,
+            a.width() as u32,
+            a.height() as u32,
+            b.width() as u32,
+            b.height() as u32,
+        )
+    };
+    true
+}
+/// 一次装好一份 scene（资产字节 → `Face`）。失败就是**没字**，不是"字很小"——所以每一格失败
+/// 都单独留一行日志：真机看见空白屏时，要能当场分清是资产没进包、字节读歪，还是画了但没到屏。
+#[cfg(target_os = "android")]
+unsafe fn ensure_scene(activity: *mut ANativeActivity) {
+    if SCENE.lock().map(|g| g.is_some()).unwrap_or(true) {
+        return;
+    }
+    let mgr = if activity.is_null() { std::ptr::null_mut() } else { unsafe { (*activity).assetManager } };
+    let t0 = std::time::Instant::now();
+    let Some(bytes) = (unsafe { read_asset(mgr) }) else { return };
+    let n = bytes.len();
+    let read_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let t1 = std::time::Instant::now();
+    let face = match crate::text::Face::try_from_vec(bytes) {
+        Ok(f) => f,
+        Err(crate::text::FaceError::BadBytes(_)) => {
+            warn(c"font bytes unreadable (BadBytes)");
+            return;
+        }
+        Err(crate::text::FaceError::NoUpem) => {
+            warn(c"font has no unitsPerEm");
+            return;
+        }
+    };
+    let parse_ms = t1.elapsed().as_secs_f64() * 1000.0;
+    unsafe {
+        ndk::__android_log_print(
+            LOG_INFO, TAG.as_ptr(),
+            c"font %dB read=%.2f parse=%.2f ms glyphs=%u upem=%.0f asc=%.0f desc=%.0f ratio=%.4f".as_ptr(),
+            n as c_int,
+            read_ms,
+            parse_ms,
+            face.glyph_count() as u32,
+            face.upem() as f64,
+            face.ascent_unscaled() as f64,
+            face.descent_unscaled() as f64,
+            face.ratio() as f64,
+        )
+    };
+    let mut guard = SCENE.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = Some(Scene { face, atlas: crate::text::Atlas::new() });
+}
+
+/// 锁→画→放。**这一格第一次把 Rust 算出来的字形铺进 `ANativeWindow_Buffer`**，所以每一步的
+/// 现读尺寸都进日志：真机给的是 `stride > width`（§3.8.1 现读 736 对 720）还是别的，当场可见。
+#[cfg(target_os = "android")]
+unsafe fn paint(window: *mut c_void, why: &'static std::ffi::CStr) {
+    if window.is_null() {
+        return;
+    }
+    let mut buf = WindowBuffer {
+        width: 0,
+        height: 0,
+        stride: 0,
+        format: 0,
+        bits: std::ptr::null_mut(),
+        reserved: [0; 6],
+    };
+    let rc = unsafe { ndk::ANativeWindow_lock(window, &mut buf, std::ptr::null()) };
+    if rc != 0 || buf.bits.is_null() {
+        unsafe { ndk::__android_log_print(LOG_ERROR, TAG.as_ptr(), c"lock failed rc=%d".as_ptr(), rc) };
+        return;
+    }
+    let (w, h) = (buf.width.max(0) as usize, buf.height.max(0) as usize);
+    let stride = buf.stride.max(0) as usize;
+    let format = buf.format;
+    let base = buf.bits as *mut u8;
+    unsafe {
+        ndk::__android_log_print(
+            LOG_INFO, TAG.as_ptr(),
+            c"%s buffer %dx%d stride=%d fmt=%d".as_ptr(),
+            why.as_ptr(),
+            buf.width,
+            buf.height,
+            buf.stride,
+            format,
+        )
+    };
+    // 只认 4 字节/像素的两档，且行步长得容得下宽度。不合规就报告"没画"然后放行缓冲——
+    // 留着一块写歪的内存上屏，比白屏更难查。
+    if !is_rgba32(format) || stride < w {
+        unsafe {
+            ndk::__android_log_print(
+                LOG_ERROR, TAG.as_ptr(),
+                c"unsupported fmt=%d stride=%d width=%d — painted nothing".as_ptr(),
+                format,
+                buf.stride,
+                buf.width,
+            )
+        };
+        unsafe { ndk::ANativeWindow_unlockAndPost(window) };
+        return;
+    }
+    let dst = unsafe { std::slice::from_raw_parts_mut(base, stride * h * 4) };
+    let painted = if SCENE.lock().map(|g| g.is_some()).unwrap_or(false) {
+        let t = std::time::Instant::now();
+        crate::text::fill_bg(dst, w, h, stride);
+        let bg_ms = t.elapsed().as_secs_f64() * 1000.0;
+        paint_text(dst, w, h, stride, why, bg_ms)
+    } else {
+        note(c"no scene: bg only");
+        crate::text::fill_bg(dst, w, h, stride);
+        false
+    };
+    let pr = unsafe { ndk::ANativeWindow_unlockAndPost(window) };
+    unsafe {
+        ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"unlockAndPost rc=%d painted=%d".as_ptr(), pr, painted as c_int)
+    };
+}
+
+
 
 /// 平台加载器 `dlsym` 找的就是这个名字，所以它是本 crate **唯一**该出现在导出表里的符号。
 /// 由 `scripts/shell-export-surface.sh` 按符号表量，不靠这里的自述。
@@ -298,3 +601,11 @@ const _: () = assert!(std::mem::offset_of!(ANativeActivityCallbacks, onStart) ==
 const _: () = assert!(std::mem::offset_of!(ANativeActivityCallbacks, onSaveInstanceState) == 16);
 const _: () = assert!(std::mem::offset_of!(ANativeActivityCallbacks, onNativeWindowCreated) == 56);
 const _: () = assert!(std::mem::offset_of!(ANativeActivityCallbacks, onLowMemory) == 120);
+// `ANativeWindow_Buffer` 在 64 位上的现量：四个整数先排满 16 字节，`bits` 正好落在 16 不用填隙，
+// `reserved[6]` 从 24 排到 48。**字段序**由 layout_check.c 拿 NDK 真头对质；这几行只保证我自己的
+// 声明自洽——上一帧把 `bits` 误抄在 stride 前面（⇒ bits@8），两侧都能编译，读到的 stride 却是
+// reserved[0]，颜色整片写歪（§3.8.1 的失手记录）。
+const _: () = assert!(std::mem::size_of::<WindowBuffer>() == 48);
+const _: () = assert!(std::mem::offset_of!(WindowBuffer, stride) == 8);
+const _: () = assert!(std::mem::offset_of!(WindowBuffer, format) == 12);
+const _: () = assert!(std::mem::offset_of!(WindowBuffer, bits) == 16);

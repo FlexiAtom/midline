@@ -30,6 +30,10 @@ publish = false
 # 这里连"构建目录里多一个可复用产物"都不留（原理见 android-rust-shell-fused-source §2 P2）。
 crate-type = ["cdylib"]
 
-# 引擎零第三方依赖这条约定的原文是「壳可以带，引擎不行」。本帧壳也不带：
-# 入口胶水直接对 NDK 的 libandroid/liblog 下 FFI 声明，布局由 layout_check.c 对着真头校。
+# 引擎零第三方依赖这条约定的原文是「壳可以带，引擎不行」。本帧壳开始带**第一件**：
+# `ab_glyph` → `owned_ttf_parser` → `ttf-parser`(+`ab_glyph_rasterizer`)，共 26,059 行第三方码面
+# （面积与价目见本档 §3.7）。带它的理由不是"省事"，是那一格实测过之后的结论：
+# CFF Type 2 那台栈机 ttf-parser 已经写完（3,798 行），自研的面积就是这 26,059 行。
+# 引擎侧（主仓 `src/*.rs`）仍然一字不带——依赖只进这一张表，`text.rs` 是它的唯一读者。
 [dependencies]
+ab_glyph = "0.2.32"

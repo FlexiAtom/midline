@@ -62,3 +62,4 @@ mod tui;
 mod view;
 
 mod entry;
+mod text;
