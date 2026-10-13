@@ -52,14 +52,15 @@ run() { local o r; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）
 #    于是这类静默 no-op 与 ① 一样在预检里当场喊，不必等整族、也不必靠人读日志。
 py() { local e rc before after; before="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ -n "$before" ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何字节"; return 0; }
 
-# ===== 壳侧五条 lane（M167–M172）=====
-# 上面 167 条量的是**引擎语义**；这几条量的是 第十八步·其一／其四 收尾时那几则只能手工跑的负样本——
+# ===== 壳侧六条 lane（M167–M174）=====
+# 上面 167 条量的是**引擎语义**；这几条量的是 第十八步·其一／其四／其五 收尾时那几则只能手工跑的负样本——
 # 像素走步（text.rs 的 stride）、色值检本身有没有牙（守门检 §8）、指令摘要吃不吃位置（frame_digest）、
-# 命中换算用不用绘制侧那把尺（input:: 的 to_dev 与 feed）、布局尺自己撞不撞得动 NDK 真头（layout_check.c）。
+# 命中换算用不用绘制侧那把尺（input:: 的 to_dev 与 feed）、布局尺自己撞不撞得动 NDK 真头（layout_check.c）、
+# 多实例下那条活队列的**记账**归谁（entry:: 那三条回调，M173–M174 各钉一把真机量到的刀）。
 # 它们的检面不在主仓 src/ 里，所以 D 那份副本必须**保形**：`#[path]` 按「声明所在文件的目录」解析
 # （engine-mods.rs 里那句 ../../src/），探针再从 probes/host-frame 往上引壳——少拷一层就是一片红，
 # 而那红与变异无关，是口径坏了。所以凡壳侧拷不全、或字体不在（它由 scripts/android-font.sh 产、
-# 落在被 .gitignore 挡住的 /build 下），SHELL_FAIL 就非空，三条 lane 一律喊「没有落点」，
+# 落在被 .gitignore 挡住的 /build 下），SHELL_FAIL 就非空，每条壳侧 lane 一律喊「没有落点」，
 # **绝不读成「没红」**——那是本文件开头第三种静默失效的同族。
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SHELL_FAIL=""
@@ -98,6 +99,11 @@ frun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test 
 # 它必须与 frun 分开：整族在 $D 里跑会连那 41 条 `#[path]` 引擎测一起红（CARGO_MANIFEST_DIR 变了），
 # 那个数与变异无关，是口径坏了——照 frun 那条注释同一个理由，只是过滤词不同。
 irun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q input:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
+# 壳侧归属 lane（M173–M174）：过滤词换成 entry::（现量 9 条，全是 其五 那三格次序＋属主两格）。
+# 这一格与 irun 同一口径、同一份副本，只是那条 lane 量的是命中与答复，这一条量的是**记账**：
+# entry.rs 里那三条回调在 host 侧也编（`mod entry;` 无 cfg），谓词只比指针不解引用，所以
+# 喂假指针就能把"销毁先来／创建先来／账上没有"三种次序各测一遍——真机那一格因此不再是唯一证人。
+erun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q entry:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
 # 布局尺 lane（M172）：拿 NDK 真头**只编不链不跑**那一步，与守门检 §6 同一支 clang、同一份 .c。
 # 路径是第二处副本（scripts/shell-export-surface.sh:29–31 是第一处），这条不并进那个脚本因为那八节
 # 每节都要重建整壳（约十秒×2 侧），而这里只需要一次 -c。两处漂移的后果不同：这里漂了是
@@ -108,9 +114,9 @@ SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 grun() { shout || return 0; if [ ! -x "$CLANG" ]; then printf '!! 找不到 NDK clang：%s ⇒ 这条没有落点，别当"没红"读\n' "$CLANG"; return 0; fi; local o rc; o="$("$CLANG" --sysroot="$SYSROOT" -c -o "$D/layout-check.o" "$D/shell-android/layout_check.c" 2>&1)"; rc=$?; [ -n "$o" ] && printf '%s\n' "$o" | sed "s#$D#<D>#g" | tail -6; printf 'rc=%s\n' "$rc"; }
 
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
-# 壳侧五条 lane 的零位（M167–M172 的对照）：探针 rc=0、色值检 rc=0、frame:: 与 input:: 全绿、布局尺编得过。
-# 这几格里任何一格自己就红，说明副本没保形或字体不在——那 M167–M172 的读数全是假的，先修口径。
-echo "### M0b 壳侧对照（不打补丁：探针 rc=0／色值检 rc=0／frame:: 与 input:: 全绿／布局尺编得过）"; restore_shell; srun; crun; frun; irun; grun
+# 壳侧六条 lane 的零位（M167–M174 的对照）：探针 rc=0、色值检 rc=0、frame:: 与 input:: 与 entry:: 全绿、布局尺编得过。
+# 这几格里任何一格自己就红，说明副本没保形或字体不在——那 M167–M174 的读数全是假的，先修口径。
+echo "### M0b 壳侧对照（不打补丁：探针 rc=0／色值检 rc=0／frame:: 与 input:: 与 entry:: 全绿／布局尺编得过）"; restore_shell; srun; crun; frun; irun; erun; grun
 echo "### M1 抹掉 md:452 的两处行尾锚点 ⇒ 应红在 §十二 推导器（漏登记）"
 restore; py "
 import re,glob
@@ -1480,3 +1486,28 @@ a='_Static_assert(AINPUT_EVENT_TYPE_MOTION == 2, '
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'_Static_assert(AINPUT_EVENT_TYPE_MOTION == 1, '))"
 grun
+
+echo "### M173 把队列的摘除退回无条件清空整集、还报 Removed(0)——那正是 2026-10-13 那次真机之前的一版（position 找那一格整段换成 iter_mut 清空，返回值写死 0，回调里其余一字不动）⇒ 实测壳测 entry:: 九条里红六条（3 passed; 6 failed），红的是 destroying_the_old_queue_does_not_unaccount_the_new_one、removal_clears_exactly_the_slot_that_matches、the_same_queue_is_never_counted_twice、a_queue_we_never_recorded_is_reported_not_silently_dropped、replacement_and_empty_are_two_different_words、destroy_after_the_queue_already_left_releases_nothing；先炸那两条的读数是 left Removed(0) 对 right Removed(1)（该报被摘的是第 1 格，报出来 0）与 left Removed(0) 对 right NotHeld（账上根本没有这条队列，却报摘掉了一格）。剩下三条绿是诚实的：它们量的是插入与属主那两面，这一刀没碰。这条牙钉的是**第一把**被真机量出来的刀——同进程第二条 Activity 建了新队列，而一条无关的销毁把整集抹了，于是那条还活着的队列既不排空也没人 detach，平台自己给它判了刑（真机 logcat 现读 WindowManager 那句 ANR in Window 加 Waited 10000ms for MotionEvent(action=DOWN)）。症状永远不是崩溃也不是画错，而是屏上照常、只有手指不管用；而这一格从前只有真机一个证人，现在那九条在 host 侧也跑——三条回调只比指针、不解引用，喂假指针就能把销毁先来／创建先来／账上没有三种次序各测一遍"
+restore_shell; pys "
+p='$D/shell-android/src/entry.rs'; s=open(p,encoding='utf8').read()
+a='''    match set.iter().position(|q| !q.is_null() && *q == gone) {
+        Some(i) => {
+            set[i] = std::ptr::null_mut();
+            Remove::Removed(i)
+        }
+        None => Remove::NotHeld,
+    }
+'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'''    for s in set.iter_mut() { *s = std::ptr::null_mut(); }
+    Remove::Removed(0)
+'''))"
+erun
+
+echo "### M174 把**属主**那一维对质摘掉（release_owner 里 owners[i] 等于 owner 那半个条件删了，剩下非空即清；空值守卫、清 owners 那一格、返回条数全一字不动）⇒ 实测壳测 entry:: 九条里红一条，红在 another_instances_destroy_leaves_my_queue_accounted，报的是那句「Y 名下就一条」的 assert，left 2 对 right 1——B 那次销毁把 A 名下那条也抹了。八条照绿，包括 a_null_owner_releases_nothing_at_all 与 destroy_after_the_queue_already_left_releases_nothing：前者量的是空值守卫那一面（这一刀留着它），后者是账上本来就没队列、清与不清同数，别把这条读成两处同抓。这一条才是 2026-10-14 05:14 那次真机量到的那把刀：#153 的第一版只修了 onInputQueueDestroyed（M173 正是它的牙），紧接着 onDestroy 那次整集清空又把 A 的账抹了——真机那轮 logcat 现读 1 ms 之内 input queue removed slot=1 held=1 → onDestroy → 两条 input queue emptied mid-drain，同一次装机合计 8 行 ANR in、9 行 Waited 10000ms，而修好那一轮两个数都是 0。修法是给每条活队列配一个属主槽（LIVE_OWNERS 与 LIVE_QUEUES 同格对齐，只有主线程读写它，输入线程从不碰，所以不需要配对原子性），销毁按属主放账。这条的存在理由还有一格在头里：onInputQueueDestroyed 那句 You should no longer try to reference this object upon returning 约束的是**那条队列**，而 onDestroy 只有 See Java documentation 一句——**两个回调之间没有任何顺序保证**，所以按属主放账是唯一天然站得住的写法，不靠次序、也不许从 onDestroy 重发 detach"
+restore_shell; pys "
+p='$D/shell-android/src/entry.rs'; s=open(p,encoding='utf8').read()
+a='            if !set[i].is_null() && owners[i] == owner {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if !set[i].is_null() {'))"
+erun

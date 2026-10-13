@@ -77,7 +77,38 @@ pub struct ANativeActivity {
 /// 会被解引用（`ANativeWindow_lock` 写它给的缓冲），但**结构体本身仍是平台所有的**——我们只
 /// 按它给的 `bits/stride/format` 往那块内存里写字节，不 own、不 free。
 static WINDOW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-static INPUT_QUEUE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// 活队列集。**从前这里是一格** `AtomicPtr`：create 直接 `store` 覆盖、destroy 无条件清空。
+/// 2026-10-13 那个假设被真机量掉了：`am start -n` 造出同进程第二个实例时 `created` 2 条、
+/// `input attach` 2 条、live 通道 2 条**并存**；BACK 收掉顶层之后下面那条还挂在派发器里没人排空，
+/// 系统自己给它判了刑——`Waited 10000ms for MotionEvent` ＋ `ANR in Window{f30f124 …}`。
+/// 一格装不下两条并存，这就是全部改动的理由（不是"多几条更气派"）。
+///
+/// 槽位开 4：观测到的上限是 2，留一倍余量。**塞不下不假装塞得下**——`Insert::Full` 那条日志
+/// 一响就是"又有一条队列没被记账"，正是 ANR 那一格的形状。
+/// 改写权只在主线程（create/destroy/on_destroy 三条回调都跑在那条线程上），输入线程只读；
+/// 这一条不是风格，是集内不丢更新的唯一前提。
+const LIVE_QUEUE_SLOTS: usize = 4;
+static LIVE_QUEUES: [AtomicPtr<c_void>; LIVE_QUEUE_SLOTS] = [
+    AtomicPtr::new(std::ptr::null_mut()),
+    AtomicPtr::new(std::ptr::null_mut()),
+    AtomicPtr::new(std::ptr::null_mut()),
+    AtomicPtr::new(std::ptr::null_mut()),
+];
+
+/// 每一条活队列的**属主**——那个 `ANativeActivity*`。它和 `LIVE_QUEUES` 同格对齐，是这条修正的
+/// 第二半，不是装饰：`onDestroy` 也是**按实例**来的回调，而 2026-10-14 05:14:14 那次真机量到
+/// "队列回调按格摘对了、紧接着 `onDestroy` 一次整集清空又把 A 抹了"（同毫秒两条回调，日志里
+/// `input queue removed slot=1 held=1` 之后立刻两句 `input queue emptied mid-drain`）。
+/// 头里对 `onDestroy` 只写了「See Java documentation for Activity.onDestroy()」，**没有**承诺
+/// "每条队列都会先走一次自己的 destroy 回调"——所以这里不能靠次序假设，只能靠属主。
+/// 这一排只有主线程读写（输入线程只读 `LIVE_QUEUES` 那一排），用原子只为让 `static` 合法。
+static LIVE_OWNERS: [AtomicPtr<c_void>; LIVE_QUEUE_SLOTS] = [
+    AtomicPtr::new(std::ptr::null_mut()),
+    AtomicPtr::new(std::ptr::null_mut()),
+    AtomicPtr::new(std::ptr::null_mut()),
+    AtomicPtr::new(std::ptr::null_mut()),
+];
 
 /// 呈现互斥。**两条线程不许同时 `lock`/`unlockAndPost` 同一块窗口**：各自锁一块缓冲再各自 post，
 /// 症状是"上一帧的尾巴出现在这一帧中间"，而那种画错一闪而过、截屏也抓不住。它顺带把
@@ -283,10 +314,36 @@ unsafe extern "C" fn on_stop(_activity: *mut ANativeActivity) {
     note(c"onStop");
 }
 
-unsafe extern "C" fn on_destroy(_activity: *mut ANativeActivity) {
+unsafe extern "C" fn on_destroy(activity: *mut ANativeActivity) {
     WINDOW.store(std::ptr::null_mut(), Ordering::Release);
-    INPUT_QUEUE.store(std::ptr::null_mut(), Ordering::Release);
+    // **只撤这个实例名下的那些格**，不许整集清空。头里对 `onDestroy` 只写了「See Java
+    // documentation for Activity.onDestroy()」，没承诺"每条队列都先走过自己的 destroy 回调"，
+    // 所以这里既不能假设队列还在、也不能假设它已经不在了——按属主摘是唯一站得住的动作。
+    // 2026-10-14 05:14:14 那次反证就是这一格：整集清空把邻居实例活着的队列一起抹了，
+    // 一毫秒后输入线程两句 `input queue emptied mid-drain`，再十秒系统报 `Waited 10000ms`。
+    // `detach` 更不在这里做：每一条队列都在自己的回调里 detach 过了（那条硬约束）。
+    let mut set = live_snapshot();
+    let mut owners = live_owners();
+    let released = queue_set_release_owner(&mut set, &mut owners, activity as *mut c_void);
+    unsafe {
+        publish_owners(&owners);
+        publish_set(&set);
+    }
     note(c"onDestroy");
+    #[cfg(target_os = "android")]
+    unsafe {
+        ndk::__android_log_print(
+            LOG_INFO,
+            TAG.as_ptr(),
+            c"onDestroy released=%d held=%d".as_ptr(),
+            released as c_int,
+            held_count(&set) as c_int,
+        )
+    };
+    #[cfg(not(target_os = "android"))]
+    let _ = released;
+    #[cfg(target_os = "android")]
+    unsafe { wake_input() };
 }
 
 unsafe extern "C" fn on_window_focus_changed(_activity: *mut ANativeActivity, has_focus: c_int) {
@@ -367,11 +424,56 @@ unsafe extern "C" fn on_native_window_destroyed(
 }
 
 unsafe extern "C" fn on_input_queue_created(
-    _activity: *mut ANativeActivity,
+    activity: *mut ANativeActivity,
     queue: *mut c_void,
 ) {
-    INPUT_QUEUE.store(queue, Ordering::Release);
-    note(c"onInputQueueCreated");
+    // 记账走纯谓词 `queue_set_insert`，**不再覆盖**：2026-10-13 那格 `store` 就是把旧那条抹掉，
+    // 于是旧那条既没人 detach 也没人排空——系统在 dual 会话里替我们判了（`ANR in Window{f30f124 …}`）。
+    if queue.is_null() {
+        // 空指针不入集：集里"空"与"槽位 0"是同一格编码，放一条 null 进去等于多一条假的活队列。
+        note(c"onInputQueueCreated queue=NULL — not recorded");
+    } else {
+        let mut set = live_snapshot();
+        match queue_set_insert(&mut set, queue) {
+            Insert::Added(slot) => {
+                // 属主与队列同格：`onDestroy` 按实例来，它只认这张表。槽位由谓词给，所以
+                // "记了队列没记属主"这一格不可能靠忘记写发生——两处写用的是同一个 `slot`。
+                LIVE_OWNERS[slot].store(activity as *mut c_void, Ordering::Release);
+                unsafe { publish_set(&set) };
+                note(c"onInputQueueCreated");
+                #[cfg(target_os = "android")]
+                unsafe {
+                    ndk::__android_log_print(
+                        LOG_INFO,
+                        TAG.as_ptr(),
+                        c"input queue added slot=%d held=%d queue=%p".as_ptr(),
+                        slot as c_int,
+                        held_count(&set) as c_int,
+                        queue,
+                    )
+                };
+            }
+            Insert::Already(slot) => {
+                note(c"onInputQueueCreated already-held — not recorded twice");
+                #[cfg(target_os = "android")]
+                unsafe {
+                    ndk::__android_log_print(
+                        LOG_INFO,
+                        TAG.as_ptr(),
+                        c"input queue already at slot=%d queue=%p".as_ptr(),
+                        slot as c_int,
+                        queue,
+                    )
+                };
+                #[cfg(not(target_os = "android"))]
+                let _ = slot;
+            }
+            Insert::Full => {
+                // 这一格响起来就是"有条队列不会被排空"，与 ANR 同形，所以说重一点不夸张。
+                warn(c"onInputQueueCreated set FULL — this queue will NOT be drained");
+            }
+        }
+    }
     // 从前这条到这儿就完了：指针存进静态、没人读。现在它记的是**意图**——attach 这个动作
     // 发生在拥有 looper 的那条线程上（回调里直接 attach 会绕开那条线程，头里的注释就是那么用的，
     // 但本壳的排空循环在那边，attach 不归这里做）。
@@ -391,8 +493,8 @@ unsafe extern "C" fn on_input_queue_destroyed(
     _activity: *mut ANativeActivity,
     queue: *mut c_void,
 ) {
-    // 顺序是**先 detach、后清空**：线程每轮排空都拿 `INPUT_QUEUE` 现读对质，清空那一刻它就停手；
-    // 而 detach 必须在还认得这条队列的时候做完。反过来会留一格"已清空但仍挂在 looper 上"。
+    // 顺序是**先 detach、后摘除**：线程每轮排空都拿整集现读对质，摘除那一刻它就停手；
+    // 而 detach 必须在还认得这条队列的时候做完。反过来会留一格"已 detach 前就被摘掉、这一轮不排"。
     #[cfg(target_os = "android")]
     if !queue.is_null() {
         unsafe { ndk::AInputQueue_detachLooper(queue) };
@@ -400,10 +502,35 @@ unsafe extern "C" fn on_input_queue_destroyed(
             ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"input detachLooper done".as_ptr())
         };
     }
-    #[cfg(not(target_os = "android"))]
-    let _ = queue;
-    INPUT_QUEUE.store(std::ptr::null_mut(), Ordering::Release);
     note(c"onInputQueueDestroyed");
+    // **只摘"就是它"那一格**。从前这里是一次无条件清空，而 2026-10-13 那次真机把它量出来了：
+    // 同进程第二条队列还活得好好的，一条无关的销毁把它的账也抹了，于是它既不排空也没人 detach，
+    // 系统自己给它判了刑（`Waited 10000ms for MotionEvent` ＋ `ANR in Window{f30f124 …}`）。
+    let mut set = live_snapshot();
+    match queue_set_remove(&mut set, queue) {
+        Remove::Removed(slot) => {
+            // 属主那一格跟着一起清：留着一个已摘槽位的旧属主，下一次 `on_destroy` 就会按它去
+            // 匹配一条**别人刚复用的槽位**。同一个 `slot` 写两处，与创建侧对称。
+            LIVE_OWNERS[slot].store(std::ptr::null_mut(), Ordering::Release);
+            unsafe { publish_set(&set) };
+            #[cfg(target_os = "android")]
+            unsafe {
+                ndk::__android_log_print(
+                    LOG_INFO,
+                    TAG.as_ptr(),
+                    c"input queue removed slot=%d held=%d queue=%p".as_ptr(),
+                    slot as c_int,
+                    held_count(&set) as c_int,
+                    queue,
+                )
+            };
+        }
+        Remove::NotHeld => {
+            // 集里根本没这条（`queue=NULL` 也在这一格）。**不整集重发**：没摘掉任何东西却发一次，
+            // 等于把别人的账照当前快照抄一遍——那次抄写没有对应的 detach，除了掩盖错乱没有别的用处。
+            warn(c"onInputQueueDestroyed queue not held — set unchanged");
+        }
+    }
     #[cfg(target_os = "android")]
     unsafe { wake_input() };
 }
@@ -695,8 +822,145 @@ unsafe fn paint(window: *mut c_void, why: &'static std::ffi::CStr) {
 
 // ── 输入运输面（本帧第二件）─────────────────────────────────────────────────
 
+// 归属判断收在这一处，**不带 `#[cfg]`**：只比指针、不解引用、不碰原子，所以 host 侧直接喂
+// 假指针就能把三种次序各测一遍。三条 `pub` 是它作为被测面的接口面，不是给外面用的。
+
+/// 加入的结果，三种要分开说：`Added` 正常；`Already` 是同一条指针被 create 了两回（集里不许
+/// 出现两条一样的，第二回不记账）；`Full` 是槽位不够——那意味着**有一条队列没被记账**，
+/// 它不会被 attach、不会被排空，正是 2026-10-13 那次 ANR 的形状，日志必须响。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Insert {
+    Added(usize),
+    Already(usize),
+    Full,
+}
+
+/// 摘除的结果。`NotHeld` 是"销毁回调报的那条不在我们手里"——可能是记账已经错乱，也可能平台
+/// 报了一条我们从没被 create 过的队列。两种都不是"什么都不做"能盖住的，所以不许静默。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Remove {
+    Removed(usize),
+    NotHeld,
+}
+
+/// 排空那一轮的闸门，三档。**从前这一格只有一句话**（`input queue vanished mid-drain — stop`），
+/// 而"vanished"说的比量到的多：真机从没量到"队列凭空消失"，量到的是① finish 之后空集、
+/// ② 换代（还有一条别的在）。这两件事该打两句日志，处置也不同。
+#[derive(Debug, PartialEq, Eq)]
+pub enum DrainGate {
+    /// 我要排的这条还在集里，继续排。
+    KeepGoing,
+    /// 集里一条都没了：正常销毁之后的那一格。
+    Emptied,
+    /// 这条已被摘掉，但集里还剩 `usize` 条别的：换代那一格。
+    Replaced(usize),
+}
+
+pub fn queue_set_insert(set: &mut [*mut c_void], queue: *mut c_void) -> Insert {
+    if let Some(i) = set.iter().position(|q| *q == queue) {
+        return Insert::Already(i);
+    }
+    match set.iter().position(|q| q.is_null()) {
+        Some(i) => {
+            set[i] = queue;
+            Insert::Added(i)
+        }
+        None => Insert::Full,
+    }
+}
+
+pub fn queue_set_remove(set: &mut [*mut c_void], gone: *mut c_void) -> Remove {
+    match set.iter().position(|q| !q.is_null() && *q == gone) {
+        Some(i) => {
+            set[i] = std::ptr::null_mut();
+            Remove::Removed(i)
+        }
+        None => Remove::NotHeld,
+    }
+}
+
+pub fn drain_gate(set: &[*mut c_void], was: *mut c_void) -> DrainGate {
+    if set.contains(&was) {
+        return DrainGate::KeepGoing;
+    }
+    match set.iter().filter(|q| !q.is_null()).count() {
+        0 => DrainGate::Emptied,
+        others => DrainGate::Replaced(others),
+    }
+}
+
+/// 按**属主**摘除：清掉 `owner` 名下的每一格，返回摘掉的条数。这条存在的全部理由是
+/// `onDestroy` 也按实例来：它有权撤的只有这个实例名下的账。2026-10-14 05:14:14 那次真机就是
+/// 反证——队列回调按格摘对了（`removed slot=1 held=1`），紧接着 `onDestroy` 一次整集清空又把
+/// 邻居那条抹了，症状与 10-13 那一格一模一样（`Waited 10000ms for MotionEvent`）。
+/// 返回 0 是**合法结局**：那条队列的 destroy 回调先走完了，这里本来就没剩下什么。那一格由
+/// 日志如实说"0 条"，不许由"顺手清一次整集"代替。
+pub fn queue_set_release_owner(
+    set: &mut [*mut c_void],
+    owners: &mut [*mut c_void],
+    owner: *mut c_void,
+) -> usize {
+    let mut released = 0;
+    if !owner.is_null() {
+        for i in 0..set.len() {
+            if !set[i].is_null() && owners[i] == owner {
+                set[i] = std::ptr::null_mut();
+                owners[i] = std::ptr::null_mut();
+                released += 1;
+            }
+        }
+    }
+    released
+}
+
+/// 空集：给调用方起局部数组用的字面量（`[*mut c_void; LIVE_QUEUE_SLOTS]` 没有 const-new 可用，
+/// 裸指针是 Copy，重复表达式在这里合法）。
+fn empty_queue_set() -> [*mut c_void; LIVE_QUEUE_SLOTS] {
+    [std::ptr::null_mut(); LIVE_QUEUE_SLOTS]
+}
+
+/// 现读整集。不带 `#[cfg]`：它只读那四个原子量、不碰 NDK，而三条回调两侧都编——
+/// 加了 cfg 就等于让 host 侧的回调走一条设备上不存在的路径。
+fn live_snapshot() -> [*mut c_void; LIVE_QUEUE_SLOTS] {
+    let mut out = empty_queue_set();
+    for (src, dst) in LIVE_QUEUES.iter().zip(out.iter_mut()) {
+        *dst = src.load(Ordering::Acquire);
+    }
+    out
+}
+
+/// 把改好的集发回去。调用点全在主线程（见 `LIVE_QUEUES` 那条注释），所以这里没有 CAS：
+/// 四个 store 之间读者可能看到"少一条"的中间态，那种中间态的后果是那一条这一轮不排、
+/// 下一轮排到——**不是丢事件**；反过来若允许两条线程各自整集覆盖，丢的就是真更新。
+unsafe fn publish_set(set: &[*mut c_void]) {
+    for (dst, src) in LIVE_QUEUES.iter().zip(set) {
+        dst.store(*src, Ordering::Release);
+    }
+}
+
+fn held_count(set: &[*mut c_void]) -> usize {
+    set.iter().filter(|q| !q.is_null()).count()
+}
+
+/// 属主那一排的现读与发回，与上面两条同形。**只有主线程调**（三条回调都在那条线程上），
+/// 输入线程一次都不读它——所以这两条不必与 `live_snapshot`/`publish_set` 原子配对，
+/// 中间态最多是"主线程自己看到旧属主"，而那条线程下一步就是写它。
+fn live_owners() -> [*mut c_void; LIVE_QUEUE_SLOTS] {
+    let mut out = empty_queue_set();
+    for (src, dst) in LIVE_OWNERS.iter().zip(out.iter_mut()) {
+        *dst = src.load(Ordering::Acquire);
+    }
+    out
+}
+
+unsafe fn publish_owners(owners: &[*mut c_void]) {
+    for (dst, src) in LIVE_OWNERS.iter().zip(owners) {
+        dst.store(*src, Ordering::Release);
+    }
+}
+
 /// 输入线程自己的 looper，发布出来只为一个用途：**主线程能叫醒它**。读不到（线程还没起来）
-/// 就什么都不做——线程起来后的第一件事是看一眼 `INPUT_QUEUE`，所以"队列先创建、线程后起来"
+/// 就什么都不做——线程起来后的第一件事是现读 `LIVE_QUEUES` 整集，所以"队列先创建、线程后起来"
 /// 那一格不会丢事件，只会晚一轮 poll（≤ `POLL_TIMEOUT_MS`）。
 #[cfg(target_os = "android")]
 static LOOPER: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -769,22 +1033,28 @@ unsafe fn input_loop() {
         return;
     }
     LOOPER.store(looper, Ordering::Release);
-    let mut attached: *mut c_void = std::ptr::null_mut();
+    // 本线程的账，**与 `LIVE_QUEUES` 按槽位对齐**：`attached[i]` 说的是"槽位 i 那条我挂过没有"。
+    // 不能只复制集——"集里现在是谁"与"我对谁发过 attach"是两件事，同一格换了队列时只有这本账
+    // 知道该不该再挂一次；也不能只记指针不看槽位——销毁那条已经在回调里 detach 过了，这里唯一
+    // 能做的动作是**忘记**，再发一次 detach 就是碰已释放的对象。
+    let mut attached: [*mut c_void; LIVE_QUEUE_SLOTS] = empty_queue_set();
     let (mut fd, mut events) = (0 as c_int, 0 as c_int);
     let mut data: *mut c_void = std::ptr::null_mut();
     loop {
-        let want = INPUT_QUEUE.load(Ordering::Acquire);
-        if want != attached {
-            if !want.is_null() {
-                // callback 传 `None` ⇒ 这一路是 ident 轮询，不是回调（见 `LOOPER_ALLOW_NON_CALLBACKS`）。
-                unsafe { ndk::AInputQueue_attachLooper(want, looper, ID_INPUT, None, std::ptr::null_mut()) };
-                unsafe {
-                    ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"input attach queue=%p ident=%d".as_ptr(), want, ID_INPUT)
-                };
+        let want = live_snapshot();
+        for (i, q) in want.iter().enumerate() {
+            if attached[i] == *q {
+                continue;
             }
-            // `want` 为空这一支**不在这里 detach**：销毁那次已经在回调里 detach 过了（头里的
-            // 「upon returning from this function」那条硬约束），这里再碰它就是碰已释放的对象。
-            attached = want;
+            attached[i] = std::ptr::null_mut();
+            if !q.is_null() {
+                // callback 传 `None` ⇒ 这一路是 ident 轮询，不是回调（见 `LOOPER_ALLOW_NON_CALLBACKS`）。
+                unsafe { ndk::AInputQueue_attachLooper(*q, looper, ID_INPUT, None, std::ptr::null_mut()) };
+                unsafe {
+                    ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"input attach queue=%p ident=%d".as_ptr(), *q, ID_INPUT)
+                };
+                attached[i] = *q;
+            }
         }
         let r = unsafe { ndk::ALooper_pollOnce(POLL_TIMEOUT_MS, &mut fd, &mut events, &mut data) };
         if r == POLL_ERROR {
@@ -797,8 +1067,12 @@ unsafe fn input_loop() {
                 ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"unexpected looper ident=%d fd=%d events=%d".as_ptr(), r, fd, events)
             };
         }
-        if !attached.is_null() {
-            unsafe { drain(attached) };
+        // 每一轮把**本线程挂着的每一条**都排一次。只排最后创建那条正是 2026-10-13 那次的坏：
+        // 底层那条有事件、没人读，平台等不到 finishEvent 就报了超时。
+        for q in attached {
+            if !q.is_null() {
+                unsafe { drain(q) };
+            }
         }
     }
 }
@@ -810,10 +1084,29 @@ unsafe fn input_loop() {
 #[cfg(target_os = "android")]
 unsafe fn drain(queue: *mut c_void) {
     loop {
-        // 每轮现读：销毁回调已经把 `INPUT_QUEUE` 清空时立刻停手，别去碰一条正在被拆的队列。
-        if INPUT_QUEUE.load(Ordering::Acquire) != queue {
-            note(c"input queue vanished mid-drain — stop");
-            return;
+        // 每轮现读**整集**对质：这条被摘掉时立刻停手，别去碰一条正在被拆的队列。
+        // 从前这里只有一句话（`input queue vanished mid-drain`），而 "vanished" 说的比量到的多：
+        // 真机从没量到"队列凭空消失"，量到的是**清空**与**换代**两格，处置和证据都不一样。
+        match drain_gate(&live_snapshot(), queue) {
+            DrainGate::KeepGoing => {}
+            DrainGate::Emptied => {
+                note(c"input queue emptied mid-drain — stop");
+                return;
+            }
+            DrainGate::Replaced(others) => {
+                // 换代：我排的这条已经不在账上，但集里还有别的活着。带两个指针是为了在日志里
+                // 能认出"是哪一条接替了它"，否则这句话只是"我停了"，落不到归属上。
+                unsafe {
+                    ndk::__android_log_print(
+                        LOG_INFO,
+                        TAG.as_ptr(),
+                        c"input queue replaced mid-drain — stop this=%p others=%d".as_ptr(),
+                        queue,
+                        others as c_int,
+                    )
+                };
+                return;
+            }
         }
         let has = unsafe { ndk::AInputQueue_hasEvents(queue) };
         if has < 0 {
@@ -996,3 +1289,175 @@ const _: () = assert!(std::mem::offset_of!(Area, top) == 4);
 const _: () = assert!(std::mem::offset_of!(Area, right) == 8);
 #[cfg(target_os = "android")]
 const _: () = assert!(std::mem::offset_of!(Area, bottom) == 12);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 三条次序测都只喂**假指针**：谓词不比大小、不解引用，所以 `0x1` 这种地址在 host 侧
+    /// 完全合法（它从没被 deref 过）。真机上那些指针是平台给的 `AInputQueue*`，归属判断
+    /// 只看"是不是同一条"，与指向什么无关——这正是把判断抽成纯谓词换来的东西。
+    /// 走这支 `const fn` 而不是直接写字面 cast：clippy 的 manual_dangling_ptr 会建议换成
+    /// `std::ptr::dangling_mut`，而那个每次回**同一个值**，装不下"两条队列并存"要的几个互不相同的哨兵。
+    const fn sentinel(n: usize) -> *mut c_void {
+        n as *mut c_void
+    }
+    const A: *mut c_void = sentinel(1);
+    const B: *mut c_void = sentinel(2);
+    const C: *mut c_void = sentinel(3);
+    /// 一条我们从没被 create 过的队列。真机上它不是幻想：`onDestroy` 之后平台仍可再来一条
+    /// destroy（那格的形状就是"账上没有"），此时不许静默。
+    const NEVER: *mut c_void = sentinel(9);
+
+    fn set_with(qs: [*mut c_void; LIVE_QUEUE_SLOTS]) -> [*mut c_void; LIVE_QUEUE_SLOTS] {
+        qs
+    }
+
+    /// 换代那一格：**销毁先来、创建后来**时，新那条必须留在账上，旧那条的销毁不许连它一起抹。
+    /// 从前这一格是整集无条件清空，于是同进程第二个实例的队列没人排空——系统自己判了刑
+    /// （`Waited 10000ms for MotionEvent` ＋ `ANR in Window{f30f124 …}`，2026-10-13 现读）。
+    #[test]
+    fn destroying_the_old_queue_does_not_unaccount_the_new_one() {
+        let mut set = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0), "A 落槽位 0");
+        assert_eq!(queue_set_insert(&mut set, B), Insert::Added(1), "B 落槽位 1（同进程第二个实例）");
+        assert_eq!(queue_set_remove(&mut set, A), Remove::Removed(0));
+        assert_eq!(set, set_with([std::ptr::null_mut(), B, std::ptr::null_mut(), std::ptr::null_mut()]),
+            "只许清 A 那一格：B 还活着");
+        assert_eq!(held_count(&set), 1);
+        // B 仍在账上 ⇒ 排它那一轮闸门放行，不该说"没了"。
+        assert_eq!(drain_gate(&set, B), DrainGate::KeepGoing);
+    }
+
+    /// 创建先来、销毁后来（同一批队列，只是次序换成"两条都 create 完才拆"）。测的是**槽位**
+    /// 而不是插入顺序：拆中间那条，两边都得原地不动。
+    #[test]
+    fn removal_clears_exactly_the_slot_that_matches() {
+        let mut set = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        assert_eq!(queue_set_insert(&mut set, B), Insert::Added(1));
+        assert_eq!(queue_set_insert(&mut set, C), Insert::Added(2));
+        assert_eq!(queue_set_remove(&mut set, B), Remove::Removed(1));
+        assert_eq!(set, set_with([A, std::ptr::null_mut(), C, std::ptr::null_mut()]), "拆中间，两边不许动");
+        // 空槽优先复用：下一次 create 落在 1，不是往后追加。
+        assert_eq!(queue_set_insert(&mut set, NEVER), Insert::Added(1));
+        assert_eq!(held_count(&set), 3);
+    }
+
+    /// 同一条队列被 create 两回（活动重建时平台真会这么做）：不许记成两条，否则 `held` 那个数
+    /// 从此骗人，而排空会把同一条排两遍。
+    #[test]
+    fn the_same_queue_is_never_counted_twice() {
+        let mut set = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Already(0));
+        assert_eq!(held_count(&set), 1, "重复 create 不增账");
+        assert_eq!(queue_set_remove(&mut set, A), Remove::Removed(0));
+        assert_eq!(queue_set_remove(&mut set, A), Remove::NotHeld, "拆第二回要说『没这条』，不许再报 Removed");
+    }
+
+    /// 账上没有的指针（含 `queue=NULL` 那一格）：`NotHeld`。这一格从前被无条件清空盖掉——
+    /// 它看起来"也能收敛到空集"，代价是把别人活着的账一起清了。
+    #[test]
+    fn a_queue_we_never_recorded_is_reported_not_silently_dropped() {
+        let mut set = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        assert_eq!(queue_set_remove(&mut set, NEVER), Remove::NotHeld);
+        assert_eq!(set, set_with([A, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()]),
+            "NotHeld 这一支一个字都不许改");
+        assert_eq!(drain_gate(&set, A), DrainGate::KeepGoing);
+    }
+
+    /// `drain` 从前只有一句话（`vanished`），而真机从没量到"凭空消失"。这里把两格钉开：
+    /// **换代**（我还不在账上，但还有别的活着）与**清空**（整集没了）。
+    #[test]
+    fn replacement_and_empty_are_two_different_words() {
+        let mut set = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        assert_eq!(queue_set_insert(&mut set, B), Insert::Added(1));
+        assert_eq!(queue_set_remove(&mut set, A), Remove::Removed(0));
+        assert_eq!(drain_gate(&set, A), DrainGate::Replaced(1), "A 已摘、B 还活着 ⇒ 换代不是消失");
+        assert_eq!(queue_set_remove(&mut set, B), Remove::Removed(1));
+        assert_eq!(drain_gate(&set, B), DrainGate::Emptied, "整集空了才是那一格正常收尾");
+        assert_eq!(drain_gate(&set, NEVER), DrainGate::Emptied);
+    }
+
+    /// 槽位塞不下时的形状：`Full` 必须**一个字都不改**，且日志那一格由调用方负责响。
+    /// 这一格响起来与 ANR 同形（有条队列不会被排空），所以它是这条测存在的全部理由。
+    #[test]
+    fn a_full_set_refuses_without_overwriting_what_it_holds() {
+        let mut set = empty_queue_set();
+        for i in 0..LIVE_QUEUE_SLOTS {
+            assert_eq!(
+                queue_set_insert(&mut set, (0x10 + i) as *mut c_void),
+                Insert::Added(i),
+                "前 {i} 条各占一格"
+            );
+        }
+        let before = set;
+        assert_eq!(queue_set_insert(&mut set, NEVER), Insert::Full);
+        assert_eq!(set, before, "Full 不许挤掉任何一条已有账目");
+        assert_eq!(held_count(&set), LIVE_QUEUE_SLOTS);
+    }
+
+    // ── 属主那一半 ──────────────────────────────────────────────────────────
+    // 这三条不是把上面几条换个说法：它们钉的是**另一个回调**。2026-10-14 05:14:14 那次真机
+    // 就是这一格漏的——队列回调按格摘对了（`removed slot=1 held=1`），紧接着同毫秒的
+    // `onDestroy` 一次整集清空又把邻居抹了，日志随后两句 `input queue emptied mid-drain`、
+    // 十秒后系统报 `Waited 10000ms for MotionEvent`。头里没承诺两条回调的次序，所以两格都得测。
+
+    /// 邻居的 `onDestroy` 不许把我这条抹掉（队列回调**还没来**那一档）。
+    #[test]
+    fn another_instances_destroy_leaves_my_queue_accounted() {
+        let (x, y) = (0xAusize, 0xBusize);
+        let mut set = empty_queue_set();
+        let mut own = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        own[0] = x as *mut c_void;
+        assert_eq!(queue_set_insert(&mut set, B), Insert::Added(1));
+        own[1] = y as *mut c_void;
+        assert_eq!(queue_set_release_owner(&mut set, &mut own, y as *mut c_void), 1, "Y 名下就一条");
+        assert_eq!(set, set_with([A, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()]),
+            "B 归 B，A 不许跟着走");
+        assert_eq!(own[0], x as *mut c_void, "留着已摘槽位的旧属主才会错配，A 的属主必须原样");
+        assert_eq!(drain_gate(&set, A), DrainGate::KeepGoing, "A 还活着，那一轮闸门该放行");
+    }
+
+    /// 队列回调**先来**、`onDestroy` 后来：这一档 `release_owner` 该数出 **0 条**并且一个字都不改。
+    /// "0 条"是合法结局，不是需要补救的异常——把它写成"再清一次整集"就是上面那个反证。
+    #[test]
+    fn destroy_after_the_queue_already_left_releases_nothing() {
+        let x = 0xAusize;
+        let mut set = empty_queue_set();
+        let mut own = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        own[0] = x as *mut c_void;
+        assert_eq!(queue_set_insert(&mut set, B), Insert::Added(1));
+        own[1] = x as *mut c_void;
+        // 同一条队列自己的 destroy 回调先走完（含把属主那一格一起清掉）
+        assert_eq!(queue_set_remove(&mut set, B), Remove::Removed(1));
+        own[1] = std::ptr::null_mut();
+        let before = set;
+        assert_eq!(set, set_with([A, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()]),
+            "队列回调之后：集里只剩 A 这一条");
+        assert_eq!(queue_set_release_owner(&mut set, &mut own, x as *mut c_void), 1,
+            "同一个实例的两条队列，回调先拆掉一条 ⇒ 这里只该数到剩下那条");
+        assert_eq!(set, empty_queue_set(), "X 名下确实什么都不剩了");
+        assert_eq!(own, empty_queue_set(), "属主那一排跟着一起清，不许留旧账");
+        assert_eq!(drain_gate(&set, before[0]), DrainGate::Emptied);
+    }
+
+    /// 空属主不匹配任何格。槽位空与属主空是同一个编码（`null`），放它进去扫一遍就会把
+    /// "所有没记属主的活队列"一次撤光——那是同一把刀的另一种握法。
+    #[test]
+    fn a_null_owner_releases_nothing_at_all() {
+        let mut set = empty_queue_set();
+        let mut own = empty_queue_set();
+        assert_eq!(queue_set_insert(&mut set, A), Insert::Added(0));
+        assert_eq!(queue_set_insert(&mut set, B), Insert::Added(1));
+        let before = set;
+        assert_eq!(queue_set_release_owner(&mut set, &mut own, std::ptr::null_mut()), 0);
+        assert_eq!(set, before, "属主为空时一个字都不许改");
+        assert_eq!(held_count(&set), 2);
+    }
+}
