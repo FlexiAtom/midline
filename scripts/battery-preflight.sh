@@ -27,11 +27,11 @@ B="$(cd "$(dirname "$0")" && pwd)/mutation-battery.sh"
 REAL="${MIDLINE_REAL_DOC:-$HOME/中线.MD}"
 [ -f "$REAL" ] || { echo "找不到规格文档 $REAL（可用 MIDLINE_REAL_DOC 指定）"; exit 1; }
 
-# 判据唯一化：电池里那四个"跑 cargo／跑 python 检"的入口，定义行必须各恰有一处，否则这条尺的替换就是空替换——
-# 静默预检出"全过"最坑。run() 是引擎侧 167 条的落点；srun/crun/frun 是壳侧三条 lane 的落点
-# （M167 走 host 探针、M168 走守门检 §8 那份谓词、M169 走 frame:: 测面），它们各自真跑一次都是**几十秒到几分钟**的
-# 编译，预检要量的是"补丁有没有打上"，所以四个全换空壳——少换一个，预检就退化成一次整族。
-for f in run srun crun frun; do
+# 判据唯一化：电池里那六个"跑 cargo／跑 python 检／跑 clang"的入口，定义行必须各恰有一处，否则这条尺的替换就是空替换——
+# 静默预检出"全过"最坑。run() 是引擎侧 167 条的落点；srun/crun/frun/irun/grun 是壳侧五条 lane 的落点
+# （M167 走 host 探针、M168 走守门检 §8 那份谓词、M169 走 frame:: 测面、M170–M171 走 input:: 测面、M172 走 NDK clang 单编），
+# 它们各自真跑一次都是**几十秒到几分钟**的编译，预检要量的是"补丁有没有打上"，所以六个全换空壳——少换一个，预检就退化成一次整族。
+for f in run srun crun frun irun grun; do
     n=$(grep -c "^$f() {" "$B")
     [ "$n" -eq 1 ] || { echo "电池里 $f() 的定义行应有且只有一处，实测 $n 处 ⇒ 本预检的替换判据已失效，请同步本脚本"; exit 1; }
 done
@@ -42,7 +42,7 @@ python3 - "$B" "$T" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 # 空壳只做一件事：把 py()/pys() 记下的 PATCH_FAIL 喊出来，然后清掉（一条记录只喊一次）。
-NEUTRAL = ('run', 'srun', 'crun', 'frun')
+NEUTRAL = ('run', 'srun', 'crun', 'frun', 'irun', 'grun')
 def noop(name):
     return ('%s() { if [ -n "${PATCH_FAIL:-}" ]; then '
             "printf '!! 补丁失败（%%s）⇒ 这条没有打到码\\n' \"$PATCH_FAIL\"; PATCH_FAIL=\"\"; fi; return 0; }" % name)
@@ -60,8 +60,8 @@ echo "### 预检（只打补丁、不跑 cargo／不跑检）｜红＝某条变�
 bash "$T"
 # 记录条数钉死（本帧 D19）：以前这行只打印条数、没人核对，一条记录静默丢失（echo 头被误删、或整条误并）
 # 就会让"预检全过"变成假绿。现在断言 == 期望数；加一条牙就同步改 EXPECTED_RECORDS 这一处。
-# 171 ＝ M0 引擎对照 + M0b 壳侧对照 + M1…M169（其中 M167–M169 走上面那三个壳侧入口）。
-EXPECTED_RECORDS=171
+# 174 ＝ M0 引擎对照 + M0b 壳侧对照 + M1…M172（其中 M167–M172 走上面那五个壳侧入口）。
+EXPECTED_RECORDS=174
 N="$(grep -c '^echo "### ' "$B")"
 if [ "$N" -ne "$EXPECTED_RECORDS" ]; then
     printf '!! 记录条数对不上：期望 %s 条，实测 %s 条 ⇒ 有 echo "### " 头被删／多写／整条误并，请核对电池\n' "$EXPECTED_RECORDS" "$N"

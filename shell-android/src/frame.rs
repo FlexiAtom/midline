@@ -95,6 +95,17 @@ impl Scale {
     }
 }
 
+/// 用户单位矩形 → 设备像素矩形 `[x, y, w, h]`。**绘制侧与命中侧共用这一支**。
+///
+/// 原点走 `at`（letterbox 位移进左边），宽高走 `len`（不掺位移）——这不是两种写法里挑了一种，
+/// 而是"像素是谁落的"决定的：`paint` 往缓冲里落的正是这四个数，命中框要是不照它们算，
+/// 就会有一格像素画出来了却点不到（或反过来）。两端各问一次 `at` 再取差那种写法看着更准，
+/// 现量在本机型这档 k 上 12 块控件里有 6 块与绘制侧差一格（PlayerCell 四块差在最后一行、
+/// Hand(1)/Hand(2) 差在最后一列），而那正是"眼睛看到的最外一列"与"判据说的最外一列"的分歧。
+pub fn dev_rect(s: &Scale, x: i32, y: i32, w: i32, h: i32) -> [i32; 4] {
+    [s.at(s.off_x, x), s.at(s.off_y, y), s.len(w), s.len(h)]
+}
+
 /// 一次栅格化的现读量（进 logcat，也进档 §2 那张表）。
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Painted {
@@ -118,17 +129,27 @@ pub const DEMO_SEED: u64 = 7;
 pub const DEMO_TURNS: usize = 6;
 pub const DEMO_SCENE: &str = "装机帧";
 
+/// 打一桌、走若干回合，**把这一桌交出去**（不编帧）。
+///
+/// 拆出来是因为第十八步·其四起壳里那份盘面是**活的**：`input::Live` 要持住这个 `Battle`
+/// 才能接住一行命令。留在这里而不是搬进 `input.rs`，是因为"哪一桌牌"这个选择必须两侧同源
+/// ——`demo_frame()`（静态证人）与 `Live::new()`（交互起点）调的是同一支函数，
+/// 于是"改成活帧后第一帧摘要没变"这句话量的才是语义，而不是两次各自打桌的巧合。
+pub fn demo_battle() -> crate::battle::Battle {
+    let mut b = crate::battle::Battle::new_mainline(DEMO_SEED, crate::model::Faction::Ember, crate::meta::enemy_faction_for(1), crate::battle::Difficulty::Normal, Vec::new(), 1);
+    for _ in 0..DEMO_TURNS {
+        crate::meta::auto_turn(&mut b);
+    }
+    b
+}
+
 /// 打一桌、走若干回合、把终盘的快照编成指令表。纯引擎调用，零平台依赖、零 IO。
 ///
 /// `auto_turn` 走的是战斗自己的 `rng`（不是系统时间也不是线程随机数），所以同 seed 在
 /// x86 与 aarch64 上必然打出同一个盘面——这一条是本帧像素对撞能成立的前提，写在码旁边是因为
 /// 它一旦破了（哪天引擎换成 `SystemTime` 做种），症状是"对撞差满屏"而根因在这里。
 pub fn demo_frame() -> Frame {
-    let mut b = crate::battle::Battle::new_mainline(DEMO_SEED, crate::model::Faction::Ember, crate::meta::enemy_faction_for(1), crate::battle::Difficulty::Normal, Vec::new(), 1);
-    for _ in 0..DEMO_TURNS {
-        crate::meta::auto_turn(&mut b);
-    }
-    let v = b.view();
+    let v = demo_battle().view();
     display::frame_prims(&v, DEMO_SEED, DEMO_SCENE, &[])
 }
 
@@ -148,7 +169,8 @@ pub fn paint(frame: &Frame, face: &Face, atlas: &mut Atlas, dst: &mut [u8], buf_
         match p {
             Prim::Block { x, y, w, h, radius, fill, edge, opacity } => {
                 st.blocks += 1;
-                let rect = Round::new(s.at(s.off_x, *x), s.at(s.off_y, *y), s.len(*w), s.len(*h), s.len(*radius));
+                let [px, py, pw, ph] = dev_rect(&s, *x, *y, *w, *h);
+                let rect = Round::new(px, py, pw, ph, s.len(*radius));
                 let ink = color::rgb(fill);
                 // SVG 里 `opacity` 是整个节点的不透明度，且**同时作用于描边**——这里同口径。
                 let a = opacity_alpha(*opacity);
@@ -522,8 +544,10 @@ mod tests {
         assert_eq!(stamp(&mut untouched, 4, 4, 4, (9, 9, 20, 20), [1, 2, 3], u8::MAX, |_, _| true), 0);
         assert!(untouched.iter().all(|b| *b == 7), "整块在界外还写，就是踩了别人的缓冲");
         // 落笔格数是 `empty_blocks` 的唯一来源：恒假判据与界外同样读 0，界内满铺读 16。
-        assert_eq!(stamp(&mut vec![0u8; 4 * 4 * 4], 4, 4, 4, (0, 0, 4, 4), [1, 2, 3], u8::MAX, |_, _| false), 0);
-        assert_eq!(stamp(&mut vec![0u8; 4 * 4 * 4], 4, 4, 4, (0, 0, 4, 4), [1, 2, 3], u8::MAX, |_, _| true), 16);
+        let mut none_hit = [0u8; 4 * 4 * 4];
+        let mut all_hit = [0u8; 4 * 4 * 4];
+        assert_eq!(stamp(&mut none_hit, 4, 4, 4, (0, 0, 4, 4), [1, 2, 3], u8::MAX, |_, _| false), 0);
+        assert_eq!(stamp(&mut all_hit, 4, 4, 4, (0, 0, 4, 4), [1, 2, 3], u8::MAX, |_, _| true), 16);
     }
 
     /// 演示帧是**打两次同桌**：这一格证的不是"画得好"，是摘要这一路可复现——

@@ -20,6 +20,7 @@
 //! 内存布局是我从 NDK 头抄写来的——抄写会错，所以抄写之外另立两道尺：
 //! - 本文件末尾那批 `offset_of!` 断言：钉住**我这份声明**的偏移，任何字段增删/换序当场编不过；
 //! - `shell-android/layout_check.c`：拿 NDK clang 对**真头**做 `_Static_assert`，用同一张数字表。
+//!
 //! 两道尺共用一张表，所以"我以为的布局"与"平台实际的布局"一旦分叉必有一边红。
 //!
 //! 本帧起它多一件事：**把一帧真的画到屏上**。呈现走的是自写 `ANativeWindow_Buffer` 那条
@@ -77,6 +78,13 @@ pub struct ANativeActivity {
 /// 按它给的 `bits/stride/format` 往那块内存里写字节，不 own、不 free。
 static WINDOW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static INPUT_QUEUE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// 呈现互斥。**两条线程不许同时 `lock`/`unlockAndPost` 同一块窗口**：各自锁一块缓冲再各自 post，
+/// 症状是"上一帧的尾巴出现在这一帧中间"，而那种画错一闪而过、截屏也抓不住。它顺带把
+/// "什么时候允许碰窗口"收成一处：`WINDOW` 现读非空 ＋ 这把锁。
+/// 锁中毒（上一次绘制 panic）之后只能继续——那块缓冲没有可恢复的状态，停手反而把屏冻住。
+/// 不带 `#[cfg]`：`onNativeWindowDestroyed` 也要拿它（见那支的说明），而那条回调两侧都编。
+static PAINT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// NDK `ANativeWindow_Buffer`（`android/native_window.h`）：**字段序是 width, height, stride,
 /// format, bits, reserved[6]**，整数在前、指针在后。抄写风险全在这条顺序上——把 `bits` 提前一位
@@ -145,11 +153,81 @@ mod ndk {
         pub fn AAsset_read(asset: *mut c_void, buf: *mut c_void, count: usize) -> c_int;
         pub fn AAsset_getLength(asset: *mut c_void) -> c_long;
         pub fn AAsset_close(asset: *mut c_void) -> c_int;
+        /// **输入运输**（第十八步·其四）。三个句柄 `AInputQueue`／`AInputEvent`／`ALooper` 在 NDK 头里
+        /// 都是 `typedef struct X X;` 的**不透明**前置声明——所以这一族没有字段表可抄，也就没有
+        /// `offset_of!` 那道尺；要抄的是**数字**（枚举值）与**返回宽度**（`int32_t` vs `size_t` 这类），
+        /// 它们逐条在 `layout_check.c` 与真头对质。指针参数一律 `*mut c_void`：与 `ANativeWindow`
+        /// 同一口径——壳只按平台给的调用读写它，不 own、不猜形状。
+        pub fn AInputQueue_attachLooper(
+            queue: *mut c_void,
+            looper: *mut c_void,
+            ident: c_int,
+            callback: Option<unsafe extern "C" fn(fd: c_int, events: c_int, data: *mut c_void) -> c_int>,
+            data: *mut c_void,
+        );
+        pub fn AInputQueue_detachLooper(queue: *mut c_void);
+        pub fn AInputQueue_hasEvents(queue: *mut c_void) -> c_int;
+        pub fn AInputQueue_getEvent(queue: *mut c_void, out_event: *mut *mut c_void) -> c_int;
+        pub fn AInputQueue_preDispatchEvent(queue: *mut c_void, event: *mut c_void) -> c_int;
+        pub fn AInputQueue_finishEvent(queue: *mut c_void, event: *mut c_void, handled: c_int);
+        pub fn ALooper_prepare(opts: c_int) -> *mut c_void;
+        pub fn ALooper_wake(looper: *mut c_void);
+        pub fn ALooper_pollOnce(timeout_ms: c_int, out_fd: *mut c_int, out_events: *mut c_int, out_data: *mut *mut c_void) -> c_int;
+        pub fn AInputEvent_getType(event: *mut c_void) -> c_int;
+        pub fn AMotionEvent_getAction(motion_event: *mut c_void) -> c_int;
+        pub fn AMotionEvent_getX(motion_event: *mut c_void, pointer_index: usize) -> f32;
+        pub fn AMotionEvent_getY(motion_event: *mut c_void, pointer_index: usize) -> f32;
+        pub fn AMotionEvent_getPointerCount(motion_event: *mut c_void) -> usize;
     }
 
     /// `AAssetManager_open` 的第三种读法：整份进内存。字体就一次读，SEQUENTIAL/RANDOM 都用不上。
     pub const ASSET_MODE_BUFFER: c_int = 3;
 }
+
+/// `ALOOPER_PREPARE_ALLOW_NON_CALLBACKS`：本壳**不注册 looper 回调**，而是拿 `ident` 轮询。
+/// 走这一档的理由不是口味：回调是在**持有 looper 锁**时被调的，从回调里再碰输入队列或窗口
+/// 就是自找死锁；轮询侧则可以自由地去锁 `SCENE` 与 `PAINT`。
+#[cfg(target_os = "android")]
+const LOOPER_ALLOW_NON_CALLBACKS: c_int = 1 << 0;
+/// 本壳自己挑的那个 ident（头里没有预定义的 `LOOPER_ID_INPUT`，只有一个整数，0 是"没有 ident"的
+/// 保留值，所以取 1）。它只用来让日志能说出"这次醒来是为输入醒的"，**排空**这件事不依赖它——
+/// 头里明写「If you call ALooper_pollOnce() in a loop, you *must* treat all return values as if
+/// they also indicate ALOOPER_POLL_WAKE」，照那句话做就不会漏事件。
+#[cfg(target_os = "android")]
+const ID_INPUT: c_int = 1;
+/// 没人叫醒就多久回来看一眼。它同时是"销毁输入队列后最长多久线程会停手"的上界，所以不是随手取的：
+/// 真机上手指一下约 60–120ms，50ms 既不糊（一帧的预算还没被它吃掉），也不至于让 detach 等上一秒。
+#[cfg(target_os = "android")]
+const POLL_TIMEOUT_MS: c_int = 50;
+#[cfg(target_os = "android")]
+const POLL_WAKE: c_int = -1;
+#[cfg(target_os = "android")]
+const POLL_CALLBACK: c_int = -2;
+#[cfg(target_os = "android")]
+const POLL_TIMEOUT: c_int = -3;
+#[cfg(target_os = "android")]
+const POLL_ERROR: c_int = -4;
+/// `AINPUT_EVENT_TYPE_MOTION`：头里 1=KEY、**2=MOTION**（从前有些博客写 1，那是 focus/capture
+/// 那几档被加进来之前的老编号）。这一格由 layout_check.c 拿真头钉。
+#[cfg(target_os = "android")]
+const EVENT_TYPE_MOTION: c_int = 2;
+/// action 的低 8 位才是动作，高 8 位是 pointer index（`AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT`）。
+/// 不-mask 的话双指的 `POINTER_UP(1)` 会被读成 `UP|1<<8`，那一支就永远落不进三档里。
+#[cfg(target_os = "android")]
+const ACTION_MASK: c_int = 0xff;
+#[cfg(target_os = "android")]
+const ACTION_DOWN: c_int = 0;
+#[cfg(target_os = "android")]
+const ACTION_UP: c_int = 1;
+#[cfg(target_os = "android")]
+#[allow(dead_code, reason = "这三档存在的意义是\"它们被如实跳过\"，日志里的 action 值要靠它辨认")]
+const ACTION_MOVE: c_int = 2;
+#[cfg(target_os = "android")]
+const ACTION_CANCEL: c_int = 3;
+#[cfg(target_os = "android")]
+const ACTION_POINTER_DOWN: c_int = 5;
+#[cfg(target_os = "android")]
+const ACTION_POINTER_UP: c_int = 6;
 
 #[cfg(target_os = "android")]
 const LOG_INFO: c_int = 4;
@@ -277,10 +355,13 @@ unsafe extern "C" fn on_native_window_redraw_needed(
 
 /// 头里的硬约束：「You MUST ensure that you do not touch the window object after returning」——
 /// 所以清空必须发生在返回之前，且顺序是 Release（后续读者不能看到已失效的窗口）。
+/// 清空前要拿到 `PAINT`：从本帧起画这条窗口的不止主线程（输入线程判完一次触摸也会画），而
+/// 那条线程可能正锁着一块缓冲在写。锁在这里等最多一帧的时间，换到的是"锁在手 ⇒ 窗口还活着"。
 unsafe extern "C" fn on_native_window_destroyed(
     _activity: *mut ANativeActivity,
     _window: *mut c_void,
 ) {
+    let _paint = PAINT.lock().unwrap_or_else(|p| p.into_inner());
     WINDOW.store(std::ptr::null_mut(), Ordering::Release);
     note(c"onNativeWindowDestroyed");
 }
@@ -291,14 +372,40 @@ unsafe extern "C" fn on_input_queue_created(
 ) {
     INPUT_QUEUE.store(queue, Ordering::Release);
     note(c"onInputQueueCreated");
+    // 从前这条到这儿就完了：指针存进静态、没人读。现在它记的是**意图**——attach 这个动作
+    // 发生在拥有 looper 的那条线程上（回调里直接 attach 会绕开那条线程，头里的注释就是那么用的，
+    // 但本壳的排空循环在那边，attach 不归这里做）。
+    #[cfg(target_os = "android")]
+    unsafe {
+        start_input_thread();
+        wake_input();
+    }
 }
 
+/// 头里的硬约束对队列同样成立：**返回之后不许再碰它**，而它返回之后随时可能被释放。所以
+/// `detachLooper` 必须在这条回调里做完，不能留给线程下一次轮询（那时它可能已经是悬垂指针）。
+/// 这格是抄写风险最高的一格——"detach 可以在别的线程调"这件事头里没写，靠的是 NDK `Looper`
+/// 内部带锁这个实现事实，所以它**不进断言、只进现读**：真机日志里若 `detachLooper done` 之后
+/// 还能看到 `hasEvents`，就说明这条假设在设备上不对，得换成"线程自己停手"那一档。
 unsafe extern "C" fn on_input_queue_destroyed(
     _activity: *mut ANativeActivity,
-    _queue: *mut c_void,
+    queue: *mut c_void,
 ) {
+    // 顺序是**先 detach、后清空**：线程每轮排空都拿 `INPUT_QUEUE` 现读对质，清空那一刻它就停手；
+    // 而 detach 必须在还认得这条队列的时候做完。反过来会留一格"已清空但仍挂在 looper 上"。
+    #[cfg(target_os = "android")]
+    if !queue.is_null() {
+        unsafe { ndk::AInputQueue_detachLooper(queue) };
+        unsafe {
+            ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"input detachLooper done".as_ptr())
+        };
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = queue;
     INPUT_QUEUE.store(std::ptr::null_mut(), Ordering::Release);
     note(c"onInputQueueDestroyed");
+    #[cfg(target_os = "android")]
+    unsafe { wake_input() };
 }
 
 unsafe extern "C" fn on_content_rect_changed(
@@ -357,6 +464,9 @@ const FONT_ASSET: &std::ffi::CStr = c"fonts/ui.otf";
 struct Scene {
     face: crate::text::Face,
     atlas: crate::text::Atlas,
+    /// 活的那一桌牌。从前这里每次绘制现打一桌（`frame::demo_frame()`），画完就丢，
+    /// 所以屏上的东西**不可被操作**；本帧把它持住，于是 `input.rs` 改完状态后画的就是这一桌。
+    live: crate::input::Live,
 }
 
 /// 单线程的呈现面也要 `Sync`，因为回调表是框架给的、静态比栈寿命长。锁不竞争，只为类型成立。
@@ -414,8 +524,11 @@ unsafe fn read_asset(mgr: *mut c_void) -> Option<Vec<u8>> {
 fn paint_board(dst: &mut [u8], w: usize, h: usize, stride: usize, why: &std::ffi::CStr, bg_ms: f64) -> bool {
     let mut guard = SCENE.lock().unwrap_or_else(|p| p.into_inner());
     let Some(scene) = guard.as_mut() else { return false };
-    let Scene { face, atlas } = scene;
-    let frame = crate::frame::demo_frame();
+    let Scene { face, atlas, live } = scene;
+    let frame = live.frame();
+    // 尺与帧**同批**记下：命中的那把尺就是画这一帧用的那把。拿窗口现读尺寸在点的时候重算，
+    // 在 resized 与触摸交错的时刻会得到一把"没画过"的尺——屏上那一格的位置是上一次绘制定下的。
+    live.set_geom(crate::input::Geom::of(w, h, &frame));
 
     let t = std::time::Instant::now();
     let cold = crate::frame::paint(&frame, face, atlas, dst, w, h, stride);
@@ -498,7 +611,11 @@ unsafe fn ensure_scene(activity: *mut ANativeActivity) {
         )
     };
     let mut guard = SCENE.lock().unwrap_or_else(|p| p.into_inner());
-    *guard = Some(Scene { face, atlas: crate::text::Atlas::new() });
+    *guard = Some(Scene {
+        face,
+        atlas: crate::text::Atlas::new(),
+        live: crate::input::Live::new(),
+    });
 }
 
 /// 锁→画→放。**这一格第一次把引擎算出来的整张盘面铺进 `ANativeWindow_Buffer`**，所以每一步的
@@ -506,6 +623,14 @@ unsafe fn ensure_scene(activity: *mut ANativeActivity) {
 #[cfg(target_os = "android")]
 unsafe fn paint(window: *mut c_void, why: &'static std::ffi::CStr) {
     if window.is_null() {
+        return;
+    }
+    // **先拿锁，再看窗口**。反过来（先看窗口再拿锁）时，输入线程可能拿到一个主线程刚拆掉的
+    // 指针——`onNativeWindowDestroyed` 现在要拿到这把锁之后才清空 `WINDOW`，所以"锁在手且
+    // 窗口仍是当前那块"这句才有证人。锁等着锁着最长一次是一帧的绘制时间（现读 §2 那行 warm=）。
+    let _paint = PAINT.lock().unwrap_or_else(|p| p.into_inner());
+    if WINDOW.load(Ordering::Acquire) != window {
+        warn(c"paint skipped: window is no longer the current one");
         return;
     }
     let mut buf = WindowBuffer {
@@ -566,6 +691,228 @@ unsafe fn paint(window: *mut c_void, why: &'static std::ffi::CStr) {
     unsafe {
         ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"unlockAndPost rc=%d painted=%d".as_ptr(), pr, painted as c_int)
     };
+}
+
+// ── 输入运输面（本帧第二件）─────────────────────────────────────────────────
+
+/// 输入线程自己的 looper，发布出来只为一个用途：**主线程能叫醒它**。读不到（线程还没起来）
+/// 就什么都不做——线程起来后的第一件事是看一眼 `INPUT_QUEUE`，所以"队列先创建、线程后起来"
+/// 那一格不会丢事件，只会晚一轮 poll（≤ `POLL_TIMEOUT_MS`）。
+#[cfg(target_os = "android")]
+static LOOPER: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// 线程只起一次：一次进程里 `onInputQueueCreated` 可以来好几回（活动重建、配置变更），而
+/// looper 是**线程局部**的——多起一条线程就多一个 looper，队列会被 attach 到不知道哪一条上，
+/// 表现是"有时点得动有时点不动"。
+#[cfg(target_os = "android")]
+static INPUT_STARTED: std::sync::Once = std::sync::Once::new();
+
+/// 四个计数只为日志那一行存在：**判定不看它们**。留这一格是因为"运输断了"与"运输到了但
+/// 引擎拒了"在屏上长得一模一样（都是没反应），只有这几个数分得开。
+#[cfg(target_os = "android")]
+static COUNT: Counters = Counters {
+    events: std::sync::atomic::AtomicU32::new(0),
+    judged: std::sync::atomic::AtomicU32::new(0),
+    skipped: std::sync::atomic::AtomicU32::new(0),
+    foreign: std::sync::atomic::AtomicU32::new(0),
+    pre_dispatched: std::sync::atomic::AtomicU32::new(0),
+};
+
+#[cfg(target_os = "android")]
+struct Counters {
+    events: std::sync::atomic::AtomicU32,
+    /// MOTION 且落在三档（DOWN/UP/CANCEL）里、真进了 `Live::on_touch` 的那些。
+    judged: std::sync::atomic::AtomicU32,
+    /// MOTION 但本帧不建模（MOVE/POINTER_*/SCROLL/HOVER_*…）——**仍然要 finishEvent**，
+    /// 不然平台等不到回话就报 "input dispatching timed out"（那是 ANR 那一族的文案）。
+    skipped: std::sync::atomic::AtomicU32,
+    /// 非 MOTION（KEY/FOCUS/CAPTURE/DRAG/TOUCH_MODE）：本壳不接键盘，原样交回平台。
+    foreign: std::sync::atomic::AtomicU32,
+    /// `preDispatchEvent` 返回非 0 的次数：那条要求"放弃这条、让它重新回到队列"，不许 finish。
+    /// 一个没有输入法的原生窗口本该恒 0，真跳起来了就是我对那半句读错了。
+    pre_dispatched: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(target_os = "android")]
+fn bump(which: &std::sync::atomic::AtomicU32) {
+    which.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 队列变了就叫线程回来看一眼。`ALooper_wake` 是线程安全的（头里明写它可以被别的线程调），
+/// 这也是本壳不用自己那条管道（eventfd/condvar）的原因：平台已经给了一条。
+#[cfg(target_os = "android")]
+unsafe fn wake_input() {
+    let looper = LOOPER.load(Ordering::Acquire);
+    if !looper.is_null() {
+        unsafe { ndk::ALooper_wake(looper) };
+    }
+}
+
+#[cfg(target_os = "android")]
+unsafe fn start_input_thread() {
+    INPUT_STARTED.call_once(|| {
+        // 起线程失败是系统边界（线程数/内存），如实报告、不重试：重试只会再失败一次。
+        match std::thread::Builder::new().name("midline-input".to_string()).spawn(|| unsafe { input_loop() }) {
+            Ok(_) => note(c"input thread started"),
+            Err(_) => warn(c"input thread spawn FAILED — touches will not arrive"),
+        }
+    });
+}
+
+/// 线程正文。**attach/detach/排空都发生在这一条线程上**（只有它有自己的 looper），
+/// 而窗口的绘制仍可以在这里发生——那件事由 `PAINT` 锁与主线程分先后。
+#[cfg(target_os = "android")]
+unsafe fn input_loop() {
+    let looper = unsafe { ndk::ALooper_prepare(LOOPER_ALLOW_NON_CALLBACKS) };
+    if looper.is_null() {
+        warn(c"ALooper_prepare returned NULL — no input this process");
+        return;
+    }
+    LOOPER.store(looper, Ordering::Release);
+    let mut attached: *mut c_void = std::ptr::null_mut();
+    let (mut fd, mut events) = (0 as c_int, 0 as c_int);
+    let mut data: *mut c_void = std::ptr::null_mut();
+    loop {
+        let want = INPUT_QUEUE.load(Ordering::Acquire);
+        if want != attached {
+            if !want.is_null() {
+                // callback 传 `None` ⇒ 这一路是 ident 轮询，不是回调（见 `LOOPER_ALLOW_NON_CALLBACKS`）。
+                unsafe { ndk::AInputQueue_attachLooper(want, looper, ID_INPUT, None, std::ptr::null_mut()) };
+                unsafe {
+                    ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"input attach queue=%p ident=%d".as_ptr(), want, ID_INPUT)
+                };
+            }
+            // `want` 为空这一支**不在这里 detach**：销毁那次已经在回调里 detach 过了（头里的
+            // 「upon returning from this function」那条硬约束），这里再碰它就是碰已释放的对象。
+            attached = want;
+        }
+        let r = unsafe { ndk::ALooper_pollOnce(POLL_TIMEOUT_MS, &mut fd, &mut events, &mut data) };
+        if r == POLL_ERROR {
+            warn(c"ALooper_pollOnce ERROR — looper dead");
+        }
+        // 不看 `r` 的档位决定排不排空：头里那句「you *must* treat all return values as if they also
+        // indicate ALOOPER_POLL_WAKE」就是这条。按 ident 分支只用于**日志**说清这次为什么醒。
+        if r >= 0 && r != ID_INPUT {
+            unsafe {
+                ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"unexpected looper ident=%d fd=%d events=%d".as_ptr(), r, fd, events)
+            };
+        }
+        if !attached.is_null() {
+            unsafe { drain(attached) };
+        }
+    }
+}
+
+/// 把当前这一批事件读干净。**每条从 `getEvent` 出来的都必须走到 `finishEvent`**（预派发那次除外），
+/// 头里那句 "This must be called after receiving an event" 不是风格：漏了它平台会一直等回话，到超时
+/// 那一刻 logcat 打出 "Input dispatching timed out"——超时那一档**本机现读 10000 ms**（不是常引的 5 s，
+/// 负样本那次系统打的字面就是 Waited 10000ms）。这是本壳最容易犯也最难自己发现的一种坏。
+#[cfg(target_os = "android")]
+unsafe fn drain(queue: *mut c_void) {
+    loop {
+        // 每轮现读：销毁回调已经把 `INPUT_QUEUE` 清空时立刻停手，别去碰一条正在被拆的队列。
+        if INPUT_QUEUE.load(Ordering::Acquire) != queue {
+            note(c"input queue vanished mid-drain — stop");
+            return;
+        }
+        let has = unsafe { ndk::AInputQueue_hasEvents(queue) };
+        if has < 0 {
+            unsafe { ndk::__android_log_print(LOG_ERROR, TAG.as_ptr(), c"hasEvents=%d".as_ptr(), has) };
+            return;
+        }
+        if has == 0 {
+            return;
+        }
+        let mut event: *mut c_void = std::ptr::null_mut();
+        let gr = unsafe { ndk::AInputQueue_getEvent(queue, &mut event) };
+        if gr < 0 || event.is_null() {
+            unsafe { ndk::__android_log_print(LOG_ERROR, TAG.as_ptr(), c"getEvent=%d".as_ptr(), gr) };
+            return;
+        }
+        bump(&COUNT.events);
+        if unsafe { ndk::AInputQueue_preDispatchEvent(queue, event) } != 0 {
+            // 非 0 ⇒ 这条被交出去（输入法那类）预派发了，头里要求**放弃当前处理**且不 finish，
+            // 让它下一轮重新出现在队列里。所以这里直接回轮询，不是 break 掉排空就算完。
+            bump(&COUNT.pre_dispatched);
+            return;
+        }
+        let handled = unsafe { dispatch(event) };
+        unsafe { ndk::AInputQueue_finishEvent(queue, event, handled as c_int) };
+    }
+}
+
+/// 一条事件 → 要么进 `Live::on_touch`，要么如实归到某一档计数。返回 `handled`。
+/// 交回 0 的那些（非 MOTION、本帧不建模的 action）不是"丢了"——是"本壳不接，平台可继续派"。
+#[cfg(target_os = "android")]
+unsafe fn dispatch(event: *mut c_void) -> bool {
+    let kind = unsafe { ndk::AInputEvent_getType(event) };
+    if kind != EVENT_TYPE_MOTION {
+        bump(&COUNT.foreign);
+        return false;
+    }
+    let raw = unsafe { ndk::AMotionEvent_getAction(event) };
+    let action = raw & ACTION_MASK;
+    let multi = unsafe { ndk::AMotionEvent_getPointerCount(event) };
+    let act = match action {
+        ACTION_DOWN => crate::input::Action::Down,
+        ACTION_UP => crate::input::Action::Up,
+        ACTION_CANCEL => crate::input::Action::Cancel,
+        // MOVE/POINTER_DOWN/POINTER_UP/SCROLL/HOVER_*…：本帧不立多指与拖拽那条手势（档面 §1 裁掉的那格）。
+        // 计数、不判——它们的正确结局是"什么也不做"，但仍要走 finishEvent。
+        _ => {
+            bump(&COUNT.skipped);
+            unsafe {
+                ndk::__android_log_print(
+                    LOG_INFO, TAG.as_ptr(),
+                    c"touch action=%d (masked=%d) pointers=%u — not modeled".as_ptr(),
+                    raw, action, multi as u32,
+                )
+            };
+            return true;
+        }
+    };
+    // 只读第一指。`getX/getY` 的坐标系是**接收这个事件的那个窗口**，而我们的缓冲就是这个窗口的
+    // 像素，所以这里不做任何换算——换算住在 `input::Geom`（正向、与绘制同一支 `at`）。
+    // `float` 取整用 `round`：手指落在两像素缝上时，"看见的那格"由绘制侧的取整决定，这里要跟它同档。
+    let x = unsafe { ndk::AMotionEvent_getX(event, 0) }.round() as c_int;
+    let y = unsafe { ndk::AMotionEvent_getY(event, 0) }.round() as c_int;
+    if multi > 1 {
+        // 第二指及以上：如实说出来（本帧不判它），症状"多指时单指判定漂"就靠这一行辨认。
+        unsafe {
+            ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"touch has %u pointers — first only".as_ptr(), multi as u32)
+        };
+    }
+    bump(&COUNT.judged);
+    touch(act, x, y)
+}
+
+/// 判定 + 重画。**判定住在 `input.rs`**（host 侧对撞引的是同一份源码），这里只做三件事：
+/// 拿到那一行的结论、把它打进 logcat、叫一次绘制。
+#[cfg(target_os = "android")]
+fn touch(act: crate::input::Action, x: c_int, y: c_int) -> bool {
+    let line = {
+        let mut guard = SCENE.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(scene) = guard.as_mut() else {
+            warn(c"touch before scene — nothing to hit");
+            return false;
+        };
+        scene.live.on_touch(act, x, y).log_line()
+    };
+    // `%s` ＋ `CString`：日志正文里有中文、有引号、也可能有 `%`，把它当格式串是把内容交给格式串
+    // 那一族漏洞——这里内容只可能是 `%s` 的参数。
+    match std::ffi::CString::new(line) {
+        Ok(s) => {
+            unsafe { ndk::__android_log_print(LOG_INFO, TAG.as_ptr(), c"input %s".as_ptr(), s.as_ptr()) };
+        }
+        Err(_) => warn(c"input log line is not valid UTF-8/C"),
+    }
+    let window = WINDOW.load(Ordering::Acquire);
+    if window.is_null() {
+        warn(c"touch judged but no window to paint");
+        return true;
+    }
+    unsafe { paint(window, c"frame-touch") };
+    true
 }
 
 

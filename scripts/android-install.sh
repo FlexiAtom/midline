@@ -32,8 +32,12 @@ set -euo pipefail
 PKG="com.flexiatom.midline"
 REF_W=720
 REF_H=1600
-BUBBLE_X=678; BUBBLE_Y=789          # Touch Tool 的「密码」气泡中心（实测 crop 定位）
-BUBBLE_PROBE_X=660; BUBBLE_PROBE_Y=770  # 气泡内一点，用来验"气泡在位"
+# 「密码」气泡是**悬浮窗**，人可以在屏幕上拖走它，所以这几格坐标没有长期真值——只有"最近一次量到"的真值。
+# 2026-10-13 装机前探测失败（(660,770) 读到 #485871），screencap 重量得气泡已挪到左上：
+# 圆内 x 229..304 / 中心 (266,42)，探测点取 (240,42)（离字面「密码」那两字远一格，仍是 #F7F9FF）。
+# 挪回来或再挪走都会再红一次；红了按这条口径重量，**不许改成无条件点**（那是替人开 App）。
+BUBBLE_X=266; BUBBLE_Y=42            # Touch Tool 的「密码」气泡中心（2026-10-13 重量的 crop 定位）
+BUBBLE_PROBE_X=240; BUBBLE_PROBE_Y=42  # 气泡内一点，用来验"气泡在位"
 GATE1_X=307; GATE1_Y=1503; GATE1_C=#F0F0F0
 GATE2_X=619; GATE2_Y=1192; GATE2_C=#FFFFFF
 GATE3_X=613; GATE3_Y=1480; GATE3_C=#3482FF

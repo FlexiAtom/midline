@@ -36,4 +36,5 @@ include!("engine-mods.rs");
 
 mod entry;
 mod frame;
+mod input;
 mod text;

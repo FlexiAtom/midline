@@ -52,9 +52,10 @@ run() { local o r; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）
 #    于是这类静默 no-op 与 ① 一样在预检里当场喊，不必等整族、也不必靠人读日志。
 py() { local e rc before after; before="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/src/*.rs "$D"/doc.md 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ -n "$before" ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何字节"; return 0; }
 
-# ===== 壳侧三条 lane（M167–M169）=====
-# 上面 167 条量的是**引擎语义**；这三条量的是 第十八步·其一 收尾时那三则只能手工跑的负样本——
-# 像素走步（text.rs 的 stride）、色值检本身有没有牙（守门检 §8）、指令摘要吃不吃位置（frame_digest）。
+# ===== 壳侧五条 lane（M167–M172）=====
+# 上面 167 条量的是**引擎语义**；这几条量的是 第十八步·其一／其四 收尾时那几则只能手工跑的负样本——
+# 像素走步（text.rs 的 stride）、色值检本身有没有牙（守门检 §8）、指令摘要吃不吃位置（frame_digest）、
+# 命中换算用不用绘制侧那把尺（input:: 的 to_dev 与 feed）、布局尺自己撞不撞得动 NDK 真头（layout_check.c）。
 # 它们的检面不在主仓 src/ 里，所以 D 那份副本必须**保形**：`#[path]` 按「声明所在文件的目录」解析
 # （engine-mods.rs 里那句 ../../src/），探针再从 probes/host-frame 往上引壳——少拷一层就是一片红，
 # 而那红与变异无关，是口径坏了。所以凡壳侧拷不全、或字体不在（它由 scripts/android-font.sh 产、
@@ -68,15 +69,18 @@ restore_shell() {
     && cp "$ROOT"/shell-android/Cargo.toml "$ROOT"/shell-android/Cargo.lock "$D/shell-android/" \
     && cp "$ROOT"/shell-android/.cargo/config.toml "$D/shell-android/.cargo/" \
     && cp "$ROOT"/shell-android/src/*.rs "$D/shell-android/src/" \
+    && cp "$ROOT"/shell-android/layout_check.c "$D/shell-android/" \
     && cp "$ROOT"/probes/host-frame/Cargo.toml "$ROOT"/probes/host-frame/Cargo.lock "$D/probes/host-frame/" \
     && cp "$ROOT"/probes/host-frame/src/main.rs "$D/probes/host-frame/src/" \
     && cp "$ROOT"/build/assets/fonts/ui.otf "$D/build/assets/fonts/" 2>/dev/null
   [ -f "$D/shell-android/src/frame.rs" ] || SHELL_FAIL="壳侧源码没拷进副本"
+  [ -f "$D/shell-android/layout_check.c" ] || SHELL_FAIL="${SHELL_FAIL:+$SHELL_FAIL；}布局尺那份 .c 没拷进副本"
   [ -f "$D/probes/host-frame/src/main.rs" ] || SHELL_FAIL="${SHELL_FAIL:+$SHELL_FAIL；}探针没拷进副本"
   [ -f "$D/build/assets/fonts/ui.otf" ] || SHELL_FAIL="${SHELL_FAIL:+$SHELL_FAIL；}字体 build/assets/fonts/ui.otf 不在（先跑 scripts/android-font.sh）"
 }
 # pys()＝壳侧版 py()：no-op 那面牙取的是**壳**那份字节和——这三条不碰主仓 src，照 py() 的口径会当场假喊 no-op
-pys() { local e rc before after; before="$(cat "$D"/shell-android/src/*.rs 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/shell-android/src/*.rs 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何壳侧字节"; return 0; }
+# 和里带上 layout_check.c：M172 打的正是那份 .c，只 glob src/*.rs 会把它读成 no-op（那仍是喊、不是漏，但喊的是错原因）
+pys() { local e rc before after; before="$(cat "$D"/shell-android/src/*.rs "$D"/shell-android/layout_check.c 2>/dev/null | cksum)"; e="$(python3 -c "$1" 2>&1)"; rc=$?; after="$(cat "$D"/shell-android/src/*.rs "$D"/shell-android/layout_check.c 2>/dev/null | cksum)"; [ -n "$e" ] && printf '%s\n' "$e" | sed "s#$D#<D>#g"; [ "$rc" -ne 0 ] && PATCH_FAIL="python exit=$rc"; [ "$rc" -eq 0 ] && [ "$before" = "$after" ] && PATCH_FAIL="no-op：补丁跑通却没改变任何壳侧字节"; return 0; }
 shout() { if [ -n "$SHELL_FAIL" ]; then printf '!! 壳侧 lane 没有落点（%s）⇒ 下面不算读数\n' "$SHELL_FAIL"; return 1; fi; if [ -n "$PATCH_FAIL" ]; then printf '!! 补丁失败（%s）⇒ 这条没有打到码，读数一律不算落点\n' "$PATCH_FAIL"; return 1; fi; return 0; }
 # 探针 lane：host-frame 自带「填充列必须一格未动」那道检（main.rs:93–111），**不吃真机也不吃截屏**就能红
 # 这里那两个数是**步长填充的证人**，不是当前机型形状：本帧挖孔区那格之后真机现读已是
@@ -90,11 +94,23 @@ crun() { shout || return 0; local o rc; o="$(python3 "$ROOT/scripts/color-litera
 # 壳测 lane：只过 frame::——在壳里跑整族会连同那 41 条 `#[path]` 引擎测一起红（CARGO_MANIFEST_DIR 变了），
 # 那个数与这条变异无关，是假数（第十八步·其一 的 README 条目里已经写明同一条口径）
 frun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q frame:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
+# 壳侧输入 lane（M170–M171）：同一套口径，过滤词换成 input::（现量 14 条，其中那 12 个钉住的读数是 其四 补的）。
+# 它必须与 frun 分开：整族在 $D 里跑会连那 41 条 `#[path]` 引擎测一起红（CARGO_MANIFEST_DIR 变了），
+# 那个数与变异无关，是口径坏了——照 frun 那条注释同一个理由，只是过滤词不同。
+irun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q input:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
+# 布局尺 lane（M172）：拿 NDK 真头**只编不链不跑**那一步，与守门检 §6 同一支 clang、同一份 .c。
+# 路径是第二处副本（scripts/shell-export-surface.sh:29–31 是第一处），这条不并进那个脚本因为那八节
+# 每节都要重建整壳（约十秒×2 侧），而这里只需要一次 -c。两处漂移的后果不同：这里漂了是
+# 「找不到 NDK clang」当场喊「没有落点」，不会静默转绿——所以宁可留这一句注释而不造第二个真值语义。
+NDK="${ANDROID_NDK_HOME:-/opt/android-ndk}"
+CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+grun() { shout || return 0; if [ ! -x "$CLANG" ]; then printf '!! 找不到 NDK clang：%s ⇒ 这条没有落点，别当"没红"读\n' "$CLANG"; return 0; fi; local o rc; o="$("$CLANG" --sysroot="$SYSROOT" -c -o "$D/layout-check.o" "$D/shell-android/layout_check.c" 2>&1)"; rc=$?; [ -n "$o" ] && printf '%s\n' "$o" | sed "s#$D#<D>#g" | tail -6; printf 'rc=%s\n' "$rc"; }
 
 echo "### M0 对照（不打补丁，应全绿）"; restore; run
-# 壳侧三条 lane 的零位（M167–M169 的对照）：探针 rc=0、色值检 rc=0、frame:: 全绿。
-# 这三格里任何一格自己就红，说明副本没保形或字体不在——那 M167–M169 的读数全是假的，先修口径。
-echo "### M0b 壳侧对照（不打补丁：探针 rc=0／色值检 rc=0／frame:: 全绿）"; restore_shell; srun; crun; frun
+# 壳侧五条 lane 的零位（M167–M172 的对照）：探针 rc=0、色值检 rc=0、frame:: 与 input:: 全绿、布局尺编得过。
+# 这几格里任何一格自己就红，说明副本没保形或字体不在——那 M167–M172 的读数全是假的，先修口径。
+echo "### M0b 壳侧对照（不打补丁：探针 rc=0／色值检 rc=0／frame:: 与 input:: 全绿／布局尺编得过）"; restore_shell; srun; crun; frun; irun; grun
 echo "### M1 抹掉 md:452 的两处行尾锚点 ⇒ 应红在 §十二 推导器（漏登记）"
 restore; py "
 import re,glob
@@ -1440,3 +1456,27 @@ a='for v in [*x, *y, *w, *h, *radius] {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'for v in [0, *y, *w, *h, *radius] {'))"
 frun
+
+echo "### M170 把命中框的换算从「与绘制侧共用 dev_rect」换成看着更准的那写法——两端各问一次 at 再取差（to_dev 里那两行换成四个 at 加两次减法，两个起点一个不动）⇒ 实测壳测 input:: 十四条里红一条，红在按读数钉的那条 the_hit_rect_is_the_painted_rect，报「差一格的控件共 6 块」：PlayerCell 四块的命中框高 72、画出来是 73（画出的最后一行点不着），Hand(1) Hand(2) 两块的命中框宽 96、画出来是 95（多出来那一列是两块牌之间的空档，按下去却选中一张牌）。另外 13 条全绿，包括逐格扫像素那条 every_drawn_pixel_of_a_control_hits_that_control 与中心点那条 the_tap_lands_on_the_cell_that_was_drawn_there——这两把尺把命中矩形**现算出来再比给自己**，两边一起漂就照绿，所以这一格只能由**读数**那条钉；这也是本帧把那颗尺从现算改成 12 个钉住数字的全部原因，少了它这条变异在电池里是静默假绿。起点仍走 at，所以中心点永远点得着、真机上随手一下也过得去——症状只有边缘那一格，正是这类换算最容易被顺手改错的地方。本机型 k=0.7003891 现读：round(o+（x+w）·k) 与 round(o+x·k)+round(w·k) 在小数落两侧不同档时差一格，12 块控件有 6 块落在不同档"
+restore_shell; pys "
+p='$D/shell-android/src/input.rs'; s=open(p,encoding='utf8').read()
+a='        let [x, y, w, h] = frame::dev_rect(&self.scale, r.x, r.y, r.w, r.h);\n        Rect::new(x, y, w, h)'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        let s = self.scale;\n        let (x0, x1) = (s.at(s.off_x, r.x), s.at(s.off_x, r.x + r.w));\n        let (y0, y1) = (s.at(s.off_y, r.y), s.at(s.off_y, r.y + r.h));\n        Rect::new(x0, y0, x1 - x0, y1 - y0)'))"
+irun
+
+echo "### M171 让壳自己编一句拒绝理由（feed 里 Exec::Refused 那一支不再搬引擎那句，改成塞一条自造的短语，四支分派与产出的行一字不动）⇒ 实测壳测 input:: 十四条里红三条：every_tap_pair_reaches_the_engine_and_answers_in_its_own_words（要求把**引擎原话**带回来的那对点按）、a_refused_line_is_the_engines_own_words（拒绝理由必须与引擎同字）、the_log_line_names_the_action_coords_the_region_and_the_answer（日志正文里要出现那句业力）。先炸的那条报「装机帧那一发的现读答复漂了」，left 是壳自造那句、right 是引擎原话「业力不足：需5，当前0」。这条量的是本模块第三条口径线「合法性一律交回引擎」：症状不是崩溃也不是画错，而是屏上出现一句**引擎没说过**的话——那种坏永远骗得过编译、骗得过对撞的摘要，因为帧内容压根没变。真机那一格同一句是有的：装机帧那桌现读答复就是「业力不足：需5，当前0」，写进测里的那条 assert 与它同字"
+restore_shell; pys "
+p='$D/shell-android/src/input.rs'; s=open(p,encoding='utf8').read()
+a='            Exec::Refused(e) => Fed::Refused(e),'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            Exec::Refused(_) => Fed::Refused(\"这里壳自己编了一句，不是引擎的原话\".into()),'))"
+irun
+
+echo "### M172 把布局尺里那条事件类型断言的期望值改成网上教程那个数（AINPUT_EVENT_TYPE_MOTION 由 2 抄成 1，NDK 真头里它仍是 2）⇒ 实测 aarch64 clang 一次 -c 就 rc=1，报「event type MOTION」那条 _Static_assert 失败。这条量的不是 Rust 侧的码，是那**第二道尺自己有没有牙**：entry.rs 里那批 offset_of! 只能证自洽，而这一格证的是「拿人家真头比一次」这条路真的会红。少它的后果是这一帧新抄的那二十来个数字里，只要有一条与头不符（MOTION 与 KEY 撞档是最常见的一次），症状就是**手指按下去而屏上什么都不动**——编译、链接、启动、乃至那 14 条纯逻辑测全绿，只有真机能看见，而真机那一格进不了电池"
+restore_shell; pys "
+p='$D/shell-android/layout_check.c'; s=open(p,encoding='utf8').read()
+a='_Static_assert(AINPUT_EVENT_TYPE_MOTION == 2, '
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'_Static_assert(AINPUT_EVENT_TYPE_MOTION == 1, '))"
+grun

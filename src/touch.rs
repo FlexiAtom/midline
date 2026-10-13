@@ -33,8 +33,10 @@
 //! 规则锚：本模块**不写**文档锚点，理由与 `canvas`／`tui` 相同——几何与手势不新增任何规则真值，
 //! 写锚会去动反向覆盖尺的生产面读数。
 //!
-//! 运输（安卓输入队列 → 这里的 `press`／`release`）**不在本帧**：那是这一格里设备无关之外的另一半，
-//! 要先把 `ANativeActivity` 那个 `AInputQueue` 接成事件。本帧先把"事件来了该变成哪一行"定死。
+//! 运输（安卓输入队列 → 这里的 `press`／`release`）落在第十八步·其四，档面
+//! `working/shell-input-queue-to-command-loop.md`，代码住 `shell-android/src/input.rs`。
+//! 它调的是**两条边**而不是 `tap`：真事件本来就是 DOWN 与 UP 分开到的，`tap` 那支"按下与抬起同点"
+//! 只是测与便利入口。
 
 use crate::md3::{layout, state, typo};
 use crate::view::{Board, CardView};
@@ -57,7 +59,7 @@ impl Rect {
         Rect { x, y, w, h }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列（运输那半）；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) const fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
     }
@@ -80,7 +82,7 @@ pub(crate) enum Region {
 impl Region {
     /// 这一区接不接点。判据是抬头那张词表，不是我的偏好：带坐标的命令只有落点那一条，
     /// 而落点的两个参数一个来自手牌、一个来自我方格。
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) const fn is_control(self) -> bool {
         matches!(self, Region::Hand(_) | Region::PlayerCell(_))
     }
@@ -289,7 +291,11 @@ fn hand_of(cards: &[CardView], label_y: i32, left_x: i32, content_w: i32) -> Han
 impl Layout {
     /// 全部有面积的区，按**绘制顺序**给出（后画的盖在先画的上面，所以 `hit` 从尾往头读）。
     /// 段标签、堆行那两行字、空手牌占位都不在这里：词表里没有它们的命令。
-    fn regions(&self) -> Vec<(Region, Rect)> {
+    ///
+    /// 这一张表从第十八步·其四起是 `pub(crate)`：**壳侧的命中在设备像素里比**，它要的就是这份
+    /// 绘制序（每块矩形经绘制侧那支 `Scale::at` 映上去，判据仍是同一个 `Rect::contains`）。
+    /// 让壳自己再抄一份区表，就是"画在 A 处、命中框在 B 处"那格病的新造法——序与矩形只能有一份。
+    pub(crate) fn regions(&self) -> Vec<(Region, Rect)> {
         let mut out: Vec<(Region, Rect)> = Vec::new();
         for h in &self.holders {
             out.push((h.region, h.rect()));
@@ -305,7 +311,7 @@ impl Layout {
     }
 
     /// 点在这儿 ⇒ 哪儿。取绘制序里最靠后（＝最上面）的那块。
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列（运输那半）；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "运输接的是 press／release 两条边（真事件分 DOWN／UP），这一支仍只有测在用"))]
     pub(crate) fn hit(&self, x: i32, y: i32) -> Option<Region> {
         self.regions().into_iter().rev().find(|(_, r)| r.contains(x, y)).map(|(g, _)| g)
     }
@@ -327,25 +333,25 @@ pub(crate) struct Picker {
 }
 
 impl Picker {
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列（运输那半）；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "运输接的是 press／release 两条边（真事件分 DOWN／UP），这一支仍只有测在用"))]
     pub(crate) const fn selected(&self) -> Option<usize> {
         self.selected
     }
 
     /// 按下与悬停只记态，不产命令——产命令的那一刻在抬起。
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) fn press(&mut self, at: Option<Region>) {
         self.pressed = at;
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) fn hover(&mut self, at: Option<Region>) {
         self.hovered = at;
     }
 
     /// 抬起。一次点成的判据是**按与抬落在同一区**——不同区就是拖拽，本帧不立那条手势，
     /// 所以它的正确结局是"什么都没发生"，而不是"按哪儿算哪儿"。
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) fn release(&mut self, at: Option<Region>) -> Tap {
         let pressed = self.pressed.take();
         if pressed != at {
@@ -369,8 +375,8 @@ impl Picker {
         }
     }
 
-    /// 一次完整点按（按下与抬起同点）——运输层真正会调的那一支。
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列（运输那半）；接上即删这条豁免"))]
+    /// 一次完整点按（按下与抬起同点）——把 press／release 合成一步；真运输发的是那两条边，这一支现只有测在调。
+    #[cfg_attr(not(test), expect(dead_code, reason = "运输接的是 press／release 两条边（真事件分 DOWN／UP），这一支仍只有测在用"))]
     pub(crate) fn tap(&mut self, l: &Layout, x: i32, y: i32) -> Tap {
         let at = l.hit(x, y);
         self.press(at);
@@ -379,7 +385,7 @@ impl Picker {
 
     /// 该盖哪些态层，按**优先级升序**返回（绘制侧取最后一个 ⇒ 按下压过焦点压过悬停）。
     /// 两条筛：只有控件区产层（悬到日志上不该把日志刷亮）；区查不到矩形就不产层（陈旧序号）。
-    #[cfg_attr(not(test), expect(dead_code, reason = "控件层等真机输入队列；接上即删这条豁免"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) fn marks(&self, l: &Layout) -> Vec<(Region, Layer)> {
         let mut out: Vec<(Region, Layer)> = Vec::new();
         if let Some(h) = self.hovered && h.is_control() {

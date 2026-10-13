@@ -123,16 +123,24 @@ say "  NEEDED 现量：$need"
 say "== 6. 布局尺（第二道）：拿 NDK 真头做 _Static_assert =="
 # entry.rs 那批 offset_of! 只能证明"我自己的声明自洽"；换序漏字段一样全绿。
 # 这一格的外部证人是 /opt/android-ndk 里的 native_activity.h／native_window.h／asset_manager.h／
-# hardware_buffer.h。只编不链不跑。
+# hardware_buffer.h／rect.h，从第十八步·其四 起再加 input.h／looper.h。只编不链不跑。
 # 本机 NDK sysroot **没有** `system/graphics.h`（那是平台源码那侧的路径），像素枚举要从
 # `android/hardware_buffer.h` 取——写错那张头时整格是"编不过"而不是"断言失败"，读日志要分清这两者。
+# 输入侧那三个句柄在头里是**不完整类型**，没有 offsetof 可量，所以这格换成钉两样：
+# 数字的值（事件类型、action 档与掩码、looper 常量）＋ 每条原型的形状（`typeof(&fn)` 整体比）。
+# 不钉它的后果有一条是已知的：`AINPUT_EVENT_TYPE_MOTION` 网上常写成 1（那是 KEY），抄错就
+# 是"点了没反应而编译链接启动全绿"，只有真机能看见——而真机那一格本来就没法进电池。
 if [ -x "$CLANG" ]; then
   if "$CLANG" --sysroot="$SYSROOT" -c -o "$LOGDIR/layout-check.o" "$SHELL_DIR/layout_check.c" 2>"$LOGDIR/layout-check.log"; then
+    n_input=$(grep -c "AInputQueue_\|AMotionEvent_\|AInputEvent_getType\|ALooper_" "$SHELL_DIR/layout_check.c")
+    n_shape=$(grep -cE "typeof\(&A(InputQueue|Looper|InputEvent|MotionEvent)_" "$SHELL_DIR/layout_check.c")
     ok "layout_check.c 对 NDK 头通过：ANativeActivity=80B／Callbacks=128B／16 条回调偏移；
        ANativeWindow_Buffer=48B（width0 height4 stride8 format12 bits16 reserved24）；
        ARect=16B（left0 top4 right8 bottom12，四个 int32 无填充）；
        像素枚举 RGBA8888=1 RGBX8888=2 RGB888=3 RGB565=4；AASSET_MODE_BUFFER=3；
-       off_t=8B／getLength→off_t／read→int"
+       off_t=8B／getLength→off_t／read→int；
+       输入侧 $n_input 行：事件类型 1–6／action 0–12 与 MASK=0xff／looper 常量与回调类型／
+       $n_shape 条原型形状（getEvent→AInputEvent**、getX/Y 带 pointer_index 且返回 float）"
   else
     red "layout_check.c 与 NDK 头对不上——抄写错了或 NDK 换了 ABI："; sed 's/^/      /' "$LOGDIR/layout-check.log" | head -12
   fi

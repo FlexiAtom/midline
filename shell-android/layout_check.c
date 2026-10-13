@@ -101,3 +101,98 @@ _Static_assert(AASSET_MODE_BUFFER == 3, "AASSET_MODE_BUFFER");
 _Static_assert(sizeof(off_t) == 8, "off_t width on this ABI");
 _Static_assert(__builtin_types_compatible_p(typeof(AAsset_getLength(NULL)), off_t), "getLength returns off_t");
 _Static_assert(__builtin_types_compatible_p(typeof(AAsset_read(NULL, NULL, 0)), int), "read returns int");
+
+/* ── 输入运输面（第十八步·其四）──────────────────────────────────────────────
+ * entry.rs 这一帧新抄了 12 个函数与 20 来个数字。三个句柄 `AInputQueue`／`ALooper`／
+ * `AInputEvent` 在头里都是**不完整类型**（`typedef struct AInputQueue AInputQueue;`），
+ * 所以这里没有 `offsetof` 可量——能量的两样是：数字本身的值，和每条原型的**形状**
+ * （返回类型＋参数表，整体比一次）。Rust 侧一律写成 `*mut c_void`，那是"不透明指针按指针传"
+ * 的约定，宽度由下面那三行 sizeof 钉住；形状由 `typeof(&fn)` 钉住，二者合起来才覆盖
+ * "我抄的那条声明"这件事。
+ * 为什么必须在这格开口：`AINPUT_EVENT_TYPE_MOTION` 网上教程常写成 1（那是 KEY），
+ * 抄错的话 `getType` 永远不等于我那个常数，症状是"点了没反应"——编译、链接、启动全绿，
+ * 只有真机上什么都不动。那是最难自己发现的一种坏，而这里一行就能拦住。 */
+#include <android/input.h>
+#include <android/looper.h>
+
+/* 三句柄都是不透明指针：本壳只转交、不解引用，所以尺寸唯一要紧（8 字节＝上面那条 aarch64 前提）。 */
+_Static_assert(sizeof(AInputQueue*) == 8, "AInputQueue handle width");
+_Static_assert(sizeof(ALooper*) == 8, "ALooper handle width");
+_Static_assert(sizeof(AInputEvent*) == 8, "AInputEvent handle width");
+
+/* 事件类型：1=KEY、2=MOTION。entry.rs 里 `EVENT_TYPE_MOTION` 那个 2 就靠这三行作证。 */
+_Static_assert(AINPUT_EVENT_TYPE_KEY == 1, "event type KEY");
+_Static_assert(AINPUT_EVENT_TYPE_MOTION == 2, "event type MOTION");
+_Static_assert(AINPUT_EVENT_TYPE_FOCUS == 3, "event type FOCUS");
+_Static_assert(AINPUT_EVENT_TYPE_CAPTURE == 4, "event type CAPTURE");
+_Static_assert(AINPUT_EVENT_TYPE_DRAG == 5, "event type DRAG");
+_Static_assert(AINPUT_EVENT_TYPE_TOUCH_MODE == 6, "event type TOUCH_MODE");
+
+/* action 的低位掩码与那十三档。`ACTION_MASK` 抄成 0xff00 会把每条事件都读成 action 0，
+ * 抄成 0xff00 之外的任何值都会让 DOWN/UP 分不清——这两行是本帧"按下/抬起"全部的证人。 */
+_Static_assert(AMOTION_EVENT_ACTION_MASK == 0xff, "action mask");
+_Static_assert(AMOTION_EVENT_ACTION_POINTER_INDEX_MASK == 0xff00, "pointer index mask");
+_Static_assert(AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT == 8, "pointer index shift");
+_Static_assert(AMOTION_EVENT_ACTION_DOWN == 0, "action DOWN");
+_Static_assert(AMOTION_EVENT_ACTION_UP == 1, "action UP");
+_Static_assert(AMOTION_EVENT_ACTION_MOVE == 2, "action MOVE");
+_Static_assert(AMOTION_EVENT_ACTION_CANCEL == 3, "action CANCEL");
+_Static_assert(AMOTION_EVENT_ACTION_OUTSIDE == 4, "action OUTSIDE");
+_Static_assert(AMOTION_EVENT_ACTION_POINTER_DOWN == 5, "action POINTER_DOWN");
+_Static_assert(AMOTION_EVENT_ACTION_POINTER_UP == 6, "action POINTER_UP");
+_Static_assert(AMOTION_EVENT_ACTION_HOVER_MOVE == 7, "action HOVER_MOVE");
+_Static_assert(AMOTION_EVENT_ACTION_SCROLL == 8, "action SCROLL");
+_Static_assert(AMOTION_EVENT_ACTION_HOVER_ENTER == 9, "action HOVER_ENTER");
+_Static_assert(AMOTION_EVENT_ACTION_HOVER_EXIT == 10, "action HOVER_EXIT");
+_Static_assert(AMOTION_EVENT_ACTION_BUTTON_PRESS == 11, "action BUTTON_PRESS");
+_Static_assert(AMOTION_EVENT_ACTION_BUTTON_RELEASE == 12, "action BUTTON_RELEASE");
+
+/* looper 那四个负数与两个 1<<0：`POLL_ERROR` 若与 `POLL_WAKE` 撞档，日志里"looper 死了"
+ * 那句就会在每次正常唤醒时打出来（那是假红）；`ID_INPUT` 则受头里那句「must be >= 0」约束，
+ * 这里把它与 `ALOOPER_POLL_CALLBACK` 的负数档分开钉。 */
+_Static_assert(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS == (1 << 0), "prepare opts");
+_Static_assert(ALOOPER_EVENT_INPUT == (1 << 0), "poll event INPUT");
+_Static_assert(ALOOPER_POLL_WAKE == -1, "poll WAKE");
+_Static_assert(ALOOPER_POLL_CALLBACK == -2, "poll CALLBACK");
+_Static_assert(ALOOPER_POLL_TIMEOUT == -3, "poll TIMEOUT");
+_Static_assert(ALOOPER_POLL_ERROR == -4, "poll ERROR");
+
+/* 回调那一支的**类型**：本壳传的是 `None`（走 ident 轮询），所以这条现在没人调；
+ * 但它钉的是"我那份 Rust fn-pointer 声明长得对不对"——下一帧若要改成回调式，
+ * 这里已经有一条对得上的形状可用，不必再抄一遍。 */
+_Static_assert(__builtin_types_compatible_p(ALooper_callbackFunc, int (*)(int, int, void*)),
+               "ALooper_callbackFunc is int(int fd, int events, void* data)");
+
+/* 12 条原型整体对质：返回类型＋参数表一次比完。写错任何一处（比如把 `getEvent` 的第二参
+ * 抄成 `AInputEvent*` 而不是 `AInputEvent**`，或把 `pollOnce` 的返回从 `int` 记成 `int64_t`）
+ * 都在这格编不过。`typeof(&f)` 不求值，所以这仍是纯编译期检查。 */
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputQueue_attachLooper),
+               void (*)(AInputQueue*, ALooper*, int, ALooper_callbackFunc, void*)), "attachLooper shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputQueue_detachLooper),
+               void (*)(AInputQueue*)), "detachLooper shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputQueue_hasEvents),
+               int32_t (*)(AInputQueue*)), "hasEvents shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputQueue_getEvent),
+               int32_t (*)(AInputQueue*, AInputEvent**)), "getEvent shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputQueue_preDispatchEvent),
+               int32_t (*)(AInputQueue*, AInputEvent*)), "preDispatchEvent shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputQueue_finishEvent),
+               void (*)(AInputQueue*, AInputEvent*, int)), "finishEvent shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&ALooper_prepare),
+               ALooper* (*)(int)), "ALooper_prepare shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&ALooper_wake),
+               void (*)(ALooper*)), "ALooper_wake shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&ALooper_pollOnce),
+               int (*)(int, int*, int*, void**)), "ALooper_pollOnce shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AInputEvent_getType),
+               int32_t (*)(const AInputEvent*)), "getType shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AMotionEvent_getAction),
+               int32_t (*)(const AInputEvent*)), "getAction shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AMotionEvent_getPointerCount),
+               size_t (*)(const AInputEvent*)), "getPointerCount shape");
+/* 坐标是 `float` 且**带 pointer_index**：这条是本帧最容易静默失手的一格。把 `getX` 声明成
+ * 无参，Rust 侧照样能编过（extern 块没人校参数），读回来的却是按 vararg 那档取的寄存器值。 */
+_Static_assert(__builtin_types_compatible_p(typeof(&AMotionEvent_getX),
+               float (*)(const AInputEvent*, size_t)), "getX shape");
+_Static_assert(__builtin_types_compatible_p(typeof(&AMotionEvent_getY),
+               float (*)(const AInputEvent*, size_t)), "getY shape");
