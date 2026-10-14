@@ -863,7 +863,7 @@ a='        if !is_starter {'
 assert s.count(a)==2, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        if true {'))"
 run
-echo "### M94 往玩家手牌献祭入口塞一道在场闸，写法特意多套一圈括号（谓词外面再取反 ⇒ ③ 那句按字面匹配的调用计数读不到它，只有 ④ 那份点名读得到）⇒ 实测 **5** 红（本帧改道前那次 8 红，其中 7 条死在同一处减法溢出，那条形现在归 M133 量）：行为侧 4 条＝既有手牌额度测 hand_sacrifice_quota_only_starter_exempt（battle.rs:5828 那句开端手牌献祭要成功）＋§三 业力围栏（battle.rs:5051，献开端是 md:122 那条链的第一环）＋§四 复现测（battle.rs:5196，红在 md:153 那句豁免）＋§五 开端围栏（battle.rs:4617，md:204 那句同样被拒）；第 5 条是 §四 推导器 ④ 那份「两支手牌入口体内不碰在场闸」的点名（model.rs:4909）——这一层的读数本帧才第一次量到：④ 的签名串少了 pub 前缀，而那份收函数体的旧读法把没命中的文件静默跳过 ⇒ 两份否定式名单（md:153 那个豁免／md:160 那句「不能献敌方」）从写下那天起就在读空，断言「等于空」于是恒真。改道之前 ③ 先炸，串行 assert 把这一层整个遮住（与 M95 同口径：红字数的是测、不是层）。守卫补成 §十三 那种「每个签名在全部 src 里恰命中一次」之后这条才有牙；同一次把减法式收成一处，也把 M92 的落点从计数层换到了数层。补一句整族复跑对照（旧日志 battery_6 那 8 红逐条名单）：死的那 7 条溢出含 boss／command／meta 三把与本毫不相干的尺，改道之后那三把不再受伤，行为侧 4 条红的全是断言而不是 panic——哨兵短路买到的就是这三条无辜记录"
+echo "### M94 往玩家手牌献祭入口塞一道在场闸，写法特意多套一圈括号（谓词外面再取反 ⇒ ③ 那句按字面匹配的调用计数读不到它，只有 ④ 那份点名读得到）⇒ 实测 **5** 红（本帧改道前那次 8 红，其中 7 条死在同一处减法溢出，那条形现在归 M133 量）：行为侧 4 条＝既有手牌额度测 hand_sacrifice_quota_only_starter_exempt（battle.rs:5828 那句开端手牌献祭要成功）＋§三 业力围栏（battle.rs:5051，献开端是 md:122 那条链的第一环）＋§四 复现测（battle.rs:5196，红在 md:153 那句豁免）＋§五 开端围栏（battle.rs:4617，md:204 那句同样被拒）；第 5 条是 §四 推导器 ④ 那份「两支手牌入口体内不碰在场闸」的点名（model.rs:4909）——这一层的读数本帧才第一次量到：④ 的签名串少了 pub 前缀，而那份收函数体的旧读法把没命中的文件静默跳过 ⇒ 两份否定式名单（md:153 那个豁免／md:160 那句「不能献敌方」）从写下那天起就在读空，断言「等于空」于是恒真。改道之前 ③ 先炸，串行 assert 把这一层整个遮住（与 M95 同口径：红字数的是测、不是层）。守卫补成 §十三 那种「每个签名在全部 src 里恰命中一次」之后这条才有牙；同一次把减法式收成一处，也把 M92 的落点从计数层换到了数层。补一句整族复跑对照（旧日志 battery_6 那 8 红逐条名单）：死的那 7 条溢出含 boss／command／meta 三把与本毫不相干的尺，改道之后那三把不再受伤，行为侧 4 条红的全是断言而不是 panic——哨兵短路买到的就是这三条无辜记录。其七 复跑读数 **6** 红：多出的那条不是新靶，是 其七 D4 那条交付帧证人 the_crafted_gold_in_the_delivered_frames_comes_from_the_settlement_ring，红字与 M186／M188 同一句「打完几关的帧里读不到一块金边」——献祭闸一塞进手牌入口，收尸那步的融合就下不出去，那张自造牌根本没出生，证人从「帧上没金」这一头喊回来（定向复跑单独取到这条读数，留档 probe-m94-witness.log）。前 5 条与本抬头逐字相同；分母 265→277 是测数在长，不是落点在变"
 restore; py "
 p='$D/src/battle.rs'; s=open(p,encoding='utf8').read()
 a='        let c = self.hand.remove(idx);'
@@ -1255,7 +1255,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,''))"
 run
 
-echo "### M144 把帧文件名从写入序号改回回合数（其余一字不动）⇒ 实测 **1** 红：红在 meta 那条「每帧一格、报数与盘上文件数一致」尺＝本帧那处实测事故的牙。它红的方式很具体：Boss 炎与冰那一盘第 9 回合连着出两帧（战前、战后），改回回合数就让第二帧盖掉第一帧，于是 index.html 报 10 张而盘上只有 9 个文件。这条也是那批交付帧里唯一能**翻图复核**的一处：boss-yanbing-seed2026 的 frame-009 与 frame-010 标题同为「第 9 回合」（实测读数＝1 红，红在 meta 那条尺，报的张数与盘上文件数 9 对 10）"
+echo "### M144 把帧文件名从写入序号改回回合数（其余一字不动）⇒ 实测 **1** 红：红在 meta 那条「每帧一格、报数与盘上文件数一致」尺＝本帧那处实测事故的牙。它红的方式很具体：Boss 炎与冰那一盘第 9 回合连着出两帧（战前、战后），改回回合数就让第二帧盖掉第一帧，于是 index.html 报 10 张而盘上只有 9 个文件。这条也是那批交付帧里唯一能**翻图复核**的一处：boss-yanbing-seed2026 的 frame-009 与 frame-010 标题同为「第 9 回合」（实测读数＝1 红，红在 meta 那条尺，报的张数与盘上文件数 9 对 10）。其七 复跑读数 **2** 红：第二条还是那条交付帧证人，红在「第 1 帧不许有金边：frame-001.svg 里读到了」。定向复跑把那一格打全（留档 probe-m144-naming.log）：写入 46 帧、盘上只剩 10 个文件，因为每关的回合数都从 1 数起，第2关第1回合那一帧把第1关第1回合盖掉，而那张自造牌此时已在盘上——证人那句「第 1 帧」从此量的不再是第一次结算之前。所以这一格红的是证人的隐含前提「帧序＝写入序」，与本条原本那格「报数与盘上文件数一致」同根两面"
 restore; py "
 p='$D/src/meta.rs'; s=open(p,encoding='utf8').read()
 a='        let name = format!(\"frame-{:03}.svg\", guard);'
@@ -1516,7 +1516,7 @@ erun
 # 这两条打的都是**主仓** src/touch.rs，所以走 py()（它取的是 $D/src 那份字节和），但两条都必须跑两面：
 # 壳走 #[path] 编的就是同一份 touch.rs，而**钉住的那 13 块设备像素矩形只有壳侧看得见**。
 # 于是 M175 的落点在主仓是零——画布长高这件事主仓没有任何一把尺量得到，这是本帧读到的一条口径边界，不是漏。
-echo "### M175 给「结束回合」按钮单独划一横带（把持业者那一带的推进量再加一格 BUTTON_H＝48，按钮随之落到带下——这就是**最会被顺手写下的那版版面**，因为它让按钮看着更像一块独立控件）⇒ 实测主仓 265 条（含 18 条集成）**一条都不红**（test result: ok. 265 passed; 0 failed）；红的全在壳侧 input:: 那 15 条里，共 4 条（11 passed; 4 failed）：the_scale_and_offset_are_the_ones_the_pixels_were_drawn_with 先炸在 k 那一档「k 现读 0.6691，与写下的 0.7004 不同档」——0.6691 正是 720/1076，即钉住的那块 1028 高的画布被这一格顶到 1076；同一支测里那句「画布尺寸变了」排在 k 后面、这次没轮到（红按**测**计不按断言计，抬头别把没打印的话写成打印了），the_hit_rect_is_the_painted_rect 把**13 块全部**列出（PlayerCell(0) 实测 417,316,187,70 对画出的 400,331,196,73；按钮实测 1076,401,107,32 对 1089,420,112,34；八张手牌一起缩成 91×62），the_letterbox_and_the_boards_own_margin_are_not_targets 报「left None 对 right Some(PlayerCell(0))」——k 一掉，first_column 那一列落进外边距里，最左一格反而点不着了，the_live_first_frame_is_the_static_frame_not_a_new_one 的摘要现读 0x514dda45224cfd1d 对钉住的 0x214fb059bca0765b。剩下 11 条全绿，包括逐格扫像素那条与中心点那条：它们**现算**矩形再比给自己，两边一起漂就照绿（与 M170 同一条口径，这里再验一次）。这一格钉的是 人裁 ③ 那条裁决里最贵的一笔代价：按钮必须**零高度增长**。代价的来源是算术不是审美——本机 1600×720 上 scale_of 吃的是纵向那一档，画布每长高一格 k 就掉一格，那 13 块钉住的读数连同历轮装机的 A/B 与对撞摘要一起作废；而作废之后**没有任何一条主仓测会喊**"
+echo "### M175 给「结束回合」按钮单独划一横带（把持业者那一带的推进量再加一格 BUTTON_H＝48，按钮随之落到带下——这就是**最会被顺手写下的那版版面**，因为它让按钮看着更像一块独立控件）⇒ 实测主仓 265 条（含 18 条集成）**一条都不红**（test result: ok. 265 passed; 0 failed）；红的全在壳侧 input:: 那 15 条里，共 4 条（11 passed; 4 failed）：the_scale_and_offset_are_the_ones_the_pixels_were_drawn_with 先炸在 k 那一档「k 现读 0.6691，与写下的 0.7004 不同档」——0.6691 正是 720/1076，即钉住的那块 1028 高的画布被这一格顶到 1076；同一支测里那句「画布尺寸变了」排在 k 后面、这次没轮到（红按**测**计不按断言计，抬头别把没打印的话写成打印了），the_hit_rect_is_the_painted_rect 把**13 块全部**列出（PlayerCell(0) 实测 417,316,187,70 对画出的 400,331,196,73；按钮实测 1076,401,107,32 对 1089,420,112,34；八张手牌一起缩成 91×62），the_letterbox_and_the_boards_own_margin_are_not_targets 报「left None 对 right Some(PlayerCell(0))」——k 一掉，first_column 那一列落进外边距里，最左一格反而点不着了，the_live_first_frame_is_the_static_frame_not_a_new_one 的摘要现读 0x514dda45224cfd1d 对钉住的 0x214fb059bca0765b。剩下 11 条全绿，包括逐格扫像素那条与中心点那条：它们**现算**矩形再比给自己，两边一起漂就照绿（与 M170 同一条口径，这里再验一次）。这一格钉的是 人裁 ③ 那条裁决里最贵的一笔代价：按钮必须**零高度增长**。代价的来源是算术不是审美——本机 1600×720 上 scale_of 吃的是纵向那一档，画布每长高一格 k 就掉一格，那 13 块钉住的读数连同历轮装机的 A/B 与对撞摘要一起作废；而作废之后**没有任何一条主仓测会喊**。其七 复跑：主仓那句现在打印 277 passed; 0 failed（分母长了 12 条测），一条都不红这半句未变；壳侧那 4 红的名单、k 现读 0.6691 与 the_hit_rect 那 13 块读数一字未动，唯独摘要换了档——现读 0x5f8cce3222fbd558 对钉住的 0x5e455ded8b459152（本帧 D2 重钉那枚，定向复跑留档 probe-m175-digest.log）。这一格顺带证了一件不好证的事：摘要重钉之后这条变异照红，说明它的牙不挂在某一枚具体哈希上"
 restore_shell; py "
 p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
 a='''    let end_turn_text_y = y + layout::BUTTON_BASELINE;
@@ -1529,7 +1529,7 @@ open(p,'w',encoding='utf8').write(s.replace(a,'''    let end_turn_text_y = y + l
 run
 irun
 
-echo "### M176 把 EndTurn 从接点判据 is_control 里摘掉（词表那张判据退回「只有带坐标的两族接点」，按钮的矩形、绘制、release 里产那一行全留着）⇒ 实测主仓 265 条里红 2 条：the_regions_that_take_a_tap_are_the_regions_that_got_drawn 报「接点的区＝手牌＋我方格＋那一枚结束回合」left 9 对 right 10，the_layers_read_their_own_coefficients_and_press_wins 报「按下结束回合什么都不亮」left 空表 对 right 一条 (EndTurn, Press)。壳侧 input:: 那 15 条里红 1 条：the_hit_rect_is_the_painted_rect 的控件计数 left 12 对 right 13。**这条最要紧的一格是它不红的地方**：release 里那一支仍然产「e」那一行，所以壳侧 the_end_turn_button_turns_the_page_in_the_engine 照旧绿——手指点得动、回合翻得动，**只是按下去屏上没有任何预告**（PRESS 层不盖）。症状真机才看得见，而它既不是崩溃也不是画错位置，所以这一格由「谁盖态层」那张表与「控件有几块」那个数两面各钉一次；is_control 与 release 是两张表、必须有人钉它们别各自漂"
+echo "### M176 把 EndTurn 从接点判据 is_control 里摘掉（词表那张判据退回「只有带坐标的两族接点」，按钮的矩形、绘制、release 里产那一行全留着）⇒ 实测主仓 265 条里红 2 条：the_regions_that_take_a_tap_are_the_regions_that_got_drawn 报「接点的区＝手牌＋我方格＋那一枚结束回合」left 9 对 right 10，the_layers_read_their_own_coefficients_and_press_wins 报「按下结束回合什么都不亮」left 空表 对 right 一条 (EndTurn, Press)。壳侧 input:: 那 15 条里红 1 条：the_hit_rect_is_the_painted_rect 的控件计数 left 12 对 right 13。**这条最要紧的一格是它不红的地方**：release 里那一支仍然产「e」那一行，所以壳侧 the_end_turn_button_turns_the_page_in_the_engine 照旧绿——手指点得动、回合翻得动，**只是按下去屏上没有任何预告**（PRESS 层不盖）。症状真机才看得见，而它既不是崩溃也不是画错位置，所以这一格由「谁盖态层」那张表与「控件有几块」那个数两面各钉一次；is_control 与 release 是两张表、必须有人钉它们别各自漂。其七 复跑：分母 265→277，主仓那 2 红与壳侧那 1 红（14 passed; 1 failed）的名单与左右读数一字未变"
 restore_shell; py "
 p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
 a='        matches!(self, Region::Hand(_) | Region::PlayerCell(_) | Region::EndTurn)'
@@ -1537,3 +1537,119 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        matches!(self, Region::Hand(_) | Region::PlayerCell(_))'))"
 run
 irun
+
+# ===== 其七·版式重排 MD3 的四组牙（M177–M188）=====
+# 这四组打的都是**呈现面**：折行选断点的那三条规则（M177–M181）、帧上那对阈值（M182–M183）、
+# 边框两枚 token（M184–M185）、以及证人通路（M186–M188）。全部只改主仓 src/，所以走 py()。
+# 本帧顺手把两把尺的**自指**修掉了：形状测原先直接引用实现的 is_closer／is_opener，
+# 于是「把停顿标点从实现里摘出去」这种降级会把判据一起改口——探针实测**整族全绿**（见 M180 的抬头）。
+# 现在测自带规格侧的 spec_closer／spec_opener 两份清单（与 rule_budget 同一条口径：重抄的是规则，
+# 作用到帧上的真值仍只在实现那一处），补丁因此必须**按函数名定位**再取第一处命中——两清单同文时
+# 全串 count==2，写成 count==1 会当场 PATCH_FAIL（那是喊，不是漏，但喊的是错原因）。
+# 诚实边界：这 12 条一条都不走壳侧那六条 lane（它们只 py() 主仓 src/，日志里每条只有一行 test result）。
+# 壳面同处改动的证人另有两处：M0b 那次整族对照里的摘要钉 0x5e455ded8b459152 加 frame／input／entry 三族全绿，
+# 以及 scripts/byte-baseline.sh 那 22 行哈希面。字节面本帧两臂对撞的结果是**一行没动**（画布与像素各走自己的编码器，
+# 而 D1 的落点在折行选断点那一层——它在 17 个文本场景里结构上到不了），所以壳面这一格只有那两处兜着，别把它读成 12 条。
+echo "### M177 摘掉禁则那半条（atoms_of 里「闭符号/停顿标点**之前**不许断」那次把前一原子压成 cut=0 的钳制整块删掉，档位算法与两份清单一字不动）⇒ 实测主仓 277 条里红 1 条：the_rule_wrap_holds_its_shape_at_every_budget 现读「预算 45：行首顶标点 → ；任一根被削时另一根同步承受⌊伤害/2⌋；两根皆烛尽才算胜；30回合判定取两根中较长值」——一个分号顶在第二行行首。为什么只红一条：五句真实文案在 51 那一档恰好没有踩到（红的是扫出来的档），这条正是「扫预算、不量当前那一格」的存在理由；而另一条照绿也说明禁则与档位是**两套独立机制**：删掉钳制不影响档位选择器仍优先体面档，断点照样落在句读上。这条钉的是 D1 四条形状规则里唯一由「压前一原子」实现的那一条"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='''        if !math && is_closer(c) && let Some(prev) = out.last_mut() {
+            prev.cut = 0;
+        }
+'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M178 体面档不再优先（choose_break 的档位表从「先 2 后 1」改成只看 1）⇒ 实测主仓 277 条里红 1 条：every_rule_break_lands_on_a_pausal_boundary 现读「Yingzhang：断点落在半句里 → 特殊规则【暗渡】敌方后排卡可直接压上已占用的前排（寻常 AI 不会主动挤越线自杀，本 Boss 会）→ 前排越」——断在「前|排越」那种半截词里。**这一条是 其七 D1 与「老算法」真正的分水岭**：老算法（按字符宽度硬填）与新算法在这格上产的都是**合法**断点（四条形状规则一条不违），差别只在体面与否，故除本条之外没有任何一把尺看得见；红字单位仍是「测」不是「档」，扫预算那条此时照绿就是这件事的证据"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='''    for want in [2u8, 1] {'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    for want in [1u8] {'))"
+run
+
+echo "### M179 超长 ASCII 串不切段（atoms_of 里那句「整串比一行还宽就按预算切」的判据改成恒假，其余分支不动）⇒ 实测主仓 277 条里红 2 条：an_overlong_ascii_run_is_chunked_instead_of_overflowing_the_canvas 现读「比预算还长的一串只出一行＝切段没生效」，**外加一条本帧没人打算碰的老测** text_wraps_by_display_width_not_by_char_count 现读「ASCII 记 0.55 ⇒ 十个字母两行，不是四行」left 1 对 right 2。后者是这一刀的**真症状**：切段退化成整串不可分，比预算还长的那一串就从「折成两行」退化成「一行压出画布」——折行不丢字，画布却装不下，而丢字那条检（lines.concat 等于原文）对它完全无感。两颗牙一起红说明这格同时被「专为它立的测」与「顺手把宽度口径钉住的测」两面看着"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='''            if run_w <= budget {'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            if true {'))"
+run
+
+echo "### M180 把停顿标点从**实现**的 is_closer 里摘出去（只打函数体那一处，测里那份规格清单留着）⇒ 实测主仓 277 条里红 2 条：the_rule_wrap_holds_its_shape_at_every_budget 现读「预算 24：行首顶标点 → ；我方按列分区直击（第1-2列→冰，第3-4列→炎）」，the_rule_wrap_splits_no_word_and_puts_no_punctuation_at_either_edge 现读「YanBing：行首顶着一个闭符号或停顿标点 → ；任一根被削时…」。这颗牙是本帧现量出来的**尺的缺陷**，不是新写的变异：改测之前同一切法**整族全绿**（277 passed; 0 failed，日志留档），因为那两条形状测原来直接引用实现的那个谓词——实现把逗号句号降级，测的判据就跟着一起降级，「标点不许顶行首」在测里成为永真式。修法是让测自带规格侧清单（与 rule_budget 重抄式子同一条口径）：**断点落在句读上**那条也换用规格清单，故本条红字里既有扫出来的档也有当前档。留这一格的理由：自指失效不在任何退出码里，只有把测的谓词与实现的谓词分开才露得出来"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a=''' | '，' | '。' | '、' | '；' | '：' | '？' | '！' | '…')'''
+i=s.index('fn is_closer('); j=s.index(a,i)
+assert s.count(a)==2, s.count(a)
+open(p,'w',encoding='utf8').write(s[:j]+''')'''+s[j+len(a):])"
+run
+
+echo "### M181 把算式开括号从**实现**的 is_opener 里摘出去（⌊⌈⌜⌞ 四枚退回普通字符，is_math_opener 与 math 旗不动）⇒ 实测主仓 277 条里红 1 条：the_rule_wrap_holds_its_shape_at_every_budget 现读「预算 34：「⌊伤害/2⌋」被劈成两行」并打出两行 「…烛尽判定阈值⌊」「伤害/2⌋即时生效直到灰烬落尽」。**这一格本帧差点被记成「没有落点」**：前两份文案（真实五句＋第一份合成句）都量不到它——⌊ 前面只要有任何一枚 cut=2 的标点，choose_break 就先选中那一枚，⌊ 的档位无论是什么都不参与；而真实 Boss 文案的 ⌊ 又恰好从不落在预算边界上。故扫预算那份测现在带第三份合成文案：⌊ 之前一个体面档都没有，且算式起点累计宽度落在扫得到的档位（现量 34）。这不是一次「为变异造靶」——它是把「高一级档位顺带中和了低一级」这条**覆盖关系**写进尺面：凡断点选择有优先级，验低优先级的那把刀必须留一份不含高优先级的输入"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a=''' | '⌊' | '⌈' | '⌜' | '⌞')'''
+i=s.index('fn is_opener('); j=s.index(a,i)
+assert s.count(a)==2, s.count(a)
+open(p,'w',encoding='utf8').write(s[:j]+''')'''+s[j+len(a):])"
+run
+
+echo "### M182 两枚阈值相等也印箭头（display 里那句「生效＝基础就只印一枚」的判据改成恒假）⇒ 实测主仓 277 条里红 1 条：the_cell_prints_both_thresholds_only_when_the_effective_one_moves 现读「两枚相等那一格该只印一枚」并把整帧文本打出来，其中第二格是 「12 / 4→4」。这一格钉的是**信息量**不是格式：D2 要在帧上说的是「这格正被人削着」，无条件成对之后每一格都写着「有人动过」，等于把「动过」这个信号摊平回噪声——玩家看不出哪格是被 同敌阈+1 改的，而那条修正才是阈值的因。同一支测的另一半（生效≠基础那格必须成对）此时照绿，红只落在「不许多印」这一面"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='''    if c.threshold == c.base_threshold {'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    if false {'))"
+run
+
+echo "### M183 快照把基础值盖成生效值（view::card_view 里 base_threshold 改读那枚已含同列修正的 threshold）⇒ 实测主仓 277 条里红 2 条：display::the_daily_flame_tide_makes_the_cell_print_a_pair 现读「基础值仍是牌面那个数：减半不许改写它」left 2 对 right 4，view::on_board_threshold_is_the_effective_one 现读「基础阈值不许被生效值盖掉：帧上那对 4→3 的前一枚就是它」left 3 对 right 4。**这是 D2 那对的唯二落点**：两枚并成一枚之后 display 那个「等不等」的判据永远为真，M182 那把尺因此在同一个改法下照绿（它看的是打印面，源头没了差别）——两颗牙从两个不同层各钉一次，缺一颗就有一格「同源不同口径」能悄悄并掉。另留一条诚实边界：手牌那条路本来就交 base_threshold（牌没上场，生效值＝基础值），本条改动对它无影响"
+restore; py "
+p='$D/src/view.rs'; s=open(p,encoding='utf8').read()
+a='''        base_threshold: c.base_threshold(),'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        base_threshold: threshold,'))"
+run
+
+echo "### M184 两枚 token 并回一枚（lane::CRAFT_EDGE 的**值**从 SECONDARY 改回 TERTIARY，名字与调用点都不动）⇒ 实测主仓 277 条里红 1 条：the_gold_reaches_the_border_only_and_never_the_mark_words 现读「金边取的就是表里那枚金，不是又写了一个十六进制」left #d7b8f2 对 right #e7c877。这条钉的是 其七 D3 那次拒绝的形状：改之前 CRAFT 一枚 token 同时管着边框与标记墨色，把边框换成金会连带把「开端」「战吼:同列+2焰」一起染金——那两串字跟自造牌毫无关系。它也是「改名不改读数」那一格的对面：MARK_TEXT 的值由同一条测钉死为 TERTIARY，于是**两枚 token 各自往哪漂都看得见**，而漂回同一枚只有这一条红。测里那句 assert_ne（两枚不许并成一枚）在这一刀下**照绿**（值撞了但名字还分着），所以光有 assert_ne 不够，值也得钉——这条记录留的就是这个差别"
+restore; py "
+p='$D/src/md3.rs'; s=open(p,encoding='utf8').read()
+a='''    pub const CRAFT_EDGE: &str = SECONDARY;'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'    pub const CRAFT_EDGE: &str = TERTIARY;'))"
+run
+
+echo "### M185 造过这一格顺手也加粗（card_cell 的线宽判据从 upgrades>0 改成 crafted 或 upgrades>0，颜色那半不动）⇒ 实测主仓 277 条里红 1 条：the_cell_border_carries_craft_in_colour_and_upgrade_in_weight 现读「造过只换色」left (#e7c877, 4) 对 right (#e7c877, 2)。这一刀在**帧面上几乎看不出来**——造过又升过的格子本来就该是 4，只有「造过但没升」那一格从 2 变 4；而那正是「两条通道正交」这个设计唯一还活着的证据：粗细读 upgrades、颜色读 crafted，任何一处把两件事绑在一起，四种组合就不再互不相同。配套的 M184 管颜色、这条管粗细，两颗各钉一头；同一条测里那句「两件事都发生」在这一刀下照绿（4 仍等于 4），红只落在「只造」那一格"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='''            if c.upgrades > 0 { layout::STROKE_EMPHASIS } else { layout::STROKE_BOUNDARY },'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'''            if c.crafted || c.upgrades > 0 { layout::STROKE_EMPHASIS } else { layout::STROKE_BOUNDARY },'''))"
+run
+
+echo "### M186 手牌那圈边的金摘掉（hand_row 里 crafted 那半退回恒 PLAYER_EDGE，在场格那一处不动）⇒ 实测主仓 277 条里红 2 条：display::the_two_border_channels_reach_the_hand_row_too 现读「造过只换色」left (#a9c9f8, 1) 对 right (#e7c877, 1)，**以及那条交付帧证人** meta::the_crafted_gold_in_the_delivered_frames_comes_from_the_settlement_ring 现读「打完几关的帧里读不到一块金边：证人通路没把自造牌送到画面上」。第二条是本帧最贵的一格：D3 把金边接到在场格之后，46 帧实测**金边 0 命中**——结算里刚造出来那张牌其后每一帧都躺在手牌里（放牌要占业力，贵牌常常一整关没上手），只认在场格等于「证人从不上镜」。这颗牙钉的就是「通道开了、牌不在那一格里」这种半拉子改法：它能让单元测全绿，交付件里却一个字都没变"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='''            if c.crafted { lane::CRAFT_EDGE } else { lane::PLAYER_EDGE },'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            lane::PLAYER_EDGE,'))"
+run
+
+echo "### M187 手牌那圈边的粗细摘掉（hand_row 里 upgrades 那半退回恒 HAIRLINE）⇒ 实测主仓 277 条里红 2 条：the_two_border_channels_reach_the_hand_row_too 现读「升过只换粗细」left (#a9c9f8, 1) 对 right (#a9c9f8, 4)，证人那条现读「读不到加强线宽：升级在帧上没留下非文字的读法」（同一支测的两条 assert 是串行的，先炸的那条就是这次读数的全部）。这一颗与 M186 同形但**不同判据**：M186 量「颜色这一维在不在手牌上」，本条量「粗细这一维」。为什么要分开两条：手牌与在场格用的是同一组 token，任何一次「顺手统一」都会同时抹掉两格里的一维，而只钉颜色那条时粗细能单独漂走——实测就是两面各红一次、红字互不相同"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='''            if c.upgrades > 0 { layout::STROKE_EMPHASIS } else { layout::STROKE_HAIRLINE },'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'            layout::STROKE_HAIRLINE,'))"
+run
+
+echo "### M188 规划器不再筛付不起的融合（ai::plan_meta 里 price > karma 那道 continue 摘掉，定价式与 gain==0 那格都不动）⇒ 实测主仓 277 条里红 1 条：证人 meta::the_crafted_gold_in_the_delivered_frames_comes_from_the_settlement_ring 现读「打完几关的帧里读不到一块金边」。这一颗是 D4「下单的是引擎自己那个规划器」的对面：记录器现在**不写死命令串**，而是把 inherit 与当前业力交给 plan_meta，拿它按「当前业力付得起」筛过之后选出的 fuse/up 逐行过 execute_settle 那道真闸。摘掉这道闸之后，规划器按吸收技能数选出最贵的那张副牌（easy 档结算时业力常为 0），价格 3 付不起 ⇒ 融合被拒 ⇒ 那张自造牌根本没出生 ⇒ 后面每一帧都没有金边。**症状在帧上，根因在算式**，所以这条同时也是「AI 不得自算一套价」那条锚的落地证人：这一行与 progress.rs::fuse_cards 逐字同式，改哪儿都会被这条撞到"
+restore; py "
+p='$D/src/ai.rs'; s=open(p,encoding='utf8').read()
+a='''            if price > karma {
+                continue;
+            }
+'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run

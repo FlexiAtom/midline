@@ -61,8 +61,8 @@ echo "### 预检（只打补丁、不跑 cargo／不跑检）｜红＝某条变�
 bash "$T"
 # 记录条数钉死（本帧 D19）：以前这行只打印条数、没人核对，一条记录静默丢失（echo 头被误删、或整条误并）
 # 就会让"预检全过"变成假绿。现在断言 == 期望数；加一条牙就同步改 EXPECTED_RECORDS 这一处。
-# 178 ＝ M0 引擎对照 + M0b 壳侧对照 + M1…M176（其中 M167–M176 走上面那六个壳侧入口）。
-EXPECTED_RECORDS=178
+# 190 ＝ M0 引擎对照 + M0b 壳侧对照 + M1…M176（其中 M167–M176 走上面那六个壳侧入口）+ M177…M188（其七 呈现面四组）。
+EXPECTED_RECORDS=190
 N="$(grep -c '^echo "### ' "$B")"
 if [ "$N" -ne "$EXPECTED_RECORDS" ]; then
     printf '!! 记录条数对不上：期望 %s 条，实测 %s 条 ⇒ 有 echo "### " 头被删／多写／整条误并，请核对电池\n' "$EXPECTED_RECORDS" "$N"

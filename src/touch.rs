@@ -945,6 +945,18 @@ mod tests {
         assert_eq!(display_width("中a"), typo::ADVANCE_CJK + typo::ADVANCE_ASCII, "一个汉字加一个字母＝两档之和");
     }
 
+    /// 测自带的**行头禁止**清单（规格侧那份，故意不引用实现的 `is_closer`）：共用那个谓词时这条检是自指的——
+    /// 把停顿标点从实现里摘出去，测的判据跟着一起改口，「标点不许顶行首」就永远为真（10-15 探针实测这种降级整族全绿）。
+    /// 与 `rule_budget` 同一条口径：重抄的是**规则**，会作用到帧上的真值仍只在实现那一处。
+    fn spec_closer(c: char) -> bool {
+        matches!(c, '）' | '」' | '』' | '】' | '］' | '》' | '〉' | '〕' | '⌋' | '⌉' | '⌝' | '⌟' | '，' | '。' | '、' | '；' | '：' | '？' | '！' | '…')
+    }
+
+    /// 同上，开符号那一族：断在它后面＝留在行末，禁则不许。
+    fn spec_opener(c: char) -> bool {
+        matches!(c, '（' | '「' | '『' | '【' | '［' | '《' | '〈' | '〔' | '⌊' | '⌈' | '⌜' | '⌞')
+    }
+
     /// 折行预算与 `layout_of` 里那一行同一个式子：这里重抄一遍式子，是为了让测能自己算，
     /// 而**数值仍然只有一个家**（都从 `layout` 与 `typo` 取）。
     fn rule_budget() -> f64 {
@@ -1018,10 +1030,10 @@ mod tests {
             for line in &lines {
                 let t = line.trim_end_matches(' ');
                 if let Some(h) = t.chars().next() {
-                    assert!(!is_closer(h), "{id:?}：行首顶着一个闭符号或停顿标点 → {line}");
+                    assert!(!spec_closer(h), "{id:?}：行首顶着一个闭符号或停顿标点 → {line}");
                 }
                 if let Some(x) = t.chars().last() {
-                    assert!(!is_opener(x), "{id:?}：行末留着一个开符号 → {line}");
+                    assert!(!spec_opener(x), "{id:?}：行末留着一个开符号 → {line}");
                 }
             }
             total_lines += lines.len();
@@ -1032,31 +1044,41 @@ mod tests {
     /// 同一族规则**扫预算**，不量当前那一格。负样本：老算法在 60.0 这档把炎与冰那句劈成
     /// 「…另一根同步承受⌊」/「伤害/2⌋；…」——正是本条要当场亮的那个断口。
     /// 上界取到画布的两倍宽，下界取到一行只装得下半句：两头都不许出现形状违规。
+    /// 第二步长是**造出来的**：真实五句里「⌊」从不落在预算边界上（10-15 探针：把它从 `is_opener` 摘出去，
+    /// 整族全绿——那一格当时没有任何测看得见），所以补一份无空格、算式紧贴边界的句子，把边界扫密到 0.25。
     #[test]
     fn the_rule_wrap_holds_its_shape_at_every_budget() {
         let p = crate::boss::BossId::YanBing.profile();
-        let text = format!("特殊规则【{}】{}", p.rule.label(), p.rule_text);
+        let texts = [
+            format!("特殊规则【{}】{}", p.rule.label(), p.rule_text),
+            "特殊规则【灼蚀】每有单位阵亡我方承受⌊伤害/2⌋点灼蚀持续三回合直到灰烬落尽".to_string(),
+            // 第三份连**体面档**都不给（⌊ 之前没有停顿标点、闭括或空格），且算式起点落在扫得到的高档（现量 34）：
+            // 上一份里「】」是 cut=2，永远比 ⌊ 先被选中，于是「⌊ 退回普通字符」那一刀被高一级档位**顺带**中和了。
+            "本帧规则每有单位阵亡之后我方全体承受额外伤害并同步计入烛尽判定阈值⌊伤害/2⌋即时生效直到灰烬落尽".to_string(),
+        ];
         let mut checked = 0usize;
-        for half in 48..=192 {
-            let budget = half as f64 / 2.0;
-            let lines = wrap(&text, budget);
-            assert_eq!(lines.concat(), text, "预算 {budget}：折行丢字");
-            let spans = line_spans(&lines);
-            for (s, e) in atomic_spans(&text) {
-                assert!(spans.iter().any(|(ls, le)| s >= *ls && e <= *le), "预算 {budget}：「{}」被劈成两行\n{lines:?}", &text[s..e]);
-            }
-            for line in &lines {
-                let t = line.trim_end_matches(' ');
-                if let Some(h) = t.chars().next() {
-                    assert!(!is_closer(h), "预算 {budget}：行首顶标点 → {line}");
+        for text in &texts {
+            for quarter in 96..=384 {
+                let budget = quarter as f64 / 4.0;
+                let lines = wrap(text, budget);
+                assert_eq!(lines.concat(), *text, "预算 {budget}：折行丢字");
+                let spans = line_spans(&lines);
+                for (s, e) in atomic_spans(text) {
+                    assert!(spans.iter().any(|(ls, le)| s >= *ls && e <= *le), "预算 {budget}：「{}」被劈成两行\n{lines:?}", &text[s..e]);
                 }
-                if let Some(x) = t.chars().last() {
-                    assert!(!is_opener(x), "预算 {budget}：行末留开符号 → {line}");
+                for line in &lines {
+                    let t = line.trim_end_matches(' ');
+                    if let Some(h) = t.chars().next() {
+                        assert!(!spec_closer(h), "预算 {budget}：行首顶标点 → {line}");
+                    }
+                    if let Some(x) = t.chars().last() {
+                        assert!(!spec_opener(x), "预算 {budget}：行末留开符号 → {line}");
+                    }
                 }
+                checked += 1;
             }
-            checked += 1;
         }
-        assert!(checked > 100, "扫了 {checked} 档预算：这条根本不是扫");
+        assert!(checked > 500, "扫了 {checked} 档预算：这条根本不是扫");
     }
 
     /// 断点要落在**句读**上（停顿标点之后，或空格之后）。这是这一改在装机帧上唯一肉眼可见的差别：
@@ -1073,7 +1095,7 @@ mod tests {
             for line in lines.iter().take(lines.len().saturating_sub(1)) {
                 let t = line.trim_end_matches(' ');
                 let tail = t.chars().next_back().expect("折行不产空行");
-                assert!(is_closer(tail) || line.len() != t.len(), "{id:?}：断点落在半句里 → {line}");
+                assert!(spec_closer(tail) || line.len() != t.len(), "{id:?}：断点落在半句里 → {line}");
                 breaks += 1;
             }
         }
