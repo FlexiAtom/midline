@@ -196,12 +196,23 @@ pub(crate) fn layer_of(marks: &[(Region, Layer)], region: Region) -> Option<Laye
 /// 一张在场牌的格子：名字、值/阈值、费/焰、标记（造·开端·升级）、技能串。
 /// 位置与面积全在 `cell` 里（它就是命中框），本函数只往上摆指令。
 /// 描边**不随态层变**：MD3 的状态层盖在容器上，描边是边界，跟着亮会读成"边框也在动"那种新信号。
+///
+/// 边框在这一帧里有**两条正交的通道**：颜色说"这格是被造出来的"（`lane::CRAFT_EDGE` 金），
+/// 粗细说"这格升过级"（`layout::STROKE_EMPHASIS`）。从前两者挤在同一枚 `lane::CRAFT` 名下，
+/// 于是想给造牌换个色，就得先问一遍"那右上角那串跟造牌无关的标记怎么办"——一枚 token 两个读者。
 fn card_cell(cell: Rect, c: &CardView, fill: &str, edge: &'static str) -> Vec<Prim> {
     let x = cell.x;
     let y = cell.y;
     let w = cell.w;
     let mut out = vec![
-        bordered(cell, fill, shape::SMALL, if c.crafted { lane::CRAFT } else { edge }, layout::STROKE_BOUNDARY, false),
+        bordered(
+            cell,
+            fill,
+            shape::SMALL,
+            if c.crafted { lane::CRAFT_EDGE } else { edge },
+            if c.upgrades > 0 { layout::STROKE_EMPHASIS } else { layout::STROKE_BOUNDARY },
+            false,
+        ),
         label(x + layout::CELL_PAD, y + layout::CELL_ROW1, typo::TITLE_LARGE, color::ON_SURFACE, Anchor::Start, c.name),
         label(
             x + layout::CELL_PAD,
@@ -240,7 +251,7 @@ fn card_cell(cell: Rect, c: &CardView, fill: &str, edge: &'static str) -> Vec<Pr
     // 标记占右上角那一格，属性串是右对齐的：不腾出这块宽度，长属性（`战吼:同列+2焰`）会被方块压住尾字。
     if !marks.is_empty() {
         let marks_x = x + w - if lit { badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD };
-        out.push(label(marks_x, y + layout::CELL_ROW1, typo::BODY_LARGE, lane::CRAFT, Anchor::End, &marks.join("·")));
+        out.push(label(marks_x, y + layout::CELL_ROW1, typo::BODY_LARGE, lane::MARK_TEXT, Anchor::End, &marks.join("·")));
     }
     if !c.skills.is_empty() {
         out.push(label(x + w - layout::CELL_PAD, y + layout::CELL_ROW3, typo::LABEL_LARGE, lane::META, Anchor::End, &c.skills.join("+")));
@@ -601,11 +612,84 @@ mod tests {
         assert_eq!(marks_joined(&out).as_deref(), Some("造·升级+1·战吼:同列+2焰"), "三个不同来源的标记要连起来全在");
     }
 
-    /// 右上角那一串标记：认 `lane::CRAFT` ＋ `Anchor::End` ＋ 字号 `BODY_LARGE` 这三件一起命中的那行。
+    /// 边框的两条通道：**色**说"这格是被造出来的"、**粗细**说"这格升过级"。
+    /// 从前两条通道挤在同一枚 `lane::CRAFT` 名下——给造牌换金色那天，会把跟造牌毫无关系的
+    /// 「开端」「战吼:同列+2焰」一起染了（档 §4 记的就是这次拒绝）。分开之后四格各自独立：
+    /// 没造没升走本侧原色，只造换色，只升换粗细，两者都有则两笔同时读到。
+    #[test]
+    fn the_cell_border_carries_craft_in_colour_and_upgrade_in_weight() {
+        let plain = CardView { name: "余烬", cost: 1, hp: 2, threshold: 4, base_threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
+        let cell = Rect::new(0, 0, 300, CELL_H);
+        let border = |c: &CardView| cell_border(&card_cell(cell, c, lane::PLAYER_FILL, lane::PLAYER_EDGE));
+
+        assert_eq!(border(&plain), (lane::PLAYER_EDGE.to_string(), STROKE_BOUNDARY), "什么都没发生的格子就该是本侧原色原粗");
+        assert_eq!(border(&CardView { crafted: true, ..plain.clone() }), (lane::CRAFT_EDGE.to_string(), STROKE_BOUNDARY), "造过只换色");
+        assert_eq!(border(&CardView { upgrades: 1, ..plain.clone() }), (lane::PLAYER_EDGE.to_string(), STROKE_EMPHASIS), "升过只换粗细");
+        assert_eq!(border(&CardView { crafted: true, upgrades: 2, ..plain.clone() }), (lane::CRAFT_EDGE.to_string(), STROKE_EMPHASIS), "两件事都发生 ⇒ 两条通道同时读得到");
+    }
+
+    /// 拆 token 这一步是不是**真拆**了：金只许落在边框上，右上角那串字不许跟着变。
+    /// 这条有两条牙——① 两枚 token 一旦并回一枚，`assert_ne` 当场红；
+    /// ② `MARK_TEXT` 的**值**被钉成旧的那枚紫：改名可以，顺手把读数一起换掉不行（帧上别的格子会跟着变脸）。
+    #[test]
+    fn the_gold_reaches_the_border_only_and_never_the_mark_words() {
+        assert_eq!(lane::CRAFT_EDGE, color::SECONDARY, "金边取的就是表里那枚金，不是又写了一个十六进制");
+        assert_eq!(lane::MARK_TEXT, color::TERTIARY, "标记墨色是**改名**不是改读数");
+        assert_ne!(lane::CRAFT_EDGE, lane::MARK_TEXT, "两枚 token 又并成一枚了：拆 token 那一步没真做");
+
+        let starter = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, base_threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: true, trait_label: "战吼:同列+2焰", skills: vec![] };
+        let out = card_cell(Rect::new(0, 0, 300, CELL_H), &starter, lane::PLAYER_FILL, lane::PLAYER_EDGE);
+        assert_eq!(marks_fill(&out).as_deref(), Some(lane::MARK_TEXT), "没造过的格子的标记串不许染金：{out:?}");
+        assert_eq!(cell_border(&out).0, lane::PLAYER_EDGE.to_string(), "这格没造过，边框就该是本侧原色");
+    }
+
+    /// 档 §3 给"升级"这一格立的判据：**遮住文字也认得出**。所以这一条只比两块格子的**面**，
+    /// 一个字都不看——若升级只留下 `升级+1` 那行字，下面的 `assert_ne` 就还是绿的，那才是真出事。
+    #[test]
+    fn an_upgraded_cell_is_tellable_from_its_plain_twin_with_the_words_covered() {
+        let plain = CardView { name: "同", cost: 1, hp: 2, threshold: 4, base_threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
+        let up = CardView { upgrades: 3, ..plain.clone() };
+        let cell = Rect::new(0, 0, 300, CELL_H);
+        let faces = |c: &CardView| cell_faces(&card_cell(cell, c, lane::PLAYER_FILL, lane::PLAYER_EDGE));
+        assert_eq!(faces(&plain).len(), faces(&up).len(), "两块格子的面数该一样（升级不加块，只改那一圈的粗细）");
+        assert_ne!(faces(&plain), faces(&up), "遮住字之后两块面完全相同＝升级在帧上只剩一行字");
+        assert_eq!(cell_border(&card_cell(cell, &up, lane::PLAYER_FILL, lane::PLAYER_EDGE)).1, STROKE_EMPHASIS, "粗的那一档要真是 STROKE_EMPHASIS");
+        assert_eq!(cell_border(&card_cell(cell, &plain, lane::PLAYER_FILL, lane::PLAYER_EDGE)).1, STROKE_BOUNDARY, "另一块该是常态那一档");
+    }
+
+    /// 格子那块底：`card_cell` 的第一条指令，读它的 (描边色, 线宽)。取不到就 panic，
+    /// 免得哪天顺序变了，上面几条测悄悄变成"没有边框可比"的空转。
+    fn cell_border(prims: &[Prim]) -> (String, i32) {
+        match prims.first() {
+            Some(Prim::Block { edge: Some(e), .. }) => (e.stroke.clone(), e.width),
+            other => panic!("格子的第一条指令该是那块带描边的底，读到 {other:?}"),
+        }
+    }
+
+    /// 一块格子的全部**面**（几何＋描边色＋线宽），刻意不含任何文字：给"遮住字"那条测当对照面。
+    fn cell_faces(prims: &[Prim]) -> Vec<(i32, i32, i32, i32, String, i32)> {
+        prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Block { x, y, w, h, edge, .. } => Some((*x, *y, *w, *h, edge.as_ref().map_or(String::new(), |e| e.stroke.clone()), edge.as_ref().map_or(0, |e| e.width))),
+                Prim::Label { .. } => None,
+            })
+            .collect()
+    }
+
+    /// 标记那行的填色（认字号与锚点，与 `marks_joined` 同一把钥匙，只是取色不取字）。
+    fn marks_fill(prims: &[Prim]) -> Option<String> {
+        prims.iter().find_map(|p| match p {
+            Prim::Label { fill, anchor, em, .. } if *anchor == Anchor::End && *em == BODY_LARGE => Some(fill.clone()),
+            _ => None,
+        })
+    }
+
+    /// 右上角那一串标记：认 `lane::MARK_TEXT` ＋ `Anchor::End` ＋ 字号 `BODY_LARGE` 这三件一起命中的那行。
     /// 单认颜色或单认锚点都会把别的行误当它（属性串与它是同一格同一锚，只有字号不同）。
     fn marks_joined(prims: &[Prim]) -> Option<String> {
         prims.iter().find_map(|p| match p {
-            Prim::Label { fill, anchor, em, text, .. } if *anchor == Anchor::End && *em == BODY_LARGE && fill == lane::CRAFT => Some(text.clone()),
+            Prim::Label { fill, anchor, em, text, .. } if *anchor == Anchor::End && *em == BODY_LARGE && fill == lane::MARK_TEXT => Some(text.clone()),
             _ => None,
         })
     }

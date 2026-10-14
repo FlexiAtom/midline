@@ -157,8 +157,15 @@ pub mod lane {
     pub const PLAYER_FILL: &str = PRIMARY_CONTAINER;
     /// 我方描边／标签。
     pub const PLAYER_EDGE: &str = PRIMARY;
-    /// 造牌（`crafted`）标记：覆盖本格自己的描边色。
-    pub const CRAFT: &str = TERTIARY;
+    /// 自造牌（`crafted`）那一格的**边框**色：金。它管的只有"这块格子是被造出来的"这一件事。
+    /// 从前它与右上角那串标记共用一枚 `CRAFT`，于是想给它换个色，就会把跟造牌毫无关系的
+    /// 「开端」「同友阈-1」一起染了——一枚 token 两个读者，正是 其六 撞过的那种第二真值源。
+    /// 与中线色带同取 `SECONDARY`：同一枚角色色复用在两个几何角色上（一整条横带 vs 一圈细描边），
+    /// 分得开靠的是形状，不是色号。
+    pub const CRAFT_EDGE: &str = SECONDARY;
+    /// 右上角那一串标记（造／开端／升级／属性名）的**文字**色。取 `TERTIARY` 是延续旧读数，
+    /// 换的只是名字：它过去叫 `CRAFT`，那个名字在说谎。
+    pub const MARK_TEXT: &str = TERTIARY;
     /// 中线色带。
     pub const MIDLINE: &str = SECONDARY;
     /// 画在中线色带之上的文字色。
@@ -365,6 +372,11 @@ pub mod layout {
     /// 描边两档：MD3 boundary 1dp／强边界 2dp。
     pub const STROKE_HAIRLINE: i32 = 1;
     pub const STROKE_BOUNDARY: i32 = 2;
+    /// 加强描边：**升级过的格子**用它。这一档管的是"边框有多粗"，与 `lane::CRAFT_EDGE`
+    /// 那枚"边框是什么色"是两条正交的通道，所以一张既造过又升过的牌同时读得出两件事。
+    /// 4 落在栅格上，也是 `STROKE_BOUNDARY` 的整数倍——真机 k=0.7 时 2→1px、4→3px，
+    /// 粗到不读字也分得开（档面 §3 给这一格立的判据就是这句）。
+    pub const STROKE_EMPHASIS: i32 = XXS;
     /// 空格虚线的段长与间隔。
     pub const DASH_ON: i32 = S;
     pub const DASH_OFF: i32 = S;
@@ -690,6 +702,17 @@ mod tests {
                 assert!(w[0].1 < w[1].1, "行基线不同序或越出格子：{}={} ≥ {}={}", w[0].0, w[0].1, w[1].0, w[1].1);
             }
         }
+    }
+
+    /// 描边三档必须**分得开**：升级那一格靠 `STROKE_EMPHASIS` 与常态 `STROKE_BOUNDARY` 的差来表达，
+    /// 两档一旦并成一档，帧上"升过级"这件事就静默消失——没有报错、没有红测，只有图上再也看不见。
+    #[test]
+    fn the_stroke_ladder_keeps_the_upgrade_channel_visible() {
+        let ladder = [("HAIRLINE", STROKE_HAIRLINE), ("BOUNDARY", STROKE_BOUNDARY), ("EMPHASIS", STROKE_EMPHASIS)];
+        for w in ladder.windows(2) {
+            assert!(w[0].1 < w[1].1, "描边档位不同序 ⇒ 升级那条通道没有读数：{}={} 不小于 {}={}", w[0].0, w[0].1, w[1].0, w[1].1);
+        }
+        assert_eq!(STROKE_EMPHASIS % GRID, 0, "加强档脱离 {GRID} 栅格：{STROKE_EMPHASIS}");
     }
 
     /// 形状阶梯单调、起点为 0，且默认圆角是 8dp。圆角只有这七档可取；
