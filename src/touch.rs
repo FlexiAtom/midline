@@ -446,21 +446,141 @@ pub(crate) fn display_width(s: &str) -> f64 {
     s.chars().map(advance).sum()
 }
 
-/// 按显示宽度折行。Boss 规则行走这条：那句整文是规则本体，**截断等于把规则改短**，宁可占两行。
-pub(crate) fn wrap(s: &str, budget: f64) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut line = String::new();
-    let mut w = 0.0;
-    for c in s.chars() {
-        if w + advance(c) > budget && !line.is_empty() {
-            lines.push(std::mem::take(&mut line));
-            w = 0.0;
+/// 折行的原子：一串**不许从中间劈开**的字，加上"在它后面断开合不合规则"。
+struct Atom {
+    text: String,
+    w: f64,
+    /// 断点档位。`0`＝禁则不许（开符号之后、闭符号之前、算式内部），`1`＝可以断（汉字之间、词之后），
+    /// `2`＝可以断且**体面**（停顿标点之后、空格之后）。三档不是样式偏好：中文没有词边界，
+    /// 能自动化的只有"别把标点顶到行首、别把开括号留在行末、别劈英文词、别劈算式"这四条形状规则。
+    cut: u8,
+}
+
+/// 开符号：不许留在行末（断在它后面＝禁则违反）。
+fn is_opener(c: char) -> bool {
+    matches!(c, '（' | '「' | '『' | '【' | '［' | '《' | '〈' | '〔' | '⌊' | '⌈' | '⌜' | '⌞')
+}
+
+/// 闭符号与停顿标点：不许顶在行首。停顿标点之后断开还算**体面**（那是本来就有的句读）。
+fn is_closer(c: char) -> bool {
+    matches!(c, '）' | '」' | '』' | '】' | '］' | '》' | '〉' | '〕' | '⌋' | '⌉' | '⌝' | '⌟' | '，' | '。' | '、' | '；' | '：' | '？' | '！' | '…')
+}
+
+/// 算式括号：这一对之间的每一个断点都收成 `0`。`⌊伤害/2⌋` 是规则本体，
+/// 断在「伤|害」或「/2|⌋」上都等于把一条公式写成两条——而它整体只有几单位宽，从不值得断。
+/// 只保这一族，不保 `（…）`：括号里的长句本来就允许在句中换行。
+fn is_math_opener(c: char) -> bool {
+    matches!(c, '⌊' | '⌈')
+}
+
+fn is_math_closer(c: char) -> bool {
+    matches!(c, '⌋' | '⌉')
+}
+
+/// 字符串 → 折行原子序列。ASCII 串（`AI`／`Boss`／`deaths+1`／`100/50/25/10`）整串成一个原子，
+/// 汉字一字一个，空格独立成原子。**一个字都不增不减**：拼回所有原子的正文必等于输入，
+/// 守它的是 `canvas::the_boss_rule_line_loses_no_characters`。
+///
+/// 唯一的例外是"一整串 ASCII 本身就比一行还宽"：那不叫词，那叫没有词可用。这时按预算切成几段、
+/// 段间允许断（等同 CSS 的 `break-word`），否则这条折行会产出一行远超预算的字压出画布外。
+fn atoms_of(s: &str, budget: f64) -> Vec<Atom> {
+    let mut out: Vec<Atom> = Vec::new();
+    let mut math = false;
+    let mut cs = s.chars().peekable();
+    while let Some(c) = cs.next() {
+        if c.is_ascii_alphabetic() || c.is_ascii_digit() {
+            let mut run = String::new();
+            run.push(c);
+            // 词内允许 `+/-.%:` 之类连着写（`deaths+1`、`100/50/25/10` 各是一整块）；空白与标点之外才续。
+            while let Some(&n) = cs.peek() {
+                if n.is_ascii_alphanumeric() || matches!(n, '/' | '+' | '-' | '.' | '%' | '*' | '=') {
+                    run.push(n);
+                    cs.next();
+                } else {
+                    break;
+                }
+            }
+            let cut = if math { 0 } else { 1 };
+            let run_w = display_width(&run);
+            if run_w <= budget {
+                out.push(Atom { text: run, w: run_w, cut });
+            } else {
+                let mut piece = String::new();
+                let mut pw = 0.0;
+                for ch in run.chars() {
+                    if pw + advance(ch) > budget && !piece.is_empty() {
+                        out.push(Atom { text: std::mem::take(&mut piece), w: pw, cut: 1 });
+                        pw = 0.0;
+                    }
+                    piece.push(ch);
+                    pw += advance(ch);
+                }
+                if !piece.is_empty() {
+                    out.push(Atom { text: piece, w: pw, cut });
+                }
+            }
+            continue;
         }
-        line.push(c);
-        w += advance(c);
+        let w = advance(c);
+        let cut = if (math && !is_math_closer(c)) || is_opener(c) {
+            0
+        } else if is_closer(c) {
+            if is_math_closer(c) {
+                math = false;
+                1
+            } else {
+                2
+            }
+        } else if c == ' ' {
+            2
+        } else {
+            1
+        };
+        if is_math_opener(c) {
+            math = true;
+        }
+        // 闭符号/停顿标点**之前**不许断：把前一个原子的档位压成 0（顶在行首就是禁则）。
+        // `math` 在上面那支里刚被算式闭符号翻回 false，所以那一路也会走到这里——正是想要的。
+        if !math && is_closer(c) && let Some(prev) = out.last_mut() {
+            prev.cut = 0;
+        }
+        out.push(Atom { text: c.to_string(), w, cut });
     }
-    if !line.is_empty() {
-        lines.push(line);
+    out
+}
+
+/// 在 `start..=end` 这段里挑一个断点，返回**下一行的起始下标**。
+/// 优先最右的"体面"档，其次最右的"可以"档；一整段都不许断时才硬断在最后那个原子之后——
+/// 硬断宁可让一行超出预算，也不许把字丢了（那才是规则句被裁掉半句那种真失真）。
+fn choose_break(atoms: &[Atom], start: usize, end: usize) -> usize {
+    for want in [2u8, 1] {
+        if let Some(off) = atoms[start..=end].iter().rposition(|a| a.cut == want) {
+            return start + off + 1;
+        }
+    }
+    end + 1
+}
+
+/// 按显示宽度折行，**断点由形状规则选**：不劈英文词、不劈算式、标点不顶行首、开括号不留行末。
+/// Boss 规则行走这条：那句整文是规则本体，截断等于把规则改短，宁可占两行。
+pub(crate) fn wrap(s: &str, budget: f64) -> Vec<String> {
+    let atoms = atoms_of(s, budget);
+    let mut lines: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    let mut width = 0.0;
+    let mut i = 0usize;
+    while i < atoms.len() {
+        if width + atoms[i].w > budget && width > 0.0 {
+            let next = choose_break(&atoms, start, i - 1);
+            lines.push(atoms[start..next].iter().map(|a| a.text.as_str()).collect());
+            start = next;
+            width = atoms[start..i].iter().map(|a| a.w).sum();
+        }
+        width += atoms[i].w;
+        i += 1;
+    }
+    if start < atoms.len() {
+        lines.push(atoms[start..].iter().map(|a| a.text.as_str()).collect());
     }
     lines
 }
@@ -823,6 +943,154 @@ mod tests {
         assert_eq!(fit("中文中文", 3.0), "中文…", "超预算才截断");
         assert_eq!(fit("中文", 99.0), "中文", "没超预算就一字不动（不许顺手加省略号）");
         assert_eq!(display_width("中a"), typo::ADVANCE_CJK + typo::ADVANCE_ASCII, "一个汉字加一个字母＝两档之和");
+    }
+
+    /// 折行预算与 `layout_of` 里那一行同一个式子：这里重抄一遍式子，是为了让测能自己算，
+    /// 而**数值仍然只有一个家**（都从 `layout` 与 `typo` 取）。
+    fn rule_budget() -> f64 {
+        (layout::BOARD_W - layout::MARGIN * 2) as f64 / typo::TITLE_LARGE as f64 - typo::ELLIPSIS_COST
+    }
+
+    /// 源文本里"不许从中间劈开"的字节区间：极大 ASCII 词串与 `⌊…⌋`/`⌈…⌉` 算式。
+    /// 从输入现推而不写死清单——写死那几串，换个 Boss 文案就集体空转成永真。
+    fn atomic_spans(text: &str) -> Vec<(usize, usize)> {
+        let cs: Vec<(usize, char)> = text.char_indices().collect();
+        let wordish = |c: char| c.is_ascii_alphanumeric() || matches!(c, '/' | '+' | '-' | '.' | '%' | '*' | '=');
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        let mut i = 0usize;
+        while i < cs.len() {
+            if wordish(cs[i].1) {
+                let mut j = i + 1;
+                while j < cs.len() && wordish(cs[j].1) {
+                    j += 1;
+                }
+                out.push((cs[i].0, cs[j - 1].0 + cs[j - 1].1.len_utf8()));
+                i = j;
+                continue;
+            }
+            if is_math_opener(cs[i].1) {
+                let mut j = i + 1;
+                while j < cs.len() && !is_math_closer(cs[j].1) {
+                    j += 1;
+                }
+                if j < cs.len() {
+                    out.push((cs[i].0, cs[j].0 + cs[j].1.len_utf8()));
+                    i = j + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// 各行的字节区间。前提是 `lines.concat() == text`（调用方先断这条，否则区间全假）。
+    fn line_spans(lines: &[String]) -> Vec<(usize, usize)> {
+        let mut out = Vec::with_capacity(lines.len());
+        let mut off = 0usize;
+        for l in lines {
+            out.push((off, off + l.len()));
+            off += l.len();
+        }
+        out
+    }
+
+    /// 规则行的四条形状规则，量在五份真实 Boss 文案上：**不丢字、不劈词、不劈算式、标点不顶行首、开符号不留行末**。
+    /// 老算法按字符宽度硬填，这五条一条都不保证——它真把 `⌊` 留在过行末（见下一条测的负样本档）。
+    #[test]
+    fn the_rule_wrap_splits_no_word_and_puts_no_punctuation_at_either_edge() {
+        let budget = rule_budget();
+        let mut total_lines = 0usize;
+        for id in crate::boss::BossId::all() {
+            let p = id.profile();
+            let text = format!("特殊规则【{}】{}", p.rule.label(), p.rule_text);
+            let lines = wrap(&text, budget);
+            assert!(!lines.is_empty(), "{id:?} 规则行折没了：整句一个字都没进帧");
+            assert_eq!(lines.concat(), text, "{id:?}：折行把句子改短或改串了");
+            let spans = line_spans(&lines);
+            for (s, e) in atomic_spans(&text) {
+                assert!(
+                    spans.iter().any(|(ls, le)| s >= *ls && e <= *le),
+                    "{id:?}：「{}」被劈成两行（字节 {s}..{e}）\n{lines:?}",
+                    &text[s..e]
+                );
+            }
+            for line in &lines {
+                let t = line.trim_end_matches(' ');
+                if let Some(h) = t.chars().next() {
+                    assert!(!is_closer(h), "{id:?}：行首顶着一个闭符号或停顿标点 → {line}");
+                }
+                if let Some(x) = t.chars().last() {
+                    assert!(!is_opener(x), "{id:?}：行末留着一个开符号 → {line}");
+                }
+            }
+            total_lines += lines.len();
+        }
+        assert!(total_lines > crate::boss::BossId::all().len(), "五句规则一句都没折行＝这条测在空转（预算宽到装得下整句）");
+    }
+
+    /// 同一族规则**扫预算**，不量当前那一格。负样本：老算法在 60.0 这档把炎与冰那句劈成
+    /// 「…另一根同步承受⌊」/「伤害/2⌋；…」——正是本条要当场亮的那个断口。
+    /// 上界取到画布的两倍宽，下界取到一行只装得下半句：两头都不许出现形状违规。
+    #[test]
+    fn the_rule_wrap_holds_its_shape_at_every_budget() {
+        let p = crate::boss::BossId::YanBing.profile();
+        let text = format!("特殊规则【{}】{}", p.rule.label(), p.rule_text);
+        let mut checked = 0usize;
+        for half in 48..=192 {
+            let budget = half as f64 / 2.0;
+            let lines = wrap(&text, budget);
+            assert_eq!(lines.concat(), text, "预算 {budget}：折行丢字");
+            let spans = line_spans(&lines);
+            for (s, e) in atomic_spans(&text) {
+                assert!(spans.iter().any(|(ls, le)| s >= *ls && e <= *le), "预算 {budget}：「{}」被劈成两行\n{lines:?}", &text[s..e]);
+            }
+            for line in &lines {
+                let t = line.trim_end_matches(' ');
+                if let Some(h) = t.chars().next() {
+                    assert!(!is_closer(h), "预算 {budget}：行首顶标点 → {line}");
+                }
+                if let Some(x) = t.chars().last() {
+                    assert!(!is_opener(x), "预算 {budget}：行末留开符号 → {line}");
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked > 100, "扫了 {checked} 档预算：这条根本不是扫");
+    }
+
+    /// 断点要落在**句读**上（停顿标点之后，或空格之后）。这是这一改在装机帧上唯一肉眼可见的差别：
+    /// 老算法在 51.0 这档把三句各断进半句里——「前排越|线死亡」「任一根被削|时」「开端献祭仍|为」——
+    /// 一个字没丢、四条形状规则也没违，可读起来像被人从中间剪开。本条一断就红。
+    #[test]
+    fn every_rule_break_lands_on_a_pausal_boundary() {
+        let budget = rule_budget();
+        let mut breaks = 0usize;
+        for id in crate::boss::BossId::all() {
+            let p = id.profile();
+            let text = format!("特殊规则【{}】{}", p.rule.label(), p.rule_text);
+            let lines = wrap(&text, budget);
+            for line in lines.iter().take(lines.len().saturating_sub(1)) {
+                let t = line.trim_end_matches(' ');
+                let tail = t.chars().next_back().expect("折行不产空行");
+                assert!(is_closer(tail) || line.len() != t.len(), "{id:?}：断点落在半句里 → {line}");
+                breaks += 1;
+            }
+        }
+        assert!(breaks >= 3, "只数到 {breaks} 个断点：有句子已经折不动了，本条因此在空转");
+    }
+
+    /// 一整串 ASCII 比一行还宽时**切段**（等同 CSS `break-word`）：不切就产出一行远超预算的字压出画布外。
+    /// 切段是这族规则唯一允许的破例，所以它的两段性也得钉住。
+    #[test]
+    fn an_overlong_ascii_run_is_chunked_instead_of_overflowing_the_canvas() {
+        let long = "E1-E8-E1-E8-E1-E8-E1-E8-E1-E8-E1-E8-E1-E8";
+        let lines = wrap(long, 8.0);
+        assert_eq!(lines.concat(), long, "切段不许掉字");
+        assert!(lines.len() > 1, "比预算还长的一串只出一行＝切段没生效");
+        for l in &lines {
+            assert!(display_width(l) <= 8.0, "切出来的段本身还超预算：{l}（宽 {}）", display_width(l));
+        }
     }
 
     /// 底色与态层混出来的是**另一个实心色**，且写法与这张表同一个表示法。
