@@ -189,6 +189,7 @@ mod tests {
             cost: 1,
             hp: 2,
             threshold: 3,
+            base_threshold: 3,
             flame: 0,
             upgrades: 0,
             crafted: false,

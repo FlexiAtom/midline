@@ -165,6 +165,17 @@ fn badge_inset() -> i32 {
     layout::FLAME_MARK + layout::FLAME_INSET
 }
 
+/// 值/阈值那一对。生效≠基础时两枚都印（`12 / 4→3`）：只给生效值，玩家看不出这一格正被人削着阈值，
+/// 而"为什么这格突然满了"是那条规则的全部后果。相等时不补 `→`——同一对数写两遍是噪声不是信息。
+/// 文本路（TUI/CLI）仍只印一枚，那是刻意的口径分叉，理由记在档 §5 D2。
+fn threshold_pair(c: &CardView) -> String {
+    if c.threshold == c.base_threshold {
+        format!("{} / {}", c.hp, c.threshold)
+    } else {
+        format!("{} / {}→{}", c.hp, c.base_threshold, c.threshold)
+    }
+}
+
 /// 底色 × 态层 = 一个**实心**色。没有层时原样回到底色串（那一帧因此与控件层毫不相干，可比 md5）；
 /// 有层时按 MD3 口径混色。混色算式住在 `md3::state::blend_hex`，桌面与安卓共用它——
 /// 桌面从前可以走 `fill-opacity`，但真机那条路是帧缓冲写像素、没有合成器替做 alpha，
@@ -198,7 +209,7 @@ fn card_cell(cell: Rect, c: &CardView, fill: &str, edge: &'static str) -> Vec<Pr
             typo::HEADLINE_MEDIUM,
             color::ON_SURFACE,
             Anchor::Start,
-            &format!("{} / {}", c.hp, c.threshold),
+            &threshold_pair(c),
         ),
         label(
             x + layout::CELL_PAD,
@@ -424,9 +435,9 @@ mod tests {
     use super::layout::*;
     use super::typo::*;
     use super::*;
-    use crate::battle::{Battle, Difficulty};
+    use crate::battle::{Battle, DailyRule, Difficulty, Row};
     use crate::boss::BossId;
-    use crate::model::Faction;
+    use crate::model::{CardInst, Faction, faction_cards};
 
     fn normal() -> Battle {
         Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
@@ -483,7 +494,7 @@ mod tests {
         let mut v = normal().view();
         assert_eq!(marker_blocks(&frame_of(&v)).len(), 0, "空盘没有可标的格");
 
-        let mut lit = CardView { name: "足", cost: 1, hp: 5, threshold: 3, flame: 3, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
+        let mut lit = CardView { name: "足", cost: 1, hp: 5, threshold: 3, base_threshold: 3, flame: 3, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
         v.player_front[0] = Some(lit.clone());
         assert_eq!(marker_blocks(&frame_of(&v)).len(), 1, "焰＝阈 算足额");
 
@@ -491,9 +502,45 @@ mod tests {
         v.player_front[1] = Some(lit);
         assert_eq!(marker_blocks(&frame_of(&v)).len(), 1, "焰<阈 不许亮");
 
-        let other = CardView { name: "差", cost: 1, hp: 5, threshold: 9, flame: 0, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
+        let other = CardView { name: "差", cost: 1, hp: 5, threshold: 9, base_threshold: 9, flame: 0, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
         v.enemy_front[0] = Some(other);
         assert_eq!(marker_blocks(&frame_of(&v)).len(), 1, "敌方格也走同一支笔画，不许多出一块");
+    }
+
+    /// 生效≠基础时那一格要**同时**给出两枚数（`12 / 4→3`），相等时不许多那道箭头。
+    /// 只印生效值，玩家看不出这格正被人削着阈值——而"这格怎么突然就满了"正是那条改阈值的后果。
+    #[test]
+    fn the_cell_prints_both_thresholds_only_when_the_effective_one_moves() {
+        let mut v = normal().view();
+        let moved = CardView { name: "削", cost: 1, hp: 12, threshold: 3, base_threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: false, trait_label: "无", skills: vec![] };
+        v.player_front[0] = Some(moved.clone());
+        v.player_front[1] = Some(CardView { threshold: 4, ..moved });
+        let t = texts(&frame_of(&v));
+        assert!(t.iter().any(|s| s == "12 / 4→3"), "生效≠基础那一格没成一对：{t:?}");
+        assert!(t.iter().any(|s| s == "12 / 4"), "两枚相等那一格该只印一枚：{t:?}");
+        assert!(!t.iter().any(|s| s.contains("4→4")), "相等那格不许补那道箭头");
+    }
+
+    /// 走引擎真路的证人：**业火狂潮**把阈值减半 ⇒ 那一格在帧上必须成对。
+    /// 上一条手搭快照、钉打印规则；这一条钉"这对数在真实盘面上会出现"——出现不了的呈现等于没呈现
+    /// （其七 D4 那枚金边就是这么抓出来的：画法一直在，通路从来没有）。
+    #[test]
+    fn the_daily_flame_tide_makes_the_cell_print_a_pair() {
+        let def = *faction_cards(Faction::Ember)
+            .iter()
+            .find(|d| d.threshold >= 2)
+            .expect("牌池里没有阈值≥2 的牌 ⇒ 减半这一族在盘面上无从谈起，本条要改前提");
+        let base = def.threshold;
+        let mut b = normal().with_daily_rule(DailyRule::FlameTide);
+        b.enemy_place_inst(CardInst::new(900, def), 0, Row::Front)
+            .expect("这张牌该落得进敌方前排");
+        let v = b.view();
+        let cell = v.enemy_front[0].as_ref().expect("落子之后格里要有牌");
+        assert_eq!(cell.base_threshold, base, "基础值仍是牌面那个数：减半不许改写它");
+        assert_eq!(cell.threshold, (base / 2).max(1), "生效值＝减半");
+        let want = format!("{} / {}→{}", cell.hp, base, cell.threshold);
+        let t = texts(&frame_of(&v));
+        assert!(t.iter().any(|s| s == &want), "帧上那一格没成对：想要 {want}，实测 {t:?}");
     }
 
     /// 足额块由 `FLAME_MARK` 认，不抄字面量——否则改了 token 这条测照样绿，就成了给旧读数背书。
@@ -509,7 +556,7 @@ mod tests {
     /// 的尾字会被方块压住——这一条就是那次压字事故的牙：锚点只要往回挪到常态那个数，断言当场红。
     #[test]
     fn the_flame_badge_never_sits_on_top_of_the_trait_text() {
-        let lit = CardView { name: "火星", cost: 2, hp: 1, threshold: 3, flame: 3, upgrades: 0, crafted: false, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
+        let lit = CardView { name: "火星", cost: 2, hp: 1, threshold: 3, base_threshold: 3, flame: 3, upgrades: 0, crafted: false, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
         let dim = CardView { flame: 0, ..lit.clone() };
         let cell_w = 300;
         let cell = Rect::new(0, 0, cell_w, CELL_H);
@@ -544,12 +591,12 @@ mod tests {
     /// 各自往右上角推一次就成 `开端 · 开端`（首版实测就是这样，交付图上一眼可见）。
     #[test]
     fn a_starter_card_says_it_once_not_twice() {
-        let starter = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: true, trait_label: "开端", skills: vec![] };
+        let starter = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, base_threshold: 4, flame: 0, upgrades: 0, crafted: false, starter: true, trait_label: "开端", skills: vec![] };
         let out = card_cell(Rect::new(0, 0, 300, CELL_H), &starter, lane::PLAYER_FILL, lane::PLAYER_EDGE);
         assert_eq!(marks_joined(&out), Some("开端".to_string()), "同一个词印两遍＝噪声：{out:?}");
 
         // 反面对照：不同来源的两个词该都留下，不许把 dedup 写成"只留第一个标记"。
-        let both = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, flame: 0, upgrades: 1, crafted: true, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
+        let both = CardView { name: "余烬", cost: 0, hp: 1, threshold: 4, base_threshold: 4, flame: 0, upgrades: 1, crafted: true, starter: false, trait_label: "战吼:同列+2焰", skills: vec![] };
         let out = card_cell(Rect::new(0, 0, 300, CELL_H), &both, lane::PLAYER_FILL, lane::PLAYER_EDGE);
         assert_eq!(marks_joined(&out).as_deref(), Some("造·升级+1·战吼:同列+2焰"), "三个不同来源的标记要连起来全在");
     }

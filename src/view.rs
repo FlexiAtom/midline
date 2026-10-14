@@ -25,12 +25,16 @@ use crate::battle::{Battle, CANDLE_HP, SideK};
 use crate::model::CardInst;
 
 /// 一张牌的可见面。`threshold` 的口径由构造点决定：在场格＝该格生效阈值，手牌＝基础阈值。
+/// `base_threshold` **恒**是牌面自己那个数（不受同列修正），两枚不等＝这一格正被人改过阈值——
+/// 帧上把这一对都印出来，文本路（TUI/CLI）只印生效值：那是刻意分叉，理由记在档 §5 D2。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CardView {
     pub name: &'static str,
     pub cost: i32,
     pub hp: i32,
     pub threshold: i32,
+    /// 牌面基础阈值，与 `threshold` 同源不同口径（后者按构造点取生效值）。
+    pub base_threshold: i32,
     pub flame: i32,
     pub upgrades: u8,
     /// 融合产物（自造牌）：任何离场永久消失。
@@ -102,6 +106,7 @@ fn card_view(c: &CardInst, threshold: i32) -> CardView {
         cost: c.def.cost,
         hp: c.hp,
         threshold,
+        base_threshold: c.base_threshold(),
         flame: c.flame,
         upgrades: c.upgrades,
         crafted: c.crafted,
@@ -191,7 +196,12 @@ mod tests {
 
         let v = b.view();
         assert_eq!(v.enemy_front[0].as_ref().unwrap().threshold, held_base - 1, "同列友方阈值-1 必须进快照");
+        assert_eq!(v.enemy_front[0].as_ref().unwrap().base_threshold, held_base, "基础阈值不许被生效值盖掉：帧上那对 `4→3` 的前一枚就是它");
         assert_eq!(v.enemy_back[0].as_ref().unwrap().threshold, helper_base, "自己的技能不算自己");
+        assert_eq!(v.enemy_back[0].as_ref().unwrap().base_threshold, helper_base, "没被修正的格，两枚相等");
+        assert_eq!(v.enemy_front[0].as_ref().unwrap().threshold, v.enemy_front[0].as_ref().unwrap().base_threshold - 1, "两枚之差就是那支技能的量");
+        assert!(v.hand.iter().all(|c| c.threshold == c.base_threshold), "手牌两枚同值：牌还没上场，没有生效这回事");
+        assert!(!v.hand.is_empty(), "手牌空了 ⇒ 上面那句是空转");
         assert_eq!(v.enemy_front[0].as_ref().unwrap().hp, faction_cards(Faction::Ember)[1].power, "快照里的 hp 是实例当前值");
     }
 
