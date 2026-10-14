@@ -80,7 +80,8 @@ impl Geom {
     /// `len` 落进缓冲的，命中框只有照同一支算才谈得上"点到的就是看见的那一格"。
     ///
     /// 两端各问一次 `at` 再取差的写法看着更准，实际会把画出来的最外一列（行）判成别人的：
-    /// 现量本机型这档 k 下 12 块控件有 6 块差一格。这条由测 `the_hit_rect_is_the_painted_rect` 钉住。
+    /// 现量本机型这档 k 下 13 块控件有 6 块差一格（差额没随 其六 那枚按钮变：它不在这 6 块里）。
+    /// 这条由测 `the_hit_rect_is_the_painted_rect` 钉住。
     fn to_dev(self, r: &Rect) -> Rect {
         let [x, y, w, h] = frame::dev_rect(&self.scale, r.x, r.y, r.w, r.h);
         Rect::new(x, y, w, h)
@@ -348,7 +349,10 @@ mod tests {
             "改成活帧后第一帧的摘要变了——那说明起点不再与静态那一桌同源"
         );
         assert_eq!(lived.prims.len(), statics.prims.len(), "prim 条数也须一致");
-        assert_eq!(frame::frame_digest(&lived), 0xe501cd91a1df7681, "其一 立下的现读数");
+        // 这一读数是**重新基准**过的：其六 那人裁 ③ 多画了一枚控件（一块胶囊＋一行字），帧必然变。
+        // 旧值 `0xe501cd91a1df7681`（其一 立下的那一帧，板上还没有按钮）记在这儿，是为了改完之后
+        // 还能问一句"到底变了多少"；它不许被就地覆盖成"反正变了"那种无据的数。
+        assert_eq!(frame::frame_digest(&lived), 0x214fb059bca0765b, "其六 加入结束回合按钮后的现读数（旧值 0xe501cd91a1df7681）");
     }
 
     #[test]
@@ -382,7 +386,7 @@ mod tests {
         let l = live.layout();
         let geom = Geom::of(BUF.0, BUF.1, &live.frame());
         let pairs = geom.pairs(&l);
-        for (want, r) in pairs.iter().filter(|(g, _)| matches!(g, Region::Hand(_) | Region::PlayerCell(_))) {
+        for (want, r) in pairs.iter().filter(|(g, _)| g.is_control()) {
             assert!(r.w > 0 && r.h > 0, "{want:?} 在设备上没有面积");
             for y in r.y..r.y + r.h {
                 for x in r.x..r.x + r.w {
@@ -395,7 +399,7 @@ mod tests {
         }
     }
 
-    /// 命中框 == 绘制框，按**读数**钉：这 12 个数是 `paint` 往缓冲里落的那四个一组（`at` 原点＋`len`
+    /// 命中框 == 绘制框，按**读数**钉：这 13 块是 `paint` 往缓冲里落的那四个一组（`at` 原点＋`len`
     /// 宽高），不是从 `to_dev` 现算出来再比给自己——那样两边一起错也照绿。改任何一档 k、版面或
     /// `dev_rect` 的写法，这条必红，红了就重量一遍"点得到的是不是画出来的那一格"。
     /// 红的时候把**每一块**都列出并报数：一次换算漂移通常只咬在边缘那一格，第一处不是全部落点。
@@ -405,11 +409,12 @@ mod tests {
         let l = live.layout();
         let geom = Geom::of(BUF.0, BUF.1, &live.frame());
         let pairs = geom.pairs(&l);
-        let want: [(Region, (i32, i32, i32, i32)); 12] = [
+        let want: [(Region, (i32, i32, i32, i32)); 13] = [
             (Region::PlayerCell(0), (400, 331, 196, 73)),
             (Region::PlayerCell(1), (601, 331, 196, 73)),
             (Region::PlayerCell(2), (803, 331, 196, 73)),
             (Region::PlayerCell(3), (1005, 331, 196, 73)),
+            (Region::EndTurn, (1089, 420, 112, 34)),
             (Region::Hand(0), (400, 482, 95, 64)),
             (Region::Hand(1), (500, 482, 95, 64)),
             (Region::Hand(2), (601, 482, 95, 64)),
@@ -435,9 +440,9 @@ mod tests {
             off.len()
         );
         assert_eq!(
-            pairs.iter().filter(|(g, _)| matches!(g, Region::Hand(_) | Region::PlayerCell(_))).count(),
+            pairs.iter().filter(|(g, _)| g.is_control()).count(),
             want.len(),
-            "控件区多了一块或少了一块：上面那张表只钉了 8 张手牌＋4 个我方格"
+            "控件区多了一块或少了一块：上面那张表只钉了 8 张手牌＋4 个我方格＋一枚结束回合按钮"
         );
     }
     #[test]
@@ -541,6 +546,35 @@ mod tests {
             .filter(|p| matches!(p, Prim::Label { text, .. } if text == "开端"))
             .count();
         assert!(names >= 1, "落下去的那张牌在指令表里没有名字");
+    }
+
+    /// 人裁 ③ 那一枚按钮的**运输证人**：手指落在它上面，产出的那一行要真走进引擎、
+    /// 并且把回合翻过去。前一条测只证了带坐标的 `p`；`e` 是零参数命令，它没有别的入口，
+    /// 所以"触屏能走完一整个回合"这句话只能在这儿证——手势侧只点得着落子、过回合仍要靠打字，
+    /// 等于闭环没闭。
+    #[test]
+    fn the_end_turn_button_turns_the_page_in_the_engine() {
+        let mut live = starter_table();
+        let geom = live.geom().expect("开局那桌也该有尺");
+        let l = live.layout();
+        let before_turn = live.battle.view().player.turn;
+        let before = frame::frame_digest(&live.frame());
+
+        // 先选一张牌，再点按钮：按钮那一下必须把这份选中态一起清掉。
+        // 留着它的话，下一格我方格会拿这张**上一回合的**牌去落子——那是比"点不动"更坏的一种错。
+        tap(&mut live, center(&geom, &l, Region::Hand(0)));
+        assert_eq!(live.selected(), Some(0), "起点：先让手里真的有一份选中态");
+
+        let up = tap(&mut live, center(&geom, &l, Region::EndTurn));
+        assert_eq!(up.region, Some(Region::EndTurn), "按钮中心点到的不是按钮");
+        assert_eq!(up.line, Some("e\n".into()), "点按钮没产出结束回合那一行：{:?}", up.line);
+        assert_eq!(up.fed, Some(Fed::Done), "那一行没被引擎侧接住：{:?}", up.fed);
+        assert_eq!(live.selected(), None, "过完回合还留着选中态——下一格会落上一回合那张牌");
+
+        let after = live.battle.view().player.turn;
+        assert!(after > before_turn, "回合数没推进（前 {before_turn} 后 {after}）：产出了 `e` 却没走到引擎");
+        assert_ne!(frame::frame_digest(&live.frame()), before, "引擎翻了回合，画面却没变");
+        assert!(live.picker.marks(&l).is_empty(), "按钮抬起后仍盖着态层");
     }
 
     #[test]

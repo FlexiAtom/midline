@@ -377,6 +377,11 @@ pub(crate) fn frame_prims(v: &Board, seed: u64, scene: &str, marks: &[(Region, L
     prims.push(label(l.player_holder.x, l.player_holder.y, typo::TITLE_LARGE, lane::PLAYER_EDGE, Anchor::Start, &me));
     prims.extend(bar(l.player_holder.rect(), v.player.hp, v.player.cap, lane::PLAYER_EDGE));
 
+    // 「结束回合」：人裁 ③ 那一枚，占持业者同一横带的**右端**（左边是柱与读数，那块本来就空着）。
+    // 态层只动容器色、不动描边——与 `card_cell` 同口径，否则按下会多读出一句"边框也在动"。
+    prims.push(bordered(l.end_turn, &layered(color::PRIMARY_CONTAINER, layer_of(marks, Region::EndTurn)), shape::FULL, color::PRIMARY, layout::STROKE_BOUNDARY, false));
+    prims.push(label(l.end_turn_text_x, l.end_turn_text_y, typo::LABEL_LARGE, color::ON_PRIMARY_CONTAINER, Anchor::Start, touch::END_TURN_LABEL));
+
     prims.push(label(
         l.left_x,
         l.hand.label_y,

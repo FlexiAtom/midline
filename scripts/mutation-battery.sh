@@ -95,7 +95,7 @@ crun() { shout || return 0; local o rc; o="$(python3 "$ROOT/scripts/color-litera
 # 壳测 lane：只过 frame::——在壳里跑整族会连同那 41 条 `#[path]` 引擎测一起红（CARGO_MANIFEST_DIR 变了），
 # 那个数与这条变异无关，是假数（第十八步·其一 的 README 条目里已经写明同一条口径）
 frun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q frame:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
-# 壳侧输入 lane（M170–M171）：同一套口径，过滤词换成 input::（现量 14 条，其中那 12 个钉住的读数是 其四 补的）。
+# 壳侧输入 lane（M170–M171）：同一套口径，过滤词换成 input::（现量 15 条；那把读数尺钉住 13 块控件，12 个数字是 其四 补的、第 13 个是 其六 那枚按钮）。
 # 它必须与 frun 分开：整族在 $D 里跑会连那 41 条 `#[path]` 引擎测一起红（CARGO_MANIFEST_DIR 变了），
 # 那个数与变异无关，是口径坏了——照 frun 那条注释同一个理由，只是过滤词不同。
 irun() { shout || return 0; local o r; o="$(cd "$D/shell-android" && cargo test --offline -q input:: 2>&1)"; r="$(printf '%s\n' "$o" | grep -E -- '--- FAILED|test result:')"; if [ -z "$r" ]; then printf '!! 壳侧 cargo 没有产出 test result ⇒ 编译失败或过滤词没命中——这条**没有落点**，别当"没红"读\n'; printf '%s\n' "$o" | grep -E -- '^error' | head -4; else printf '%s\n' "$r"; fi; printf '%s\n' "$o" | sed -n '/panicked at/,+3p' | head -8; }
@@ -1463,7 +1463,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'for v in [0, *y, *w, *h, *radius] {'))"
 frun
 
-echo "### M170 把命中框的换算从「与绘制侧共用 dev_rect」换成看着更准的那写法——两端各问一次 at 再取差（to_dev 里那两行换成四个 at 加两次减法，两个起点一个不动）⇒ 实测壳测 input:: 十四条里红一条，红在按读数钉的那条 the_hit_rect_is_the_painted_rect，报「差一格的控件共 6 块」：PlayerCell 四块的命中框高 72、画出来是 73（画出的最后一行点不着），Hand(1) Hand(2) 两块的命中框宽 96、画出来是 95（多出来那一列是两块牌之间的空档，按下去却选中一张牌）。另外 13 条全绿，包括逐格扫像素那条 every_drawn_pixel_of_a_control_hits_that_control 与中心点那条 the_tap_lands_on_the_cell_that_was_drawn_there——这两把尺把命中矩形**现算出来再比给自己**，两边一起漂就照绿，所以这一格只能由**读数**那条钉；这也是本帧把那颗尺从现算改成 12 个钉住数字的全部原因，少了它这条变异在电池里是静默假绿。起点仍走 at，所以中心点永远点得着、真机上随手一下也过得去——症状只有边缘那一格，正是这类换算最容易被顺手改错的地方。本机型 k=0.7003891 现读：round(o+（x+w）·k) 与 round(o+x·k)+round(w·k) 在小数落两侧不同档时差一格，12 块控件有 6 块落在不同档"
+echo "### M170 把命中框的换算从「与绘制侧共用 dev_rect」换成看着更准的那写法——两端各问一次 at 再取差（to_dev 里那两行换成四个 at 加两次减法，两个起点一个不动）⇒ 实测壳测 input:: 十五条里红一条（14 passed; 1 failed），红在按读数钉的那条 the_hit_rect_is_the_painted_rect，报「命中框与绘制框差一格的控件共 6 块（实测 ≠ 画出的读数）」并把那 6 块整列打出来：PlayerCell(0..3) 四块的命中框高 72、画出来是 73（画出的最后一行点不着），Hand(1) Hand(2) 两块的命中框宽 96、画出来是 95（多出来那一列是两块牌之间的空档，按下去却选中一张牌）。另外 14 条全绿，包括逐格扫像素那条 every_drawn_pixel_of_a_control_hits_that_control 与中心点那条 the_tap_lands_on_the_cell_that_was_drawn_there——这两把尺把命中矩形**现算出来再比给自己**，两边一起漂就照绿，所以这一格只能由**读数**那条钉；这也是 其四 把那颗尺从现算改成钉住数字的全部原因，少了它这条变异在电池里是静默假绿。起点仍走 at，所以中心点永远点得着、真机上随手一下也过得去——症状只有边缘那一格，正是这类换算最容易被顺手改错的地方。本机型 k=0.7003891 现读：round(o+（x+w）·k) 与 round(o+x·k)+round(w·k) 在小数落两侧不同档时差一格，13 块控件里有 6 块落在不同档。**这一条是 其六 复跑过的**：控件从 12 块长到 13 块（新加那枚结束回合按钮），那 6 块的名字与四组数一字未变，按钮不在列出的 6 块里——差额没变是这次复跑取到的读数，不是从「按钮形状一样」推的；钉住数字那头随之从 12 个改成 13 个（其四 那 12 个是读数尺的原样，其六 添的第 13 个是 (1089, 420, 112, 34)）"
 restore_shell; pys "
 p='$D/shell-android/src/input.rs'; s=open(p,encoding='utf8').read()
 a='        let [x, y, w, h] = frame::dev_rect(&self.scale, r.x, r.y, r.w, r.h);\n        Rect::new(x, y, w, h)'
@@ -1471,7 +1471,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        let s = self.scale;\n        let (x0, x1) = (s.at(s.off_x, r.x), s.at(s.off_x, r.x + r.w));\n        let (y0, y1) = (s.at(s.off_y, r.y), s.at(s.off_y, r.y + r.h));\n        Rect::new(x0, y0, x1 - x0, y1 - y0)'))"
 irun
 
-echo "### M171 让壳自己编一句拒绝理由（feed 里 Exec::Refused 那一支不再搬引擎那句，改成塞一条自造的短语，四支分派与产出的行一字不动）⇒ 实测壳测 input:: 十四条里红三条：every_tap_pair_reaches_the_engine_and_answers_in_its_own_words（要求把**引擎原话**带回来的那对点按）、a_refused_line_is_the_engines_own_words（拒绝理由必须与引擎同字）、the_log_line_names_the_action_coords_the_region_and_the_answer（日志正文里要出现那句业力）。先炸的那条报「装机帧那一发的现读答复漂了」，left 是壳自造那句、right 是引擎原话「业力不足：需5，当前0」。这条量的是本模块第三条口径线「合法性一律交回引擎」：症状不是崩溃也不是画错，而是屏上出现一句**引擎没说过**的话——那种坏永远骗得过编译、骗得过对撞的摘要，因为帧内容压根没变。真机那一格同一句是有的：装机帧那桌现读答复就是「业力不足：需5，当前0」，写进测里的那条 assert 与它同字"
+echo "### M171 让壳自己编一句拒绝理由（feed 里 Exec::Refused 那一支不再搬引擎那句，改成塞一条自造的短语，四支分派与产出的行一字不动）⇒ 实测壳测 input:: 十五条里红三条（12 passed; 3 failed），三条各喊各的：**every_tap_pair_reaches_the_engine_and_answers_in_its_own_words** 报 assertion left == right failed 后面那句「装机帧那一发的现读答复漂了」，left 是壳自造那句、right 是引擎原话「业力不足：需5，当前0」；**a_refused_line_is_the_engines_own_words**（拒绝理由必须与引擎同字那条）打印出来的文案就是那句自造短语本身——这条 assert 把现读的 why 原样当失败文案，所以红了只剩那句引擎没说的话，没有等式可看；**the_log_line_names_the_action_coords_the_region_and_the_answer** 把整行日志摊出来收尾喊「该带上引擎那句」，同一行里 region=PlayerCell(1)、line=p 0 P2、fed=refused(那句自造短语) 三样都在。三条的**打印到达次序不固定**（并行跑，本次与 其四 那次最先露面的不是同一条），所以这条抬头按测名归位、不按次序写。这条量的是本模块第三条口径线「合法性一律交回引擎」：症状不是崩溃也不是画错，而是屏上出现一句**引擎没说过**的话——那种坏永远骗得过编译、骗得过对撞的摘要，因为帧内容压根没变。真机那一格同一句是有的：装机帧那桌现读答复就是「业力不足：需5，当前0」，写进测里的那条 assert 与它同字"
 restore_shell; pys "
 p='$D/shell-android/src/input.rs'; s=open(p,encoding='utf8').read()
 a='            Exec::Refused(e) => Fed::Refused(e),'
@@ -1511,3 +1511,29 @@ a='            if !set[i].is_null() && owners[i] == owner {'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'            if !set[i].is_null() {'))"
 erun
+
+# ===== 其六·结束回合按钮的两条牙（M175–M176）=====
+# 这两条打的都是**主仓** src/touch.rs，所以走 py()（它取的是 $D/src 那份字节和），但两条都必须跑两面：
+# 壳走 #[path] 编的就是同一份 touch.rs，而**钉住的那 13 块设备像素矩形只有壳侧看得见**。
+# 于是 M175 的落点在主仓是零——画布长高这件事主仓没有任何一把尺量得到，这是本帧读到的一条口径边界，不是漏。
+echo "### M175 给「结束回合」按钮单独划一横带（把持业者那一带的推进量再加一格 BUTTON_H＝48，按钮随之落到带下——这就是**最会被顺手写下的那版版面**，因为它让按钮看着更像一块独立控件）⇒ 实测主仓 265 条（含 18 条集成）**一条都不红**（test result: ok. 265 passed; 0 failed）；红的全在壳侧 input:: 那 15 条里，共 4 条（11 passed; 4 failed）：the_scale_and_offset_are_the_ones_the_pixels_were_drawn_with 先炸在 k 那一档「k 现读 0.6691，与写下的 0.7004 不同档」——0.6691 正是 720/1076，即钉住的那块 1028 高的画布被这一格顶到 1076；同一支测里那句「画布尺寸变了」排在 k 后面、这次没轮到（红按**测**计不按断言计，抬头别把没打印的话写成打印了），the_hit_rect_is_the_painted_rect 把**13 块全部**列出（PlayerCell(0) 实测 417,316,187,70 对画出的 400,331,196,73；按钮实测 1076,401,107,32 对 1089,420,112,34；八张手牌一起缩成 91×62），the_letterbox_and_the_boards_own_margin_are_not_targets 报「left None 对 right Some(PlayerCell(0))」——k 一掉，first_column 那一列落进外边距里，最左一格反而点不着了，the_live_first_frame_is_the_static_frame_not_a_new_one 的摘要现读 0x514dda45224cfd1d 对钉住的 0x214fb059bca0765b。剩下 11 条全绿，包括逐格扫像素那条与中心点那条：它们**现算**矩形再比给自己，两边一起漂就照绿（与 M170 同一条口径，这里再验一次）。这一格钉的是 人裁 ③ 那条裁决里最贵的一笔代价：按钮必须**零高度增长**。代价的来源是算术不是审美——本机 1600×720 上 scale_of 吃的是纵向那一档，画布每长高一格 k 就掉一格，那 13 块钉住的读数连同历轮装机的 A/B 与对撞摘要一起作废；而作废之后**没有任何一条主仓测会喊**"
+restore_shell; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='''    let end_turn_text_y = y + layout::BUTTON_BASELINE;
+    y += layout::HEADER_DROP + layout::BAR_H + layout::BLOCK_GAP;
+'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'''    let end_turn_text_y = y + layout::BUTTON_BASELINE;
+    y += layout::HEADER_DROP + layout::BAR_H + layout::BUTTON_H + layout::BLOCK_GAP;
+'''))"
+run
+irun
+
+echo "### M176 把 EndTurn 从接点判据 is_control 里摘掉（词表那张判据退回「只有带坐标的两族接点」，按钮的矩形、绘制、release 里产那一行全留着）⇒ 实测主仓 265 条里红 2 条：the_regions_that_take_a_tap_are_the_regions_that_got_drawn 报「接点的区＝手牌＋我方格＋那一枚结束回合」left 9 对 right 10，the_layers_read_their_own_coefficients_and_press_wins 报「按下结束回合什么都不亮」left 空表 对 right 一条 (EndTurn, Press)。壳侧 input:: 那 15 条里红 1 条：the_hit_rect_is_the_painted_rect 的控件计数 left 12 对 right 13。**这条最要紧的一格是它不红的地方**：release 里那一支仍然产「e」那一行，所以壳侧 the_end_turn_button_turns_the_page_in_the_engine 照旧绿——手指点得动、回合翻得动，**只是按下去屏上没有任何预告**（PRESS 层不盖）。症状真机才看得见，而它既不是崩溃也不是画错位置，所以这一格由「谁盖态层」那张表与「控件有几块」那个数两面各钉一次；is_control 与 release 是两张表、必须有人钉它们别各自漂"
+restore_shell; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='        matches!(self, Region::Hand(_) | Region::PlayerCell(_) | Region::EndTurn)'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        matches!(self, Region::Hand(_) | Region::PlayerCell(_))'))"
+run
+irun

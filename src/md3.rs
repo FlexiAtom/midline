@@ -305,6 +305,18 @@ pub mod layout {
     /// 两根持业者柱之间的步长（必须容得下一整根条加间隙）。
     pub const HOLDER_STRIDE: i32 = 460;
 
+    /// 「结束回合」那一枚控件的宽。人裁 ③（2026-10-14）：零参数命令也要有手指能落的地方，
+    /// 而它**不借**持业者柱、**不借**日志框，新立一块。
+    /// 160 单位 ⇒ 本机 112 像素：比一枚手牌格窄，但它左右都没有邻居，缝里落指点不到别的东西。
+    pub const BUTTON_W: i32 = 160;
+    /// 同一枚控件的高。**刻意等于持业者那一横带的全高**（标签下落＋条），所以画布一格没长。
+    /// 这不是审美而是算术：`frame::scale_of` 在 1600×720 上吃的是**纵向**那一档，
+    /// 画布每长高一格，k 就掉一格，13 块控件的设备像素矩形连同历轮装机 A/B 读数一起作废——
+    /// 有人替这一格守着的是 `input.rs` 里那条画布尺寸断言（现量 1240×1028）。
+    pub const BUTTON_H: i32 = HEADER_DROP + BAR_H;
+    /// 按钮内那行字的基线（带高 48、字号 label-large 14，居中落在 28）。
+    pub const BUTTON_BASELINE: i32 = 28;
+
     /// 第一行字的基线（顶部留白之后）。
     pub const TITLE_BASELINE: i32 = 40;
     /// 标题行之后的一次下落。
@@ -645,6 +657,9 @@ mod tests {
             ("BAR_W", BAR_W),
             ("BAR_H", BAR_H),
             ("HOLDER_STRIDE", HOLDER_STRIDE),
+            ("BUTTON_W", BUTTON_W),
+            ("BUTTON_H", BUTTON_H),
+            ("BUTTON_BASELINE", BUTTON_BASELINE),
             ("MIDLINE_BAND_H", MIDLINE_BAND_H),
             ("FLAME_MARK", FLAME_MARK),
             ("LOG_H", LOG_H),
@@ -661,6 +676,7 @@ mod tests {
         for (small, big, note) in [
             (HAND_H, CELL_H, "手牌格该比盘面格矮"),
             (BAR_W, HOLDER_STRIDE, "柱步长必须容得下一整根条，否则双柱叠字"),
+            (BAR_W + BUTTON_W, BOARD_W - MARGIN * 2, "持业者条与结束回合按钮同带并排，加起来不许超出内容宽"),
             (MARGIN, BOARD_W / 2, "外边距吃掉整个画布就没地方摆盘面了"),
         ] {
             assert!(small < big, "{note}：{small} 越过了 {big}");

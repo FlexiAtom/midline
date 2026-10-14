@@ -27,6 +27,10 @@
 //! - **词汇由 `command.rs` 那张词表决定，不由手感决定**。战斗内十个命令词里只有 `p <手牌idx> <P1-P4>` 带坐标，
 //!   其余（`s`／`sh`／`di`／`ds`／`e`／`l`／`b`／`q`／`h`）一个都不以敌方格或柱号为参数 ⇒ 敌方一侧、中线、日志一律不接点。
 //!   献祭（`s <Pn>`）属"永久消失"那一族，不给单指手势：文档里没有这条规则，那是**新规则**不是补空白，须走池。
+//!   `e`（结束回合）是零参数命令，按同一判据本来也不接点——它现在接，理由不是算术而是人裁：
+//!   2026-10-14 那条「看来只有3是合理的，那就选3」在三个候选（借持业者柱／借日志框／新立控件）里取了**③新立控件**，
+//!   于是 `Region::EndTurn` 是词表之外**唯一**一块由裁决而不是由参数形状取得的接点区，它的代价（多一枚控件的版式）记在
+//!   同一句裁决旁边，不在这里再论证一遍。
 //! - **态层算成实心色**，不在 SVG 里用 `fill-opacity`。真机那条路是 `ANativeWindow` 帧缓冲写像素，没有合成器
 //!   替做 alpha；口径住在 `md3::state::blend`，两个后端共用它才能算出同一个颜色。
 //!
@@ -75,16 +79,20 @@ pub(crate) enum Region {
     BackCell(usize),
     EnemyHolder(usize),
     PlayerHolder,
+    /// 人裁 ③ 那一枚「结束回合」（见抬头第二条边界线）。它不在词表的参数形状里，
+    /// 所以它是**唯一**一块靠裁决而不是靠"带不带坐标"接点的区。
+    EndTurn,
     Midline,
     Log,
 }
 
 impl Region {
     /// 这一区接不接点。判据是抬头那张词表，不是我的偏好：带坐标的命令只有落点那一条，
-    /// 而落点的两个参数一个来自手牌、一个来自我方格。
+    /// 而落点的两个参数一个来自手牌、一个来自我方格；第三条 `EndTurn` 不走这条判据，
+    /// 它是人裁 ③ 买进来的（代价＝版式一枚），所以这一张表从此有**两种**接点理由，别再当一种读。
     #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) const fn is_control(self) -> bool {
-        matches!(self, Region::Hand(_) | Region::PlayerCell(_))
+        matches!(self, Region::Hand(_) | Region::PlayerCell(_) | Region::EndTurn)
     }
 }
 
@@ -174,6 +182,12 @@ pub(crate) struct Layout {
     pub midline: Rect,
     pub midline_text_y: i32,
     pub player_holder: Holder,
+    /// 「结束回合」那一枚，与持业者条同一横带、右对齐（带里左边是柱与读数，右边本来空着）。
+    pub end_turn: Rect,
+    /// 那枚按钮上字的落点。居中是**从带宽里减掉量出来的字宽**，不是抄第二个数：
+    /// 文案一改，这里跟着改，绘制侧不必知道宽度从哪儿来。
+    pub end_turn_text_x: i32,
+    pub end_turn_text_y: i32,
     pub hand: Hand,
     pub piles_y: i32,
     pub log: Rect,
@@ -182,6 +196,9 @@ pub(crate) struct Layout {
     pub log_step: i32,
     pub log_budget: f64,
 }
+
+/// 「结束回合」那一枚控件上的字。量宽度的一侧与画它的一侧读的是同一串，改文案只改这一处。
+pub(crate) const END_TURN_LABEL: &str = "结束回合";
 
 /// 快照 → 几何。列数从数组长度取（口径与 `canvas` 抬头那条相同：编码器不许替引擎再钉一次盘面形状），
 /// 画布高度由"这一帧实际排到哪儿"推出。
@@ -228,6 +245,9 @@ pub(crate) fn layout_of(v: &Board) -> Layout {
     y = player.y + layout::CELL_H + layout::BLOCK_GAP;
 
     let player_holder = Holder { region: Region::PlayerHolder, x: left_x, y };
+    let end_turn = Rect::new(width - layout::MARGIN - layout::BUTTON_W, y, layout::BUTTON_W, layout::BUTTON_H);
+    let end_turn_text_x = end_turn.x + ((end_turn.w as f64 - display_width(END_TURN_LABEL) * typo::LABEL_LARGE as f64) / 2.0).round() as i32;
+    let end_turn_text_y = y + layout::BUTTON_BASELINE;
     y += layout::HEADER_DROP + layout::BAR_H + layout::BLOCK_GAP;
 
     let hand = hand_of(&v.hand, y, left_x, content_w);
@@ -258,6 +278,9 @@ pub(crate) fn layout_of(v: &Board) -> Layout {
         midline,
         midline_text_y,
         player_holder,
+        end_turn,
+        end_turn_text_x,
+        end_turn_text_y,
         hand,
         piles_y,
         log,
@@ -305,6 +328,7 @@ impl Layout {
         out.push((Region::Midline, self.midline));
         out.extend(self.player.cells.iter().copied());
         out.push((Region::PlayerHolder, self.player_holder.rect()));
+        out.push((Region::EndTurn, self.end_turn));
         out.extend(self.hand.cells.iter().copied());
         out.push((Region::Log, self.log));
         out
@@ -351,6 +375,9 @@ impl Picker {
 
     /// 抬起。一次点成的判据是**按与抬落在同一区**——不同区就是拖拽，本帧不立那条手势，
     /// 所以它的正确结局是"什么都没发生"，而不是"按哪儿算哪儿"。
+    ///
+    /// 结束回合那一支会把待选吞掉：回合边界一到，"我要打第 idx 张"那句意图就过期了（手牌马上被抽走或被打掉），
+    /// 留着那圈焦点环，画面上高亮的就是**另一张牌**。落点成交时清待选是同一件事的另一种写法，两处口径要对得上。
     #[cfg_attr(not(test), expect(dead_code, reason = "生产侧唯一的读者在壳 crate（`shell-android` 走 `#[path]` 编的就是这一份）；主仓这一侧只有测在调"))]
     pub(crate) fn release(&mut self, at: Option<Region>) -> Tap {
         let pressed = self.pressed.take();
@@ -371,6 +398,10 @@ impl Picker {
                 Some(idx) => Tap::Line(format!("p {idx} P{}\n", slot + 1)),
                 None => Tap::Ignore,
             },
+            Some(Region::EndTurn) => {
+                self.selected = None;
+                Tap::Line("e\n".to_string())
+            }
             _ => Tap::Ignore,
         }
     }
@@ -484,7 +515,7 @@ mod tests {
         }
         let drawn_board = regions.iter().filter(|(g, _)| matches!(g, Region::BackCell(_) | Region::EnemyCell(_) | Region::PlayerCell(_))).count();
         assert_eq!(drawn_board, board_cells, "盘面格区数＝快照三排格数（少一格就少一个落点）");
-        assert_eq!(regions.iter().filter(|(g, _)| g.is_control()).count(), v.hand.len() + v.player_front.len(), "接点的区只有手牌与我方格：词表里只有落点那一条带坐标");
+        assert_eq!(regions.iter().filter(|(g, _)| g.is_control()).count(), v.hand.len() + v.player_front.len() + 1, "接点的区＝手牌＋我方格＋那一枚结束回合：那个 +1 是人裁 ③ 买进来的，不走词表的参数形状");
 
         // 每个区名只许出现一次：两个区共用一个名字的话，`rect_of` 会静默返回先查到的那个。
         for (i, (a, _)) in regions.iter().enumerate() {
@@ -522,6 +553,8 @@ mod tests {
             let r = l.rect_of(Region::PlayerCell(slot)).expect("我方每格都有矩形");
             assert_eq!(l.hit(r.x + r.w / 2, r.y + r.h / 2), Some(Region::PlayerCell(slot)), "第 {} 格（P{}）的中心命中的却不是它", slot + 1, slot + 1);
         }
+        let btn = l.rect_of(Region::EndTurn).expect("结束回合按钮有矩形");
+        assert_eq!(l.hit(btn.x + btn.w / 2, btn.y + btn.h / 2), Some(Region::EndTurn), "按钮中心命中的不是按钮：它跟别的区叠了，或者根本没进绘制序");
     }
 
     /// 手势词汇必须是键盘词汇的**子集**：两次点按产出的那一行，交进 `command::parse` 要读成一条真命令
@@ -545,6 +578,19 @@ mod tests {
         assert_eq!(line, "p 0 P2\n", "产出的行要与人手敲的一字不差（连行尾换行）");
         assert_eq!(picker.selected(), None, "落点成了就别留着那份选中态");
 
+        // 过回合那一枚。先重新选一张，再按按钮：按钮的结论是"这一回合不要了"，
+        // 所以它必须把那份待选一起吞掉——留着高亮的会是**另一张牌**。
+        let second = l.rect_of(Region::Hand(1)).expect("第二张手牌有矩形");
+        assert_eq!(picker.tap(&l, second.x + 1, second.y + 1), Tap::Selected(1), "点第二张没选中它");
+        let btn = l.rect_of(Region::EndTurn).expect("结束回合按钮有矩形");
+        let end_line = match picker.tap(&l, btn.x + 1, btn.y + 1) {
+            Tap::Line(s) => s,
+            other => panic!("点结束回合该产出一行过回合命令，实到 {other:?}"),
+        };
+        assert_eq!(end_line, "e\n", "按钮产出的行必须与人敲的那一条一字不差（连行尾换行）");
+        assert_eq!(picker.selected(), None, "过回合了却还留着待选：画面上高亮的已是另一张牌");
+        assert!(matches!(command::parse(&end_line), command::Command::EndTurn), "这一行在词表里读不成 EndTurn：{end_line:?}");
+
         let mut gestured = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
         let mut typed = Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1);
         match command::parse(&line) {
@@ -554,6 +600,9 @@ mod tests {
         command::execute(&mut typed, command::parse("p 0 P2\n"));
         command::execute(&mut gestured, command::parse(&line));
         assert_eq!(crate::render::render_board(&typed.view()), crate::render::render_board(&gestured.view()), "同一行两次执行，盘面必须一字不差");
+        command::execute(&mut typed, command::parse("e\n"));
+        command::execute(&mut gestured, command::parse(&end_line));
+        assert_eq!(crate::render::render_board(&typed.view()), crate::render::render_board(&gestured.view()), "按钮那行过回合与手敲那句 e 走出两个局面：手势词汇已经不在键盘词汇的子集里了");
     }
 
     /// 从快照自己数第一个空格——**不读 `Layout`**，所以这一支与手势那侧的算式是两份独立推导。
@@ -568,15 +617,16 @@ mod tests {
     /// 只是落进了隔壁那列——单点测（`the_gesture_table_is_a_subset_of_the_command_vocabulary`）只走一手，
     /// 看不出一路走下来的漂移；这里连打若干手，一次分叉就当场红。
     ///
-    /// 每三手敲一次 `e`：手势表只立两指落子，过回合**没有**手势，两侧都走打字——这恰恰是"输出形状＝
-    /// `Host::read` 那一行"换来的：没有手势的动作不必先造一个事件类型。过回合也让抽牌、攻击、阵亡
+    /// 每三手过一次回合：`e` 自人裁 ③ 起**有**手势了，所以手势那一侧走按钮、打字那一侧敲 `e`，
+    /// 两边同一条命令词才是这条尺本来的意思（从前它只证了"没有手势的动作不必造事件类型"，
+    /// 现在它证的是"造出来的那一枚手势走的仍是同一行"）。过回合也让抽牌、攻击、阵亡
     /// 真进到这条尺里（不落 `e` 的话 18 手全挤在同一回合，盘面根本不动，比的其实是两次同样的拒绝）。
     #[test]
     fn the_tap_path_and_the_typed_path_drive_one_and_the_same_battle() {
         let mut gestured = normal();
         let mut typed = normal();
         let mut picker = Picker::default();
-        let (mut tapped, mut accepted) = (0, 0);
+        let (mut tapped, mut accepted, mut turn_tapped) = (0, 0, 0);
         let opening = crate::render::render_board(&gestured.view());
 
         for step in 0..18 {
@@ -613,21 +663,31 @@ mod tests {
                 None
             };
 
-            let (g, t) = match (gesture_line.as_deref(), typed_line.as_deref()) {
+            let (g, t): (String, String) = match (gesture_line, typed_line) {
                 (Some(g), Some(t)) => (g, t),
-                (None, None) => ("e\n", "e\n"),
+                (None, None) => {
+                    let btn = l.rect_of(Region::EndTurn).expect("结束回合按钮有矩形");
+                    match picker.tap(&l, btn.x + 1, btn.y + 1) {
+                        Tap::Line(s) => {
+                            turn_tapped += 1;
+                            (s, "e\n".to_string())
+                        }
+                        other => panic!("第 {step} 手：点结束回合按钮没产出一行，实到 {other:?}"),
+                    }
+                }
                 (g, t) => panic!("第 {step} 手：一侧有落点一侧没有（手势 {g:?}／打字 {t:?}）——两局到这里已经分叉"),
             };
             assert_eq!(g, t, "第 {step} 手：两次点按产出的那行与手敲的那行不是同一串");
-            if matches!(command::execute(&mut gestured, command::parse(g)), command::Exec::Done) {
+            if matches!(command::execute(&mut gestured, command::parse(&g)), command::Exec::Done) {
                 accepted += 1;
             }
-            command::execute(&mut typed, command::parse(t));
+            command::execute(&mut typed, command::parse(&t));
 
             assert_eq!(crate::render::render_board(&gestured.view()), crate::render::render_board(&typed.view()), "第 {step} 手之后 文本面已分叉");
             assert_eq!(crate::canvas::svg_frame(&gestured.view(), 7, "two-paths"), crate::canvas::svg_frame(&typed.view(), 7, "two-paths"), "第 {step} 手之后 帧字节已分叉");
         }
         assert!(tapped >= 2, "反空虚：全程几乎没有一次是两次点按产出的行（实到 {tapped}）——手势那半在空转");
+        assert!(turn_tapped >= 1, "反空虚：一次过回合都没走按钮 ⇒ 这一格里 `e` 仍是打字在替手势作证（实到 {turn_tapped}）");
         assert!(accepted > 0, "反空虚：一次都没成交 ⇒ 这条比的只是两次同样的拒绝");
         assert_ne!(opening, crate::render::render_board(&gestured.view()), "反空虚：18 手打完盘面仍是开局那一幅 ⇒ 两条路都在原地，逐手比字节等于没比");
         assert_eq!(picker.selected(), None, "一路点下来不该留下一枚没人认领的选中态");
@@ -692,6 +752,12 @@ mod tests {
         idle.hover(l.hit(l.log.x + 1, l.log.y + 1));
         idle.press(l.hit(l.midline.x + 1, l.midline.y + 1));
         assert_eq!(idle.marks(&l), Vec::<(Region, Layer)>::new(), "非控件区产出了态层");
+
+        // 反方向那一格：按钮是**不带坐标参数**的控件，按下它必须刷得出层——
+        // 人裁 ③ 的代价之一就是 PRESS 层第一次落在词表之外那块区上，它要是不产层，屏上就是"按下去没反应"。
+        let mut on_btn = Picker::default();
+        on_btn.press(l.hit(l.end_turn.x + 1, l.end_turn.y + 1));
+        assert_eq!(on_btn.marks(&l), vec![(Region::EndTurn, Layer::Press)], "按下结束回合什么都不亮：那一枚控件没有视觉预告");
     }
 
     /// 手牌变短之后残留的选中序号，什么也不许点亮：区名查不到矩形 ⇒ 层被筛掉。
