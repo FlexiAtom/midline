@@ -296,6 +296,8 @@ fn card_row(cells: &[(Region, Rect)], cards: &[Option<CardView>], fill: &str, ed
 }
 
 /// 手牌行：一格一张，序号就是落点命令里的那个 idx。截断预算来自几何（它是格宽的函数）。
+/// 边框那两条通道（金＝造过、粗＝升过）与在场格用**同一枚 token**：结算里刚造出来／刚升上去的那张牌，
+/// 接下来几帧大概率还躺在手牌里（放牌要占业力，贵牌常常一整关没上手），只认在场格就等于"证人从不上镜"。
 fn hand_row(hand: &Hand, cards: &[CardView], marks: &[(Region, Layer)]) -> Vec<Prim> {
     debug_assert_eq!(hand.cells.len(), cards.len(), "几何表与快照的手牌数不一致：两份盘面");
     let mut out = Vec::new();
@@ -304,7 +306,14 @@ fn hand_row(hand: &Hand, cards: &[CardView], marks: &[(Region, Layer)]) -> Vec<P
         let y = cell.y;
         let fill = layered(lane::PLAYER_FILL, layer_of(marks, *region));
         let pad = x + layout::CELL_PAD_NARROW;
-        out.push(bordered(*cell, &fill, shape::SMALL, lane::PLAYER_EDGE, layout::STROKE_HAIRLINE, false));
+        out.push(bordered(
+            *cell,
+            &fill,
+            shape::SMALL,
+            if c.crafted { lane::CRAFT_EDGE } else { lane::PLAYER_EDGE },
+            if c.upgrades > 0 { layout::STROKE_EMPHASIS } else { layout::STROKE_HAIRLINE },
+            false,
+        ));
         out.push(label(pad, y + layout::HAND_ROW1, typo::LABEL_LARGE, color::ON_PRIMARY_CONTAINER, Anchor::Start, &format!("[{}]", i)));
         out.push(label(pad, y + layout::HAND_ROW2, typo::TITLE_LARGE, color::ON_SURFACE, Anchor::Start, &touch::fit(c.name, hand.name_budget)));
         out.push(label(
@@ -664,6 +673,48 @@ mod tests {
             Some(Prim::Block { edge: Some(e), .. }) => (e.stroke.clone(), e.width),
             other => panic!("格子的第一条指令该是那块带描边的底，读到 {other:?}"),
         }
+    }
+
+    /// 手牌行也带这两条通道（金＝造过、粗＝升过）。这一格不是顺手加的：其七 D4 那 46 帧实测，
+    /// 结算里刚造出来／刚升上去的那张牌，**其后每一帧都躺在手牌里**（放牌要占业力，贵牌常常一整关没上手），
+    /// 只让在场格认得到的话，金边在交付帧里就是 0 命中——通道开了，证人却从不上镜。
+    /// 四格对照同时钉住"手牌没有第三种读法"：那圈线不许变成别的颜色或别的粗细。
+    #[test]
+    fn the_two_border_channels_reach_the_hand_row_too() {
+        let mut v = normal().view();
+        assert!(v.hand.len() >= 4, "手牌不足四张就摆不出四格对照：实得 {}", v.hand.len());
+        let plain = v.hand[0].clone();
+        v.hand[0] = CardView { crafted: false, upgrades: 0, ..plain.clone() };
+        v.hand[1] = CardView { crafted: true, upgrades: 0, ..plain.clone() };
+        v.hand[2] = CardView { crafted: false, upgrades: 2, ..plain.clone() };
+        v.hand[3] = CardView { crafted: true, upgrades: 3, ..plain };
+        let hand = layout_of(&v).hand;
+        let prims = hand_row(&hand, &v.hand, &[]);
+
+        let borders = hand_borders(&prims);
+        assert_eq!(borders.len(), v.hand.len(), "一格一圈边：边数与手牌数对不上就是有人在漏画或并画");
+        assert_eq!(borders[0], (lane::PLAYER_EDGE.to_string(), STROKE_HAIRLINE), "没造没升的手牌就该是本侧原色那一圈");
+        assert_eq!(borders[1], (lane::CRAFT_EDGE.to_string(), STROKE_HAIRLINE), "造过只换色");
+        assert_eq!(borders[2], (lane::PLAYER_EDGE.to_string(), STROKE_EMPHASIS), "升过只换粗细");
+        assert_eq!(borders[3], (lane::CRAFT_EDGE.to_string(), STROKE_EMPHASIS), "两件事都发生 ⇒ 两条通道同时读得到");
+
+        // 金只许落在边框上：手牌那三行字（序号／牌名／费值阈）里有一行染金就是又并回一枚 token 了。
+        assert!(
+            prims.iter().all(|p| !matches!(p, Prim::Label { fill, .. } if fill == lane::CRAFT_EDGE)),
+            "手牌里出现了金字：{prims:?}"
+        );
+    }
+
+    /// 手牌行里每格那一圈边：按序取出 (描边色, 线宽)，第 i 块对应第 i 张手牌。
+    /// 手牌一格只出一块带边的面（其余是字），所以这个序就是格子的序。
+    fn hand_borders(prims: &[Prim]) -> Vec<(String, i32)> {
+        prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Block { edge: Some(e), .. } => Some((e.stroke.clone(), e.width)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// 一块格子的全部**面**（几何＋描边色＋线宽），刻意不含任何文字：给"遮住字"那条测当对照面。

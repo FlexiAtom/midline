@@ -747,6 +747,11 @@ fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, tokens: &mut u3
     }
 }
 
+/// 帧记录器一次最多走几关。它 bounding 的是**时长**而不是胜负：托管在第1章普通关能连赢，
+/// 不设顶就会一路打到败局才停，而每一关都是几十帧。5 ＝ `auto_battles` 那个冒烟环同一档（它 `for _ in 0..5`），
+/// 两处用同一个数是为了让"托管能走多远"在两条路上是同一个答案，不是一处 5 一处 3。
+const FRAMES_LEVEL_CAP: u32 = 5;
+
 /// 2D 离线帧记录器（第十六步·其九，走「零依赖离线帧」那一支）：托管打一关，**每次写入一张 SVG**。
 ///
 /// 文件名序号＝**写入次序**而不是回合数：战斗是在某一回合的结算里结束的，那一回合连着出两帧（战前、战后），
@@ -756,12 +761,14 @@ fn apply_meta_plan(inherit: &mut Vec<CardInst>, karma: &mut i32, tokens: &mut u3
 /// Text/Tui 变成 stdout 上的一段字串，本条变成**落盘的字节**。这两种 IO 语义不该塞进同一个 `Frame` 枚举，
 /// 所以这里既不加档也不复制 host：`Frame` 那条 match 一字不动，文本路逐字节如旧。
 /// 唯一的写是 `out` 目录里的 `frame-NNN.svg` 与 `index.html`——不落存档、不碰 `--save` 那条面、不删任何既有文件。
+///
+/// **打赢一关就往下走一格**（其七 D4）：本关胜 ⇒ 收尸进继承堆 ⇒ 走一次**真结算命令通路**（`command::execute_settle`，
+/// 与玩家敲 `fuse`／`up` 是同一套词表与同一道闸）⇒ 用改过的继承堆开下一关。这一格之前没有：记录器永远
+/// 用 `Vec::new()` 开局、只打第1关，于是融合产物与升级态在**任何**交付帧里都不存在——不是没画，是走不到。
+/// Boss 那一支不进环：`boss_run` 本身是单关跳打（`has_next=false`，§十二:499 那格的败/平/弃都不动盘同理），
+/// 拿它连关会凭空多出"打过 Boss 还接着爬"的第二套关卡语义。
 pub fn frames_dump(seed: u64, faction: Faction, diff: Difficulty, boss: Option<crate::boss::BossId>, out: PathBuf) {
-    let scene = boss.map_or("普通爬关 第1关".to_string(), |id| format!("Boss {} 第{}关", id.name(), id.chapter() * 12));
-    let mut b = match boss {
-        Some(id) => Battle::new_boss(seed, faction, id, Vec::new(), id.chapter() * 12),
-        None => Battle::new_mainline(seed, faction, enemy_faction_for(1), diff, Vec::new(), 1),
-    };
+    use crate::command::{SettleStep, execute_settle, parse_settle};
     if let Err(e) = std::fs::create_dir_all(&out) {
         println!("✖ 帧目录建不出来：{e}");
         std::process::exit(2);
@@ -769,26 +776,94 @@ pub fn frames_dump(seed: u64, faction: Faction, diff: Difficulty, boss: Option<c
 
     let mut names: Vec<String> = Vec::new();
     let mut guard = 0;
+    let mut inherit: Vec<CardInst> = Vec::new();
+    // 夹具钱包，口径与 `auto_battles` 里那一笔相同：记录器没有存档槽（它不落盘），而升级现在是**要花钱的**。
+    // 读成一个哨兵值就是在这条路上把价目取消，所以给一笔显式的、只活在本次调用的预算，并让 `up` 照付。
+    let mut purse = crate::progress::UPGRADE_COST * 5;
+    let mut level = 1u32;
+    let mut scene;
+    let mut outcome;
+
     loop {
-        guard += 1;
-        let v = b.view();
-        let frame = crate::canvas::svg_frame(&v, seed, &scene);
-        // 文件名用**写入序号**，不用回合数：战斗是在某一回合的结算里结束的，那一回合会连着出两帧
-        // （战前、战后），拿回合数命名就让第二帧盖掉第一帧——帧少一张，而报数与 index 都按写入次数算，
-        // 于是"10 张"只有 9 个文件。回合数仍在帧内标题里，序号只保证一帧一格。
-        let name = format!("frame-{:03}.svg", guard);
-        if let Err(e) = std::fs::write(out.join(&name), frame) {
-            println!("✖ 帧文件写不下去：{e}");
-            std::process::exit(2);
+        scene = match boss {
+            Some(id) => format!("Boss {} 第{}关", id.name(), id.chapter() * 12),
+            None => format!("普通爬关 第{level}关"),
+        };
+        let mut b = match boss {
+            Some(id) => Battle::new_boss(seed, faction, id, std::mem::take(&mut inherit), id.chapter() * 12),
+            None => Battle::new_mainline(seed, faction, enemy_faction_for(level), diff, std::mem::take(&mut inherit), level),
+        };
+        loop {
+            guard += 1;
+            let v = b.view();
+            let frame = crate::canvas::svg_frame(&v, seed, &scene);
+            // 文件名用**写入序号**，不用回合数：战斗是在某一回合的结算里结束的，那一回合会连着出两帧
+            // （战前、战后），拿回合数命名就让第二帧盖掉第一帧——帧少一张，而报数与 index 都按写入次数算，
+            // 于是"10 张"只有 9 个文件。回合数仍在帧内标题里，序号只保证一帧一格。
+            let name = format!("frame-{:03}.svg", guard);
+            if let Err(e) = std::fs::write(out.join(&name), frame) {
+                println!("✖ 帧文件写不下去：{e}");
+                std::process::exit(2);
+            }
+            names.push(name);
+            if b.over.is_some() || guard >= 300 {
+                break;
+            }
+            auto_turn(&mut b);
         }
-        names.push(name);
-        if b.over.is_some() || guard >= 300 {
+        outcome = b.over.map_or("未分胜负（到达回合上限）".to_string(), |o| format!("{o:?}"));
+
+        // 三条不进环的出口：败/平（收尸只在胜局发生，§十二:503）、Boss 单关、帧数顶到 300。
+        // 关卡顶那条排在收尸**之前**判，免得"第6关的堆已经收好了却没开局"这种半截状态留在报告里。
+        if b.over != Some(Outcome::PlayerWin) || boss.is_some() || guard >= 300 || level >= FRAMES_LEVEL_CAP {
             break;
         }
-        auto_turn(&mut b);
+        for l in crate::progress::collect_survivors(&mut b, &mut inherit) {
+            println!("帧·第{level}关 {l}");
+        }
+        let mut karma = b.p_karma.max(0);
+        let mut up_used = false;
+        // 下单的是**引擎自己在专家档用的那个战斗外规划器**（`ai::plan_meta`）：它拿当前业力筛掉付不起的融合、
+        // 拿 3 次上限筛掉不能再升的牌，只交出 (main, sub)／idx 这几个数。这里把它们拼成玩家会敲的那几行字，
+        // 再交给 `execute_settle` 走同一套词表、同一道闸——证人由此拿到的自造牌是**对局可达**的产物，
+        // 不是夹具直接 `c.crafted = true` 那种手改字段（那样帧上那块金边就没有"打得出来"的含义）。
+        // 顺序照 `apply_meta_plan`：先排不摘牌的升级，再排会摘牌的融合，下标才对得上同一份快照。
+        use crate::ai::MetaMove;
+        let word = |m: &MetaMove| match m {
+            MetaMove::Upgrade { idx, kind } => format!("up {idx} {kind}"),
+            MetaMove::Fuse { main, sub } => format!("fuse {main} {sub}"),
+        };
+        let plan = crate::ai::plan_meta(&inherit, karma, 1);
+        let mut lines: Vec<String> = plan.iter().filter(|m| matches!(m, MetaMove::Upgrade { .. })).map(&word).collect();
+        lines.extend(plan.iter().filter(|m| matches!(m, MetaMove::Fuse { .. })).map(&word));
+        lines.push("go".to_string());
+        // 拒了也照打输出——"这一环今天走不走得通"是要人眼看的读数，不是可以静默吞掉的分支。
+        println!("帧·第{level}关 结算开环：业力{karma} 代币{purse} 继承堆{}张", inherit.len());
+        for (i, c) in inherit.iter().enumerate() {
+            println!("帧·第{level}关 堆[{i}] {}", crate::model::short_card(c));
+        }
+        for line in &lines {
+            match execute_settle(
+                &mut inherit,
+                &mut karma,
+                &mut up_used,
+                &mut purse,
+                true,
+                parse_settle(line),
+            ) {
+                SettleStep::Stay(replies) => {
+                    for l in replies {
+                        println!("帧·第{level}关 结算 {line} → {l}");
+                    }
+                }
+                SettleStep::Go => break,
+                SettleStep::Quit => return,
+            }
+        }
+        level += 1;
     }
 
-    let mut index = format!("<!DOCTYPE html>\n<html lang=\"zh\"><head><meta charset=\"utf-8\"><title>中线 2D 帧 · seed {seed}</title></head>\n<body style=\"background:#10131a;color:#e6e9f2;font-family:sans-serif\">\n<h2>《中线》2D 帧 · {scene} · seed {seed} · 共 {} 张</h2>\n", names.len());
+    let mut index = format!("<!DOCTYPE html>\n<html lang=\"zh\"><head><meta charset=\"utf-8\"><title>中线 2D 帧 · seed {seed}</title></head>\n<body style=\"background:#10131a;color:#e6e9f2;font-family:sans-serif\">\n<h2>《中线》2D 帧 · {scene} · seed {seed} · 共 {} 张（打到第{level}关）</h2>\n", names.len());
     for n in &names {
         index.push_str(&format!("<p>{n}</p><img src=\"{n}\" width=\"1240\" alt=\"{n}\">\n"));
     }
@@ -798,8 +873,11 @@ pub fn frames_dump(seed: u64, faction: Faction, diff: Difficulty, boss: Option<c
         std::process::exit(2);
     }
 
-    let outcome = b.over.map_or("未分胜负（到达回合上限）".to_string(), |o| format!("{o:?}"));
-    println!("✓ 帧目录 {}：{} 张 SVG ＋ index.html（场景={scene} seed={seed} 结果={outcome}）", out.display(), names.len());
+    println!(
+        "✓ 帧目录 {}：{} 张 SVG ＋ index.html（末景={scene} seed={seed} 结果={outcome}）",
+        out.display(),
+        names.len()
+    );
 }
 
 fn auto_play(b: &mut Battle) {
@@ -1464,5 +1542,53 @@ mod meta_tests {
             assert_eq!(name, &format!("frame-{:03}.svg", i + 1), "帧序号要连续，第 {} 格实得 {name}", i + 1);
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 其七 D4 的证人：交付帧里那块金边到底是**谁画上去的**。两局各写一遍盘，再从 svg 字节里读回两枚 token。
+    /// ① 打赢那局：自造牌的金边（`lane::CRAFT_EDGE`）与升过级那一圈的加强线宽（`layout::STROKE_EMPHASIS`）都要读到，
+    ///    而**第 1 帧两处皆干净**——融合与升级都发生在第 1 关打完的那次结算里，那之前没有任何一帧该带金。
+    /// ② 打不赢那局（正常难度托管必败，本关现量）：整批帧里两处 0 命中。少了这一半，①就退化成"帧够多总会亮"，
+    ///    那块金也就说不出"对局可达"四个字——这正是档 §2 那行拒绝 `c.crafted = true` 的判据。
+    /// 它钉的是**落盘的交付物**而不是某个函数的返回值：呈现层与记录器之间哪天断了手（比如手牌行不再带边框通道），这条当场红。
+    #[test]
+    fn the_crafted_gold_in_the_delivered_frames_comes_from_the_settlement_ring() {
+        use crate::md3::{lane, layout};
+        let n = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let win = std::env::temp_dir().join(format!("midline-witness-win-{}-{n}", std::process::id()));
+        let lose = std::env::temp_dir().join(format!("midline-witness-lose-{}-{n}", std::process::id()));
+        frames_dump(2, Faction::Ember, Difficulty::Easy, None, win.clone());
+        frames_dump(2, Faction::Ember, Difficulty::Normal, None, lose.clone());
+
+        let gold = format!(r#"stroke="{}""#, lane::CRAFT_EDGE);
+        let emph = format!(r#"stroke-width="{}""#, layout::STROKE_EMPHASIS);
+        let scan = |dir: &std::path::Path| -> Vec<(String, usize, usize)> {
+            let mut files: Vec<String> = std::fs::read_dir(dir)
+                .expect("帧目录应已建出")
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".svg"))
+                .collect();
+            files.sort();
+            files
+                .into_iter()
+                .map(|name| {
+                    let text = std::fs::read_to_string(dir.join(&name)).expect("帧文件应读得回来");
+                    (name, text.matches(&gold).count(), text.matches(&emph).count())
+                })
+                .collect()
+        };
+        let won = scan(&win);
+        let lost = scan(&lose);
+        std::fs::remove_dir_all(&win).ok();
+        std::fs::remove_dir_all(&lose).ok();
+
+        assert!(won.len() >= 10, "打赢那局至少要出十几帧，否则下面几句在稀疏样本上永真：实得 {}", won.len());
+        assert_eq!(won[0].1, 0, "第 1 帧不许有金边：{} 里读到了", won[0].0);
+        assert_eq!(won[0].2, 0, "第 1 帧不许有加强线宽：升级也在第一次结算里才发生");
+        assert!(won.iter().any(|(_, g, _)| *g > 0), "打完几关的帧里读不到一块金边：证人通路没把自造牌送到画面上");
+        assert!(won.iter().skip(1).any(|(_, _, e)| *e > 0), "读不到加强线宽：升级在帧上没留下非文字的读法");
+
+        assert!(lost.len() >= 3, "打不赢那局也要有几帧可数，否则那句 0 命中是空目录给的：实得 {}", lost.len());
+        assert!(lost.iter().all(|(_, g, e)| *g == 0 && *e == 0), "一局没打赢却帧上亮了金边或加强线宽：那块金就不是结算通路的产物");
     }
 }
