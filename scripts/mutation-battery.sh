@@ -1239,20 +1239,20 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'    let shown = hp;'))"
 run
 
-echo "### M142 把业火点亮时让位那一支整个摘掉（点亮与未点亮同走常态内缩，未点亮那支的数不动）⇒ 实测 **1** 红：红在 display 那条方块不压字测＝本帧第 ③ 处失真的牙。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住。其十二 把这几个数收进 md3 之后，本条的落点从字面量换成了那支行——摘的仍是同一件事"
+echo "### M142 把 marks_right 里「点亮时让出方块那一格」那支摘掉（点亮与未点亮同走常态内缩，方块自己的位置一字不动）⇒ 实测 **1** 红：红在 display 那条「方块不压字」测 the_flame_badge_never_sits_on_top_of_the_trait_text，现读 src/display.rs:662:9「属性串右界 288 不得越过方块左界 280（越过去＝方块压在字上）」，282 passed; 1 failed。它与 M141 是同族：都是「断言全绿而图上字被盖住」那一类，量的是坐标而不是数值，所以既有五把尺一条都看不见——只有这一条把「让位」这件事本身钉住。落点换过两次而读数没换：其十二 把这几个数收进 md3 之后从字面量换到那一支行，其十 又把它从在场格局部那行换成 marks_right 的函数体（一处定义两处读者 ⇒ 摘一次两行一起坏），行号则从 629 漂到 662（同一 mod 里插了新测）。**这一条同时记下本帧那把新手牌压字尺的真空**：它算 flags_hi 用的是常数（badge_inset 加 CELL_PAD_NARROW），从不读画出去那个 x，所以右界被改到方块左界**里面** 8 单位时它照绿——让位让得不够这一格只有钉住数值的这条旧测看得见，已归池 hand-row-drawn-right-edge-not-pinned"
 restore; py "
 p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
-a='        let marks_x = x + w - if lit { badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD };'
+a='    cell.x + cell.w - if lit { layout::badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD }'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,'        let marks_x = x + w - layout::CELL_PAD;'))"
+open(p,'w',encoding='utf8').write(s.replace(a,'    cell.x + cell.w - layout::CELL_PAD'))"
 run
 
-echo "### M143 摘掉 marks.dedup 那一行（开端牌的两个字段各推一次，撞词不再去重）⇒ 实测 **1** 红：红在 display 那条「开端只说一次」测＝本帧第 ⑤ 处失真的牙。这条测的正反两面都是要的：正面数那个词恰出现一次，反面拿一张 造＋升级＋战吼 的牌钉三个标记全在——所以摘掉 dedup 会红，把 dedup 写成「只留第一个标记」也会红，两种坏法各撞一次"
+echo "### M143 把按词去重写成「只留第一个标记」（card_marks 里那句 contains 换成 out.is_empty()，词表与顺序都不动）⇒ 实测 **4** 红，279 passed; 4 failed：① display::a_starter_card_says_it_once_not_twice 现读 src/display.rs:696:9「三个不同来源的标记要连起来全在」left 造 对 right 造·升级+1·战吼:同列+2焰；② display::nothing_in_a_hand_cell_overlaps_its_neighbours 现读 :884:13「人造超预算（三位数档数，今天不可达）：省略号该不该出现读错了」left false 对 right true——串被砍成一个词之后根本超不了预算，所以红的是**第二档那半边**；③ display::the_board_row_does_not_print_opening_twice_when_the_starter_is_upgraded 现读 :895:9「「开端」在同一串里出现两次（或去重把别的词一起吃掉）」left 开端 对 right 开端·升级+2；④ display::the_hand_row_prints_the_flag_words_the_board_row_prints 在 FAILED 名单里、run() 的 head -12 没轮到打印它的正文（露面哪几条是抽样，判据是名单与计数）。这一条与其九 那条同族旧牙同根：旧写法摘的是在场格那行 marks.dedup()，其十 把去重收进 card_marks 按词做之后那行没了、锚当场读 0（预检喊的 AssertionError: 0），本帧把它换成抬头里本来就写着的**第二种坏法**——去重不足由 M197 钉（contains 换成 true，实测 2 红：重复都留下），去重过头由这一条钉（只留第一个，实测 4 红：别的词被吃掉）。两种坏法红数差 2 条，差的就是那两把手牌格的尺"
 restore; py "
 p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
-a='    marks.dedup();'
+a='        if !out.contains(&word) {'
 assert s.count(a)==1, s.count(a)
-open(p,'w',encoding='utf8').write(s.replace(a,''))"
+open(p,'w',encoding='utf8').write(s.replace(a,'        if out.is_empty() {'))"
 run
 
 echo "### M144 把帧文件名从写入序号改回回合数（其余一字不动）⇒ 实测 **1** 红：红在 meta 那条「每帧一格、报数与盘上文件数一致」尺＝本帧那处实测事故的牙。它红的方式很具体：Boss 炎与冰那一盘第 9 回合连着出两帧（战前、战后），改回回合数就让第二帧盖掉第一帧，于是 index.html 报 10 张而盘上只有 9 个文件。这条也是那批交付帧里唯一能**翻图复核**的一处：boss-yanbing-seed2026 的 frame-009 与 frame-010 标题同为「第 9 回合」（实测读数＝1 红，红在 meta 那条尺，报的张数与盘上文件数 9 对 10）。其七 复跑读数 **2** 红：第二条还是那条交付帧证人，红在「第 1 帧不许有金边：frame-001.svg 里读到了」。定向复跑把那一格打全（留档 probe-m144-naming.log）：写入 46 帧、盘上只剩 10 个文件，因为每关的回合数都从 1 数起，第2关第1回合那一帧把第1关第1回合盖掉，而那张自造牌此时已在盘上——证人那句「第 1 帧」从此量的不再是第一次结算之前。所以这一格红的是证人的隐含前提「帧序＝写入序」，与本条原本那格「报数与盘上文件数一致」同根两面"
