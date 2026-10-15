@@ -1654,7 +1654,7 @@ assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,''))"
 run
 
-echo "### M189 在场格那行技能串只印第一支（把 join 换成 first 取首项）⇒ 实测主仓 278 条里红 1 条：display::a_skill_bearing_card_placed_by_the_engine_prints_its_string_on_the_cell 现读 src/display.rs:597:9「补上第二支之后帧上没成串：想要 放+邻焰1+同友攻+1」——那一串实测在 `texts()` 的**索引 19**（Rust Debug 是 0 基，别按第 20 项去数）。这一颗补的是 2026-10-10 那张可画态清单今日复验出的唯一一格零证人：画法（display.rs 那三行）与生产者（Battle::new 里发牌抽技能那一路）两段一直都在，可主仓九个 CardView 夹具与 canvas 夹具全填 skills: vec![]，M32／M125 又都砍在引擎层，于是**通路从来没有上过帧**——本帧把证人改走真路（发牌→落子→帧），四刀各撞一遍：分隔符换成点、只印第一支、摘掉非空守卫、整块删除，四处各红一条且红的都是这一条。另有两格白捡的读数都来自同一件事：抽到的那张 回燃 只有一支技能、而它的 label 自带一个 +，所以单技能牌上 join 与 first 逐字同形——于是 只印第一支 这一刀对 :588 那格无感，红的是叠加那一维；同理旧测（期望串按单技能现拼）在分隔符那一刀下实测**零红**、277 全绿。只钉「串在不在」钉不住「串怎么拼」，这一颗要的正是叠加那一维。抬头里的引号只能拿 chr(34) 拼：电池不许 ASCII 双引号进内嵌 Python，而这一刀的原文正带着一对"
+echo "### M189 在场格那行技能串只印第一支（把 join 换成 first 取首项）⇒ 实测主仓 278 条里红 1 条：display::a_skill_bearing_card_placed_by_the_engine_prints_its_string_on_the_cell 现读 src/display.rs:597:9「补上第二支之后帧上没成串：想要 放+邻焰1+同友攻+1」——那一串实测在 texts() 的**索引 19**（Rust Debug 是 0 基，别按第 20 项去数）。这一颗补的是 2026-10-10 那张可画态清单今日复验出的唯一一格零证人：画法（display.rs 那三行）与生产者（Battle::new 里发牌抽技能那一路）两段一直都在，可主仓九个 CardView 夹具与 canvas 夹具全填 skills: vec![]，M32／M125 又都砍在引擎层，于是**通路从来没有上过帧**——本帧把证人改走真路（发牌→落子→帧），四刀各撞一遍：分隔符换成点、只印第一支、摘掉非空守卫、整块删除，四处各红一条且红的都是这一条。另有两格白捡的读数都来自同一件事：抽到的那张 回燃 只有一支技能、而它的 label 自带一个 +，所以单技能牌上 join 与 first 逐字同形——于是 只印第一支 这一刀对 :588 那格无感，红的是叠加那一维；同理旧测（期望串按单技能现拼）在分隔符那一刀下实测**零红**、277 全绿。只钉「串在不在」钉不住「串怎么拼」，这一颗要的正是叠加那一维。抬头里的引号只能拿 chr(34) 拼：电池不许 ASCII 双引号进内嵌 Python，而这一刀的原文正带着一对"
 restore; py "
 p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
 q=chr(34)
@@ -1689,3 +1689,62 @@ a='        (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'        (x0.trunc() as i32, y0.trunc() as i32, x1.ceil() as i32, y1.ceil() as i32)'))"
 frun
+
+echo "### M193 手牌行那串旗子整支不画（hand_row 里 card_marks 那次调用换成空表，在场格侧与那支共用构造函数一字不动）⇒ 实测主仓 283 条里红 3 条：① display::the_hand_row_prints_the_flag_words_the_board_row_prints 现读 src/display.rs:820:9「手牌那串旗子与在场格不同词表，或多摆/漏摆了某张」left 四格全空对 right（空、造、开端·升级+3、升级+2）；② display::nothing_in_a_hand_cell_overlaps_its_neighbours 现读 :870:75「今日可达最坏（开端＋升级三档＋焰已到阈）：第 0 格连旗子都没画，这条检空转」；③ 交付帧证人 meta::the_hand_row_flags_reach_the_delivered_frames 现读 src/meta.rs:1649:9「第 1 帧手里只该有开端」left（空表）对 right（开端）。**这一颗的刀口本身先是编译不过的**：第一版写 let flags = Vec::new()，元素型推不出来（error[E0282]: type annotations needed），run() 当场喊「cargo 没有产出 test result ⇒ 这条没有落点」并打三行 error，日志里一行红字都没有——它不是「没红」，是根本没打到码。补了类型标注（card_marks 的返回型就是 Vec<String>）才取到上面这批读数；这一格留字是因为「编译失败」与「无落点」在电池日志里长得几乎一样，只有 run() 那句喊话分得开"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='let flags = card_marks(c, false);'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'let flags: Vec<String> = Vec::new();'))"
+run
+
+echo "### M194 手牌那串把特性也带上（同一支构造函数、只把宽度口径那一枚参数从 false 翻成 true）⇒ 实测主仓 283 条里红 2 条：① display::the_hand_row_prints_the_flag_words_the_board_row_prints 现读 src/display.rs:820:9，实测五串「战吼:同列+2焰」「造·战吼:同列+2焰」「开端·升级+3」「升级+2」「阈值:整列3伤」（期望四串，第一串本该是空）；② 交付帧证人 meta::the_hand_row_flags_reach_the_delivered_frames 现读 src/meta.rs:1649:9，第 1 帧读回「开端 阈值:同列+2焰 战吼:同列+2焰 攻后自身+1焰 亡语:同列+3焰」。这一颗是档 §5「特性与技能两格出局」那一裁唯一的牙：出局理由写的是**实测宽度**（ROW1 右侧扣掉序号与足额方块只剩 80.9 单位，最宽特性串 103.8，算术底账在档 §2 正证），不是「感觉放不下」。翻过来之后帧上立刻多出四串特性，而证人读的是**落盘的 svg** 不是内存里的 prim——所以这一刀同时也是手牌那格宽度口径的实物反证：口径破了不在测里，在帧里"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='let flags = card_marks(c, false);'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'let flags = card_marks(c, true);'))"
+run
+
+echo "### M195 足额方块只画在场格那一枚（删掉 hand_row 里 if lit 那一支的 push，在场格侧与 flame_badge 的算式都不动）⇒ 实测主仓 283 条里红 1 条：display::the_full_flame_badge_is_the_same_square_in_both_rows 现读 src/display.rs:842:79「手牌那枚足额方块没画」。**这一颗只有几何证人、没有帧证人，抬头必须把这格边界写清**：46＋7 帧两局的扫描里手牌行足额方块 0 命中（在场行在打不赢那局亮过一枚，所以判据本身可达），「手里的牌焰满到阈」在那 53 帧里根本没发生。于是这一刀撞不红交付帧证人——把它读成「屏上见了」就错了，它证的只是「同一张牌在两行读出同一个尺寸」。那一格归池 frame-cost-flame-readouts-have-no-witness（0 命中的读数已回填在那里）"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='''        if lit {
+            out.push(bordered(flame_badge(*cell), lane::FLAME, shape::NONE, lane::FLAME, layout::STROKE_HAIRLINE, false));
+        }
+'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,''))"
+run
+
+echo "### M196 足额判据差一格（flame_full 里 c.flame >= c.threshold 换成 >，两处调用与方块算式都不动）⇒ 实测主仓 283 条里红 3 条：① 旧判据尺 display::the_flame_marker_appears_exactly_when_the_cell_is_at_threshold 现读 src/display.rs:552:9「焰＝阈 算足额」left 0 对 right 1；② display::the_flame_badge_never_sits_on_top_of_the_trait_text 现读 :660:39「足额格要画方块」；③ 本帧那条同尺寸证人现读 :842:79「手牌与在场格读出的足额方块不是同一块」。这一颗量的是「这一维归判据还是归画法」：>= 换 > 之后焰刚好到阈那一格不再算满，三把尺里两把是本帧之前就有的（在场格那两格），新增那条只钉两行读同一枚块子——所以红按测算三条，别把「同一条判据被三处读」写成三处病。判据收成 flame_full 一处定义两处读者，正是为了让这一刀只有一处可砍"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='c.flame >= c.threshold'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'c.flame > c.threshold'))"
+run
+
+echo "### M197 按词去重退回不去了（card_marks 里 if !out.contains(&word) 换成 if true，词表与顺序都不动）⇒ 实测主仓 283 条里红 2 条：① 旧测 display::a_starter_card_says_it_once_not_twice 现读 src/display.rs:691:9，left 开端·开端 对 right 开端——那一条 panic 正文把整串 prim 都打出来了，重字落在 Label（x 288／y 28／em 16／fill 数字紫 #d7b8f2／anchor End／text 开端·开端）；② 本帧从在场格那串现读的 display::the_board_row_does_not_print_opening_twice_when_the_starter_is_upgraded 现读 :895:9「开端·升级+2·开端」。这一颗是档 §2 反证 4 的落点：旧写法 Vec::dedup() 只消**相邻**重复，而开端牌的 starter 与 trait_label 会撞成同一个词（快照两个字段、中文一个说法），「升级」正好插在两者中间——于是「开端·升级+2·开端」是码面现状不是假想（upgrade_card 那三道闸：下标、上限 3、代币，没有一道查 is_starter()）。两条都红是因为测面不同：① 钉「同一个词不许说两遍」这一维，② 钉「从在场格那串现读拼出来的整串」，少了哪一条都少一维"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='if !out.contains(&word) {'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'if true {'))"
+run
+
+echo "### M198 旗子字号提到 BODY_MEDIUM（hand_row 那条 label 的 typo::LABEL_MEDIUM 换 BODY_MEDIUM，位置、颜色、右界算式全不动）⇒ 实测主仓 283 条里红 3 条，而三条喊的都不是「字号错了」：① display::nothing_in_a_hand_cell_overlaps_its_neighbours 现读 src/display.rs:870:75「第 0 格连旗子都没画，这条检空转」；② display::the_hand_row_prints_the_flag_words_the_board_row_prints 现读 :820:9，实测四格全空；③ 交付帧证人 meta::the_hand_row_flags_reach_the_delivered_frames 现读 src/meta.rs:1649:9，第 1 帧实测空表。这一颗与 M193 打印出来的是**同一批红**：三把尺认串用同一枚指纹（右锚 × LABEL_MEDIUM × MARK_TEXT 三件一起命中，见 hand_flags_at；svg 侧那把按 font-size 12 与 text-anchor end 两属性同时命中），字号一改整串就「从不存在」。这不是冗余，是电池里唯一一条撞得动**认法本身**的刀——画法与认法若不是同一支，三把尺只会各按各的口径找串，这一刀就只能被其中一把发现、另外两把照旧绿"
+restore; py "
+p='$D/src/display.rs'; s=open(p,encoding='utf8').read()
+a='typo::LABEL_MEDIUM, lane::MARK_TEXT'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'typo::BODY_MEDIUM, lane::MARK_TEXT'))"
+run
+
+echo "### M199 截断预算除错字号（src/touch.rs 里 marks_budget 末尾除以 LABEL_MEDIUM 换成除以 LABEL_LARGE，绘制侧字号与右界都不动）⇒ 实测主仓 283 条里红 1 条：display::nothing_in_a_hand_cell_overlaps_its_neighbours 现读 src/display.rs:884:13「今日可达最坏（开端＋升级三档＋焰已到阈）：省略号该不该出现读错了（今日词表不许截断，超预算那一档必须真截住）」left true 对 right false。方向要说清：除数变大 ⇒ 预算（单位是 em）变小 ⇒ 今日那档**不该**截断的串被 fit 截出了省略号，left 那个 true 就是实测 saw_ellipsis。这一颗只有那把新尺看得见，因为 marks_budget 是词表、判据、右界之外**第四个只许由几何推导的数**：今日最宽串 73.2 单位小于 80.9 可用，两档都不截断，屏上此刻读不出预算错了——只有把「该不该出现省略号」两档一起钉（可达最坏不许截、三位数档必须截）才量得到它本身，单钉任何一档都会让另一档空转"
+restore; py "
+p='$D/src/touch.rs'; s=open(p,encoding='utf8').read()
+a='/ typo::LABEL_MEDIUM as f64;'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'/ typo::LABEL_LARGE as f64;'))"
+run
