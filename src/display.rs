@@ -457,7 +457,7 @@ mod tests {
     use super::*;
     use crate::battle::{Battle, DailyRule, Difficulty, Row};
     use crate::boss::BossId;
-    use crate::model::{CardInst, Faction, faction_cards};
+    use crate::model::{CardInst, Faction, Skill, faction_cards};
 
     fn normal() -> Battle {
         Battle::new(7, Faction::Ember, Faction::Frost, Difficulty::Normal, Vec::new(), 1)
@@ -561,6 +561,48 @@ mod tests {
         let want = format!("{} / {}→{}", cell.hp, base, cell.threshold);
         let t = texts(&frame_of(&v));
         assert!(t.iter().any(|s| s == &want), "帧上那一格没成对：想要 {want}，实测 {t:?}");
+    }
+
+    /// 技能串那行画法的**唯一**帧证人，走发牌真路：`Battle::new` 里 `mk(…, true)` 给每张非开端牌抽一支
+    /// 附加技能，快照 `card_view` 折成 label 列表，`card_cell` 再 `join("+")` 印出去——三段都在，
+    /// 可 2026-10-10 那张清单复验到今日才发现：这一格九个 CardView 夹具与 canvas 夹具全用 `skills: vec![]`，
+    /// 电池 M32/M125 都砍在引擎层，所以**画法一直在、证人从来没有**（手牌行 `hand_row` 又不画这行，连"顺手带过"的机会都没有）。
+    /// 第一支的期望串从快照现拿，第二支向 `Skill::label()` 现取——两处都不抄字面量，抄了就是给某一份旧读数背书。
+    #[test]
+    fn a_skill_bearing_card_placed_by_the_engine_prints_its_string_on_the_cell() {
+        let mut b = normal();
+        b.p_karma = 99; // 只买放置那道业力闸的通路，本条不测业力
+        let opener = b.view();
+        let idx = opener
+            .hand
+            .iter()
+            .position(|c| !c.skills.is_empty())
+            .expect("开局手牌里没有一张带技能的牌 ⇒ 发牌抽技能那一路断了，本条要改前提");
+        let want = opener.hand[idx].skills.join("+");
+        drop(opener);
+
+        b.player_place(idx, 0).expect("业力已给足，这张牌该落得进我方前排");
+        let mut v = b.view();
+        assert_eq!(v.player_front[0].as_ref().expect("落子之后格里要有那张牌").skills.join("+"), want, "落子路上快照把技能串改了样：帧上的差异不该记到呈现层头上");
+        let one = texts(&frame_of(&v));
+        assert!(one.contains(&want), "帧上没有引擎抽给这张牌的技能串 {want}：{one:?}");
+
+        // 叠加那一维只有真路撞得出来：第 4 章「技能强化」给同一张牌再追加一支（常常是同一支叠两遍），
+        // 于是帧上读的是**一串**而不是一个。分隔符在这里写死——它是玩家数得清"这牌有几个技能"的唯一依据，
+        // 换成点或逗号也算改了口径，不许以"版式调整"名义漂走。
+        let second = Skill::AllyColAtk1.label();
+        v.player_front[0].as_mut().expect("格子里那张牌还在").skills.push(second);
+        let pair = format!("{want}+{second}");
+        let two = texts(&frame_of(&v));
+        assert!(two.contains(&pair), "补上第二支之后帧上没成串：想要 {pair}，实测 {two:?}");
+        assert!(!two.contains(&want), "帧上只剩第一支 ⇒ 叠加的技能不可见，强化那一路在画面上等于没发生");
+
+        // 负半：同一格清空技能，那一行必须跟着消失——摘掉 `if !c.skills.is_empty()` 那层守卫时这里当场红
+        // （空串也是一种"画了"，所以断的是少一行，不是少一个字符）。
+        v.player_front[0].as_mut().expect("还在").skills.clear();
+        let none = texts(&frame_of(&v));
+        assert!(!none.iter().any(|s| s == &pair), "技能清空后帧上还印着 {pair} ⇒ 那行字不是读快照");
+        assert_eq!(two.len(), none.len() + 1, "清空技能只该少那一行字，别并着别的改动一起进来");
     }
 
     /// 足额块由 `FLAME_MARK` 认，不抄字面量——否则改了 token 这条测照样绿，就成了给旧读数背书。
