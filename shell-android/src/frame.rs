@@ -389,13 +389,13 @@ impl Round {
         }
     }
 
-    /// 循环界：整块（含外扩那半条描边）的最小/最大像素，右开区间。
+    /// 循环界：整块（含外扩那半条描边）的最小/最大像素，右开区间。四边各由 `cx±hw`／`cy±hh`
+    /// **折一次半**得到——双倍坐标里 `hw` 已经是半宽，再折一次就成了"右界落在水平中心"，
+    /// 于是每块只画出左上四分之一（真机现读：`working/device-blocks-paint-only-top-left-quadrant.md`）。
     fn outer_box(&self) -> (i32, i32, i32, i32) {
-        let x = (self.cx - self.hw) as f64 / 2.0;
-        let y = (self.cy - self.hh) as f64 / 2.0;
-        let w = self.hw as f64 / 2.0;
-        let h = self.hh as f64 / 2.0;
-        (x.floor() as i32, y.floor() as i32, (x + w).ceil() as i32, (y + h).ceil() as i32)
+        let (x0, y0) = ((self.cx - self.hw) as f64 / 2.0, (self.cy - self.hh) as f64 / 2.0);
+        let (x1, y1) = ((self.cx + self.hw) as f64 / 2.0, (self.cy + self.hh) as f64 / 2.0);
+        (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32)
     }
 
     /// SDF 的两分量（双倍坐标）：离"内切直角框"还有多远。都 ≤ 0 就是在正中那块方里。
@@ -505,6 +505,31 @@ mod tests {
         assert!(!r.covers(10, 5), "矩形是右开区间：x=10 已在块外");
         let sharp = Round::new(0, 0, 10, 10, 0);
         assert!(sharp.covers(0, 0), "半径 0 时角就是直角，别把圆角判定漏成空洞");
+    }
+
+    /// 循环界必须**包住整块**，不许只到中心。这一格量出来的是一条形状教训：`covers()` 是对的、
+    /// `empty_blocks` 也只数"一个像素都没落"的块，于是"每块只画出左上四分之一"这种坏法五把尺全绿。
+    /// 同界断言是它的可读形式，最后那一段"判据说该有墨的格子循环必须走到"才是要钉的不变式。
+    #[test]
+    fn the_loop_bounds_wrap_the_whole_rect_not_its_top_left_quadrant() {
+        for (x, y, w, h, r) in [(0, 0, 10, 10, 0), (1, 2, 5, 3, 1), (-3, 4, 7, 2, 3), (1089, 420, 112, 34, 24), (0, 0, 1, 1, 0)] {
+            assert_eq!(Round::new(x, y, w, h, r).outer_box(), (x, y, x + w, y + h), "({x},{y} {w}×{h} r{r}) 的循环界必须与那块像素矩形同界");
+        }
+        let square = Round::new(0, 0, 10, 10, 0);
+        assert_eq!(square.outset(2).outer_box(), (-1, -1, 11, 11), "描边外让的那半像素在界内，环才闭合");
+        assert_eq!(square.inset(2).outer_box(), (1, 1, 9, 9), "内沿同样不许少一圈");
+        assert_eq!(square.outset(3).outer_box(), (-2, -2, 12, 12), "奇数描边落在半像素上：左界只许 floor、右界只许 ceil，谁也不许 trunc");
+        // 判据说"该有墨"的每一格，循环都必须走到——这一句才是本帧真正要钉的不变式，上面那些同界
+        // 断言只是它的可读形式。取带奇数描边的这块，是因为它的四边正落在半像素上：换 trunc 就少一列。
+        let rect = Round::new(3, 5, 10, 10, 0).outset(3);
+        let (x0, y0, x1, y1) = rect.outer_box();
+        for py in 0..20 {
+            for px in 0..20 {
+                if rect.covers(px, py) {
+                    assert!((x0..x1).contains(&px) && (y0..y1).contains(&py), "covers 判 ({px},{py}) 该有墨，循环界却走不到它");
+                }
+            }
+        }
     }
 
     /// 虚线切的是**沿边方向**的相位：上边一行按 x 走，段长 6、周期 10。这条测同时抓两件事——

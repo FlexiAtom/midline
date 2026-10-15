@@ -1662,3 +1662,30 @@ a='&c.skills.join('+q+'+'+q+')'
 assert s.count(a)==1, s.count(a)
 open(p,'w',encoding='utf8').write(s.replace(a,'c.skills.first().copied().unwrap_or('+q+q+')'))"
 run
+
+echo "### M190 把 outer_box 的右界与下界改回「半程再折一次半」（左界、上界一字不动——这就是 2026-10-16 之前那份码的原形）⇒ 实测壳测 frame:: 十二条里红一条（11 passed; 1 failed），红在本帧新补的那条 the_loop_bounds_wrap_the_whole_rect_not_its_top_left_quadrant，报「(0,0 10×10 r0) 的循环界必须与那块像素矩形同界」，left (0, 0, 5, 5) 对 right (0, 0, 10, 10)。这一格就是 第十八步·其九 那台真机量出来的缺陷本身：右界落在水平中心、下界落在垂直中心，屏上每一块只画出左上四分之一。三件事叠在一起它才躲得过历轮五把尺：outer_box 此前一条测都没有；covers 判据是对的，缺的墨不是判据拒的、是循环没走到那一格；而装机的 empty_blocks 只数「一个像素都没落」的块，左上那四分之一仍有墨 ⇒ 读数恒 0。**这条抬头同时记下为什么两条旧读数尺不牵动**：真机像素摘要吃 frame_digest（只吃 Prim 字段，不吃缓冲），差格控件数吃 dev_rect（绘制矩形，与循环界无关），M190／M191 两刀在整族里都不碰它们——其八 之前那份池档 §4 预言「这两条读数会变」，现量归零，那是预言错了，改口见档面"
+restore_shell; pys "
+p='$D/shell-android/src/frame.rs'; s=open(p,encoding='utf8').read()
+a='''        let (x1, y1) = ((self.cx + self.hw) as f64 / 2.0, (self.cy + self.hh) as f64 / 2.0);
+        (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32)'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        (x0.floor() as i32, y0.floor() as i32, (x0 + self.hw as f64 / 2.0).ceil() as i32, (y0 + self.hh as f64 / 2.0).ceil() as i32)'))"
+frun
+
+echo "### M191 只修一半：横轴按全程取右界、纵轴仍折半（单侧修复那版，编译照过、host 侧看还像模像样）⇒ 实测壳测 frame:: 十二条里红一条（11 passed; 1 failed），红在同一条测的**第二个 assert**，现读 src/frame.rs:516:13，left (0, 0, 10, 5) 对 right (0, 0, 10, 10)。加这一刀的理由是它量到了「红按测算、不按断言算」这件事的边界：M190 与 M191 打印的是同一条测名、同一句文案模板，只有 left 那四个数与行号不同（515 对 516），所以抬头必须把两处行号分别写清，否则两条记录在日志里长得一模一样、归因不出来。屏上的形状也不同：M190 是左上四分之一，M191 是左半边——后者比前者更不容易被一眼认出"
+restore_shell; pys "
+p='$D/shell-android/src/frame.rs'; s=open(p,encoding='utf8').read()
+a='''        let (x1, y1) = ((self.cx + self.hw) as f64 / 2.0, (self.cy + self.hh) as f64 / 2.0);
+        (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32)'''
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'''        let x1 = (self.cx + self.hw) as f64 / 2.0;
+        (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, (y0 + self.hh as f64 / 2.0).ceil() as i32)'''))"
+frun
+
+echo "### M192 把左界与上界的 floor 换成 trunc（右界、下界不动——取整方向那一族，界仍然包住块的整数部分）⇒ 实测壳测 frame:: 十二条里红一条（11 passed; 1 failed），红在同一条测的**第三处**，现读 src/frame.rs:521:9「奇数描边落在半像素上：左界只许 floor、右界只许 ceil，谁也不许 trunc」，left (-1, -1, 12, 12) 对 right (-2, -2, 12, 12)。这一格是本帧白捡的：原初那版证人只钉整数边（outset 那两把尺喂的是 2），把 floor 换 trunc 五处断言全部照绿——也就是「整数块修好了、描边那一圈少半格」这条路当时仍然没人拦。补上奇数描边那一块（它的四边正落在半像素上）之后这一刀才露形：描边外让 1.5 像素，trunc 把左界从 -2 收到 -1，那一列环上格 covers 判该有墨、循环却走不到。测里最后那段「判据说该有墨的每一格循环都必须走到」就是为这一刀写的——它是本帧真正要钉的不变式，前面的同界断言只是它的可读形式"
+restore_shell; pys "
+p='$D/shell-android/src/frame.rs'; s=open(p,encoding='utf8').read()
+a='        (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32)'
+assert s.count(a)==1, s.count(a)
+open(p,'w',encoding='utf8').write(s.replace(a,'        (x0.trunc() as i32, y0.trunc() as i32, x1.ceil() as i32, y1.ceil() as i32)'))"
+frun
