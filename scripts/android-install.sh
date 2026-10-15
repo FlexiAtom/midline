@@ -70,6 +70,17 @@ scale_x() { awk -v x="$1" -v w="$(python3 "$PX" size "$STAGE/shot.png" | cut -dx
 scale_y() { awk -v y="$1" -v h="$(python3 "$PX" size "$STAGE/shot.png" | cut -dx -f2)" 'BEGIN{printf "%d", y*h/'"$REF_H"'}'; }
 
 echo "== 屏幕状态（判据之前先读这三格）：wakefulness=$(wake_state) display=$(display_state) keyguard=$(keyguard)"
+
+# **前置闸**：`adb install` 走的是 `package` 服务。2026-10-15 那一轮它挂了 40 s 才从手测里露出来
+# （`Can't find service: package`），而通路在那 40 s 里只会白轮 120 轮——`screencap` 全程出图、
+# 三点恒 `FFFBFEFF`，既不是超时也不是空读数，所以**像素判据查不出这一格**。服务可读性是唯一量得到的口子。
+SVC="$(adb shell service check package 2>/dev/null | tr -d '\r')"
+case "$SVC" in
+  *"not found"*) die "package 服务不在（现读「$SVC」），不进解锁、不进轮询。设备多半被另一路占住或正在掉线。" ;;
+  *"found"*) echo "== 前置闸：service check package → $SVC" ;;
+  *) die "package 服务读不通（现读「${SVC:-空}」），不进解锁、不进轮询。按台账口径跑 adb kill-server && adb start-server && adb devices 确认是真空还是假空——别把这格当成「弹窗没弹」。" ;;
+esac
+
 if [ "$(wake_state)" != "Awake" ]; then
   adb shell input keyevent KEYCODE_WAKEUP
   sleep 1.5
@@ -96,7 +107,8 @@ if [ "$(keyguard)" != "false" ]; then
   [ "$(keyguard)" = "false" ] || die "点了两轮气泡 20s×2 仍未解锁。停在这里，不 swipe、不猜密码、不盲点——要么人在手机上点一下气泡，要么查开发者选项里那两格 USB 调试授权。"
 fi
 
-echo "== adb install -r（MIUI 会弹「继续安装」，且**「拒绝 (N)」那颗倒计时是自动拒绝**）
+echo "== adb install -r（**弹窗不是必现**：2026-10-16 空闲重跑同一只 APK，1210 ms 直接 Success、一行未弹；
+   它只在部分安装场景出现，而 MIUI 那颗「拒绝 (N)」倒计时是**自动拒绝**——所以轮询是「弹了就抢在倒计时之前点掉」，不是「等它」）
 ⇒ 胜负手是"弹窗出现→tap 出去"的延迟，不是坐标。热路径因此一次 magick 读三点（C 实现，~0.15s），
    轮询之间不 sleep；纯 Python 那份 PNG 解码器 720x1600 逐行反 filter 要秒级，放热路径上会把十秒倒计时耗光。"
 command -v magick >/dev/null || die "热路径需要 magick（一次进程读三个像素）；本机没有就别用本脚本。"
