@@ -153,12 +153,15 @@ pub(crate) struct Row {
 }
 
 /// 手牌行。`name_budget` 是从格宽算出来的截断预算，**留在几何这一侧**：
-/// 它是"这格多宽"的函数，挪到绘制侧就等于把格宽抄第二遍。
+/// 它是"这格多宽"的函数，挪到绘制侧就等于把格宽抄第二遍。`marks_budget` 同一条口径，
+/// 只是那一串旗子（造／开端／升级+N）落在 ROW1 右端，左边被 `[i]` 占、右边被足额方块占，
+/// 所以按**亮块在场**那一档算——手牌数一变，`hw` 与最宽序号一起变，预算跟着变；写死必漂。
 pub(crate) struct Hand {
     pub label_y: i32,
     pub y: i32,
     pub cells: Vec<(Region, Rect)>,
     pub name_budget: f64,
+    pub marks_budget: f64,
     /// 空手牌时那行「（空）」的落点；有牌时 `None`。宽高压着 0，所以它不进 `regions()`——
     /// 那行字不是控件，点上去什么都不该发生。
     pub placeholder: Option<Rect>,
@@ -302,13 +305,15 @@ fn row_of(cards: &[Option<CardView>], kind: fn(usize) -> Region, label_y: i32, l
 fn hand_of(cards: &[CardView], label_y: i32, left_x: i32, content_w: i32) -> Hand {
     let y = label_y + layout::SECTION_DROP;
     if cards.is_empty() {
-        return Hand { label_y, y, cells: Vec::new(), name_budget: 0.0, placeholder: Some(Rect::new(left_x + layout::CELL_PAD_NARROW, y + layout::HAND_ROW1, 0, 0)) };
+        return Hand { label_y, y, cells: Vec::new(), name_budget: 0.0, marks_budget: 0.0, placeholder: Some(Rect::new(left_x + layout::CELL_PAD_NARROW, y + layout::HAND_ROW1, 0, 0)) };
     }
     let n = cards.len() as i32;
     let hw = (content_w - layout::COL_GAP * (n - 1)) / n;
     let name_budget = (hw - layout::CELL_PAD_NARROW * 2) as f64 / typo::TITLE_LARGE as f64;
+    let idx_w = display_width(&format!("[{}]", n - 1)) * typo::LABEL_LARGE as f64;
+    let marks_budget = (hw as f64 - (layout::badge_inset() + layout::CELL_PAD_NARROW * 2) as f64 - idx_w) / typo::LABEL_MEDIUM as f64;
     let cells = cards.iter().enumerate().map(|(i, _)| (Region::Hand(i), Rect::new(left_x + (hw + layout::COL_GAP) * i as i32, y, hw, layout::HAND_H))).collect();
-    Hand { label_y, y, cells, name_budget, placeholder: None }
+    Hand { label_y, y, cells, name_budget, marks_budget, placeholder: None }
 }
 
 impl Layout {

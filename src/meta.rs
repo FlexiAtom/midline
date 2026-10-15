@@ -1591,4 +1591,73 @@ mod meta_tests {
         assert!(lost.len() >= 3, "打不赢那局也要有几帧可数，否则那句 0 命中是空目录给的：实得 {}", lost.len());
         assert!(lost.iter().all(|(_, g, e)| *g == 0 && *e == 0), "一局没打赢却帧上亮了金边或加强线宽：那块金就不是结算通路的产物");
     }
+
+    /// 其十 的交付帧证人：**手牌行**右上角那串旗子，在落盘的帧文件里读不读得回来。
+    ///
+    /// 与上面那条金边证人同一口径、同一台戏（seed 2 两局）：单元测拿合成牌能把 `hand_row` 点亮，
+    /// 但通道开了而牌不在那一格里，交付件就一个字都没变——本帧补的正是"手里那张牌说不清自己是什么"。
+    ///
+    /// 认法只按两个属性同时命中：`font-size=LABEL_MEDIUM` × `text-anchor=end`。在场格那串是
+    /// `BODY_LARGE`(20)、`焰{}` 那串是 FLAME 色、两枚 `·` 是 22/start，都不会被误认成手牌旗子。
+    ///
+    /// 两臂的分工：① 打赢那局里 开端／造／升级+N 三族词都要读到，而**第 1 帧只有开端**（融合与升级
+    /// 发生在第一次结算里）；② 打不赢那局里第 1 帧之外**一个旗子都没有**——少了这一半，①就退化成
+    /// "帧够多总会亮"，那些词也就说不出"来自结算"四个字。
+    #[test]
+    fn the_hand_row_flags_reach_the_delivered_frames() {
+        use crate::md3::{lane, typo};
+        let n = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let win = std::env::temp_dir().join(format!("midline-handflags-win-{}-{n}", std::process::id()));
+        let lose = std::env::temp_dir().join(format!("midline-handflags-lose-{}-{n}", std::process::id()));
+        frames_dump(2, Faction::Ember, Difficulty::Easy, None, win.clone());
+        frames_dump(2, Faction::Ember, Difficulty::Normal, None, lose.clone());
+
+        let size = format!(r##"font-size="{}""##, typo::LABEL_MEDIUM);
+        let mark = format!(r##"fill="{}""##, lane::MARK_TEXT);
+        let scan = |dir: &std::path::Path| -> Vec<Vec<String>> {
+            let mut files: Vec<String> = std::fs::read_dir(dir)
+                .expect("帧目录应已建出")
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".svg"))
+                .collect();
+            files.sort();
+            files
+                .into_iter()
+                .map(|name| {
+                    let text = std::fs::read_to_string(dir.join(&name)).expect("帧文件应读得回来");
+                    text.split("<text ")
+                        .skip(1)
+                        .filter_map(|chunk| {
+                            let (head, rest) = chunk.split_once('>')?;
+                            (head.contains(&size) && head.contains(r##"text-anchor="end""##)).then(|| {
+                                assert!(head.contains(&mark), "手牌旗子换了墨色：{head}");
+                                rest.split('<').next().unwrap_or("").to_string()
+                            })
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let won = scan(&win);
+        let lost = scan(&lose);
+        std::fs::remove_dir_all(&win).ok();
+        std::fs::remove_dir_all(&lose).ok();
+
+        assert!(won.len() >= 10, "打赢那局至少要出十几帧，否则下面几句在稀疏样本上永真：实得 {}", won.len());
+        let all = |run: &Vec<Vec<String>>| -> Vec<String> { run.iter().flatten().cloned().collect() };
+        assert_eq!(won[0], vec!["开端".to_string()], "第 1 帧手里只该有开端：造与升级都在第一次结算里才发生");
+        let words = all(&won);
+        assert!(words.iter().any(|w| w == "造"), "打赢那局的帧里读不到「造」：自造牌从没进过手牌行的旗子串");
+        assert!(words.iter().any(|w| w.starts_with("升级+")), "打赢那局的帧里读不到「升级+N」：升过级的手牌在帧上仍只剩一圈线");
+        assert_eq!(
+            won[won.len() / 2..].iter().filter(|f| f.is_empty()).count(),
+            0,
+            "后半程有帧没带旗子：那张造过／升过的牌一旦进了手，其后每一帧都该在（放牌要占业力）"
+        );
+
+        assert!(lost.len() >= 3, "打不赢那局也要有几帧可数，否则那句 0 命中是空目录给的：实得 {}", lost.len());
+        assert_eq!(lost[0], vec!["开端".to_string()], "打不赢那局的第 1 帧也该有开端（起手手里那张不是结算给的）");
+        assert!(lost.iter().skip(1).all(|f| f.is_empty()), "一局没打赢却读到了旗子：那些词就不是结算通路的产物");
+    }
 }

@@ -354,6 +354,13 @@ pub mod layout {
     pub const FLAME_MARK: i32 = S;
     pub const FLAME_INSET: i32 = XS;
 
+    /// 方块左界相对格子右边界要缩进去的量：块宽加上内缩，**一处算清**。
+    /// 绘制侧（两行的标记右界）与几何侧（手牌那串标记的截断预算）读的是同一个和——
+    /// 分成两处各加一遍，就是"预算按一个宽、字按另一个宽"那种第二真值。
+    pub const fn badge_inset() -> i32 {
+        FLAME_MARK + FLAME_INSET
+    }
+
     /// 中线色带高，与带内文字基线。
     pub const MIDLINE_BAND_H: i32 = XL;
     pub const MIDLINE_BASELINE: i32 = M;

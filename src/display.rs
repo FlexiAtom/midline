@@ -160,11 +160,6 @@ fn candle_readout(hp: i32, cap: i32) -> String {
     format!("{shown}/{cap}{}", if hp <= 0 { " · 烛尽" } else { "" })
 }
 
-/// 业火足额标记块左界相对格右边的内缩：块宽加内缩，一处算清，别在两处各写一遍同一个和。
-fn badge_inset() -> i32 {
-    layout::FLAME_MARK + layout::FLAME_INSET
-}
-
 /// 值/阈值那一对。生效≠基础时两枚都印（`12 / 4→3`）：只给生效值，玩家看不出这一格正被人削着阈值，
 /// 而"为什么这格突然满了"是那条规则的全部后果。相等时不补 `→`——同一对数写两遍是噪声不是信息。
 /// 文本路（TUI/CLI）仍只印一枚，那是刻意的口径分叉，理由记在档 §5 D2。
@@ -231,36 +226,61 @@ fn card_cell(cell: Rect, c: &CardView, fill: &str, edge: &'static str) -> Vec<Pr
             &format!("费{} 焰{}", c.cost, c.flame),
         ),
     ];
-    let mut marks: Vec<String> = Vec::new();
-    if c.crafted {
-        marks.push("造".to_string());
-    }
-    if c.starter {
-        marks.push("开端".to_string());
-    }
-    if c.upgrades > 0 {
-        marks.push(format!("升级+{}", c.upgrades));
-    }
-    if c.trait_label != "无" {
-        marks.push(c.trait_label.to_string());
-    }
-    // 开端牌的 `starter` 与 `trait_label` 会撞成同一个词（快照两个字段、中文一个说法），印两遍是噪声不是信息。
-    marks.dedup();
-    // 业火足额标记：一个实心小块，不配文字——它是给眼睛看的状态，不是第三条数值。
-    let lit = c.flame >= c.threshold;
+    let marks = card_marks(c, true);
+    let lit = flame_full(c);
     // 标记占右上角那一格，属性串是右对齐的：不腾出这块宽度，长属性（`战吼:同列+2焰`）会被方块压住尾字。
     if !marks.is_empty() {
-        let marks_x = x + w - if lit { badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD };
-        out.push(label(marks_x, y + layout::CELL_ROW1, typo::BODY_LARGE, lane::MARK_TEXT, Anchor::End, &marks.join("·")));
+        out.push(label(marks_right(cell, lit), y + layout::CELL_ROW1, typo::BODY_LARGE, lane::MARK_TEXT, Anchor::End, &marks.join("·")));
     }
     if !c.skills.is_empty() {
         out.push(label(x + w - layout::CELL_PAD, y + layout::CELL_ROW3, typo::LABEL_LARGE, lane::META, Anchor::End, &c.skills.join("+")));
     }
     if lit {
-        let mark = Rect::new(x + w - badge_inset(), y + layout::FLAME_INSET, layout::FLAME_MARK, layout::FLAME_MARK);
-        out.push(bordered(mark, lane::FLAME, shape::NONE, lane::FLAME, layout::STROKE_HAIRLINE, false));
+        out.push(bordered(flame_badge(cell), lane::FLAME, shape::NONE, lane::FLAME, layout::STROKE_HAIRLINE, false));
     }
     out
+}
+
+/// 右上角那一串标记的**词表**：在场格与手牌格共用这一支，两处不许各写一份 if 链。
+/// `with_trait` 是**宽度**口径而不是词表口径：手牌八格每格净宽 124，ROW1 右侧扣掉 `[i]` 与那枚足额方块
+/// 只剩 80.9 单位，最宽的特性串在最省的一档字号下也要 103.8（算术底账见档 §2 正证），所以手牌只摆前三个旗子。
+/// 去重按**词**不按相邻：开端牌的 `starter` 与 `trait_label` 会撞成同一个词（快照两个字段、中文一个说法），
+/// 而「升级」正好插在两者中间——相邻去重在那一格漏印成「开端·升级+3·开端」（可达性见档 §2 反证 4）。
+fn card_marks(c: &CardView, with_trait: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |word: String| {
+        if !out.contains(&word) {
+            out.push(word);
+        }
+    };
+    if c.crafted {
+        push("造".to_string());
+    }
+    if c.starter {
+        push("开端".to_string());
+    }
+    if c.upgrades > 0 {
+        push(format!("升级+{}", c.upgrades));
+    }
+    if with_trait && c.trait_label != "无" {
+        push(c.trait_label.to_string());
+    }
+    out
+}
+
+/// 业火足额：这一格的焰已到阈值。在场格与手牌格读同一条判据，别在两边各写一遍 `>=`。
+fn flame_full(c: &CardView) -> bool {
+    c.flame >= c.threshold
+}
+
+/// 标记串的右界：亮块在场时要让出方块那一格宽（加窄内缩），否则方块压住尾字。
+fn marks_right(cell: Rect, lit: bool) -> i32 {
+    cell.x + cell.w - if lit { layout::badge_inset() + layout::CELL_PAD_NARROW } else { layout::CELL_PAD }
+}
+
+/// 业火足额方块：一个实心小块，不配文字——它是给眼睛看的状态，不是第三条数值。
+fn flame_badge(cell: Rect) -> Rect {
+    Rect::new(cell.x + cell.w - layout::badge_inset(), cell.y + layout::FLAME_INSET, layout::FLAME_MARK, layout::FLAME_MARK)
 }
 
 /// 空格子：虚线框加一个点。它**照样有面积**——"这儿能放"是位置信息，接得住一次命中。
@@ -298,6 +318,11 @@ fn card_row(cells: &[(Region, Rect)], cards: &[Option<CardView>], fill: &str, ed
 /// 手牌行：一格一张，序号就是落点命令里的那个 idx。截断预算来自几何（它是格宽的函数）。
 /// 边框那两条通道（金＝造过、粗＝升过）与在场格用**同一枚 token**：结算里刚造出来／刚升上去的那张牌，
 /// 接下来几帧大概率还躺在手牌里（放牌要占业力，贵牌常常一整关没上手），只认在场格就等于"证人从不上镜"。
+///
+/// 右上角那串旗子（造／开端／升级+N）与那枚业火足额方块同理：**在场格看得见、手牌看不见**，而"要不要落这张"
+/// 恰恰是落子之前那一帧的事。字号取 `LABEL_MEDIUM` 而非在场格那档 `BODY_LARGE`——不是审美，是 ROW1 只剩 80.9 单位
+/// 宽（`[i]` 与方块各占一角），算术底账与口径改口都记在档 §2。特性与技能两串**不在这里补**：它们要的是详情面，
+/// 不是往 140 单位的格里塞 103.8 单位的字，去处记在档 §3。
 fn hand_row(hand: &Hand, cards: &[CardView], marks: &[(Region, Layer)]) -> Vec<Prim> {
     debug_assert_eq!(hand.cells.len(), cards.len(), "几何表与快照的手牌数不一致：两份盘面");
     let mut out = Vec::new();
@@ -333,6 +358,14 @@ fn hand_row(hand: &Hand, cards: &[CardView], marks: &[(Region, Layer)]) -> Vec<P
                 Anchor::End,
                 &format!("焰{}", c.flame),
             ));
+        }
+        let lit = flame_full(c);
+        let flags = card_marks(c, false);
+        if !flags.is_empty() {
+            out.push(label(marks_right(*cell, lit), y + layout::HAND_ROW1, typo::LABEL_MEDIUM, lane::MARK_TEXT, Anchor::End, &touch::fit(&flags.join("·"), hand.marks_budget)));
+        }
+        if lit {
+            out.push(bordered(flame_badge(*cell), lane::FLAME, shape::NONE, lane::FLAME, layout::STROKE_HAIRLINE, false));
         }
     }
     out
@@ -455,7 +488,7 @@ mod tests {
     use super::layout::*;
     use super::typo::*;
     use super::*;
-    use crate::battle::{Battle, DailyRule, Difficulty, Row};
+    use crate::battle::{Battle, DailyRule, Difficulty, Row, HAND_LIMIT};
     use crate::boss::BossId;
     use crate::model::{CardInst, Faction, Skill, faction_cards};
 
@@ -748,18 +781,120 @@ mod tests {
     }
 
     /// 手牌行里每格那一圈边：按序取出 (描边色, 线宽)，第 i 块对应第 i 张手牌。
-    /// 手牌一格只出一块带边的面（其余是字），所以这个序就是格子的序。
+    /// 认的是**满格高**那块底——足额那枚方块也带边（与在场格同一写法），它不是边框通道，混进来
+    /// 就会把"一格一圈边"读成"一格两圈边"。
     fn hand_borders(prims: &[Prim]) -> Vec<(String, i32)> {
         prims
             .iter()
             .filter_map(|p| match p {
-                Prim::Block { edge: Some(e), .. } => Some((e.stroke.clone(), e.width)),
+                Prim::Block { h, edge: Some(e), .. } if *h == HAND_H => Some((e.stroke.clone(), e.width)),
                 _ => None,
             })
             .collect()
     }
 
-    /// 一块格子的全部**面**（几何＋描边色＋线宽），刻意不含任何文字：给"遮住字"那条测当对照面。
+    /// 手牌某一格右上角那串旗子（认 `MARK_TEXT` ＋右锚＋`LABEL_MEDIUM` 三件一起命中，与在场格那串差一档字号）。
+    /// 按格子矩形认领，不按出现次序：不是每张牌都有旗子，序会自己错位。
+    fn hand_flags_at(prims: &[Prim], cell: &Rect) -> Option<String> {
+        prims.iter().find_map(|p| match p {
+            Prim::Label { x, y, em, fill, anchor, text }
+                if *anchor == Anchor::End && *em == LABEL_MEDIUM && fill == lane::MARK_TEXT && *x >= cell.x && *x <= cell.x + cell.w && *y >= cell.y && *y <= cell.y + cell.h =>
+                Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    /// 手牌格右上角那串旗子：在场格摆的词，手牌一格不许少摆、也不许多摆特性那一串。
+    /// 多摆的那一串本来就该出局——ROW1 右侧扣掉 `[i]` 与足额方块只剩 `80.9` 单位，最宽特性串`103.8`（档 §2 正证）。
+    #[test]
+    fn the_hand_row_prints_the_flag_words_the_board_row_prints() {
+        let mut v = normal().view();
+        let base = v.hand[0].clone();
+        v.hand[0] = CardView { crafted: false, starter: false, upgrades: 0, trait_label: "战吼:同列+2焰", flame: 0, ..base.clone() };
+        v.hand[1] = CardView { crafted: true, starter: false, upgrades: 0, trait_label: "战吼:同列+2焰", flame: 0, ..base.clone() };
+        v.hand[2] = CardView { crafted: false, starter: true, upgrades: 3, trait_label: "开端", flame: 0, ..base.clone() };
+        v.hand[3] = CardView { crafted: false, starter: false, upgrades: 2, trait_label: "无", flame: 0, ..base };
+        let hand = layout_of(&v).hand;
+        let prims = hand_row(&hand, &v.hand, &[]);
+        let got: Vec<String> = hand.cells.iter().map(|(_, c)| hand_flags_at(&prims, c).unwrap_or_default()).collect();
+        assert_eq!(got[..4], ["", "造", "开端·升级+3", "升级+2"], "手牌那串旗子与在场格不同词表，或多摆/漏摆了某张：{got:?}");
+        assert!(
+            got.iter().all(|g| !g.contains("战吼")),
+            "特性串挤进手牌那一格了（它要的是详情面，不是这 140 单位）：{got:?}"
+        );
+    }
+
+    /// 业火足额那枚方块：同一张牌摆在在场格与摆在手牌格，方块**大小与内缩**必须一模一样，
+    /// 否则"满了"这件事在两处读出两个尺寸。顺带钉住未到阈那一格不画块（它不该凭`焰>0`就亮）。
+    #[test]
+    fn the_full_flame_badge_is_the_same_square_in_both_rows() {
+        let mut v = normal().view();
+        let base = v.hand[0].clone();
+        let lit = CardView { flame: base.threshold, ..base.clone() };
+        let dim = CardView { flame: base.threshold - 1, ..base.clone() };
+        let badge = |prims: &[Prim], cell: &Rect| -> Option<(i32, i32, i32)> {
+            prims.iter().find_map(|p| match p {
+                Prim::Block { x, w, h, fill, .. } if fill == lane::FLAME && *w == FLAME_MARK && x + w > cell.x => Some((*w, *h, cell.x + cell.w - (x + w))),
+                _ => None,
+            })
+        };
+        v.hand[0] = lit.clone();
+        let hand = layout_of(&v).hand;
+        let cell = Rect::new(0, 0, 288, CELL_H);
+        let on_board = badge(&card_cell(cell, &lit, lane::PLAYER_FILL, lane::PLAYER_EDGE), &cell).expect("在场格那枚足额方块没画");
+        let in_hand = badge(&hand_row(&hand, &v.hand, &[]), &hand.cells[0].1).expect("手牌那枚足额方块没画");
+        assert_eq!(in_hand, on_board, "手牌与在场格读出的足额方块不是同一块：手牌 {in_hand:?}／在场格 {on_board:?}");
+
+        v.hand[0] = dim;
+        let hand = layout_of(&v).hand;
+        assert!(badge(&hand_row(&hand, &v.hand, &[]), &hand.cells[0].1).is_none(), "焰差一格就到阈也画了方块：这一格的判据不是「有焰」而是「到阈」");
+    }
+
+    /// 手牌那一格里的每一行字都得有地方站：ROW1 那三样（`[i]`、旗子串、足额方块）按左右次序不许相接，
+    /// 且整排不许越出格子。这把尺是本帧立的——在此之前"补字会不会压住别的字"全凭眼看。
+    /// 两档桌面对照：今日可达的最坏串**不许**被截断；人造的超预算串**必须**被截住（否则这条检与那道 `fit` 都在空转）。
+    #[test]
+    fn nothing_in_a_hand_cell_overlaps_its_neighbours() {
+        fn worst(base: &CardView, upgrades: u8) -> CardView {
+            CardView { starter: true, upgrades, trait_label: "开端", flame: base.threshold, threshold: base.threshold, base_threshold: base.threshold, ..base.clone() }
+        }
+        for (tag, upgrades, want_ellipsis) in [("今日可达最坏（开端＋升级三档＋焰已到阈）", 3u8, false), ("人造超预算（三位数档数，今天不可达）", 255u8, true)] {
+            let mut v = normal().view();
+            let base = v.hand[0].clone();
+            // 摆满 8 格：`hw` 是手牌数的函数，少于 8 就量不到最窄那一档（`HAND_LIMIT` 是上限，开局手牌只有几张）。
+            v.hand = (0..HAND_LIMIT).map(|_| worst(&base, upgrades)).collect();
+            let hand = layout_of(&v).hand;
+            let prims = hand_row(&hand, &v.hand, &[]);
+            let mut saw_ellipsis = false;
+            for (i, (_, cell)) in hand.cells.iter().enumerate() {
+                let flags = hand_flags_at(&prims, cell).unwrap_or_else(|| panic!("{tag}：第 {i} 格连旗子都没画，这条检空转"));
+                saw_ellipsis |= flags.contains('…');
+                let idx_lo = cell.x + CELL_PAD_NARROW;
+                let idx_hi = idx_lo + (touch::display_width(&format!("[{i}]")) * LABEL_LARGE as f64) as i32;
+                let flags_hi = cell.x + cell.w - (badge_inset() + CELL_PAD_NARROW);
+                let flags_lo = flags_hi - (touch::display_width(&flags) * LABEL_MEDIUM as f64) as i32;
+                let badge_lo = cell.x + cell.w - badge_inset();
+                let badge_hi = badge_lo + FLAME_MARK;
+                for (name, lo, hi) in [("[i]", idx_lo, idx_hi), ("旗子", flags_lo, flags_hi), ("方块", badge_lo, badge_hi)] {
+                    assert!(lo >= cell.x && hi <= cell.x + cell.w, "{tag}：第 {i} 格的「{name}」越出格子（{lo}..{hi} 不在 {}..{}）", cell.x, cell.x + cell.w);
+                }
+                assert!(idx_hi <= flags_lo, "{tag}：第 {i} 格「[i]」压到旗子（[i] 右界 {idx_hi} ／ 旗子左界 {flags_lo}）");
+                assert!(flags_hi <= badge_lo, "{tag}：第 {i} 格旗子压到足额方块（旗子右界 {flags_hi} ／ 方块左界 {badge_lo}）");
+            }
+            assert_eq!(saw_ellipsis, want_ellipsis, "{tag}：省略号该不该出现读错了（今日词表不许截断，超预算那一档必须真截住）");
+        }
+    }
+
+    /// 开端牌升过级：在场格那串不许再印两遍「开端」。旧写法用相邻去重，而`升级`正好插在两者中间，
+    /// 于是码面上会出「开端·升级+2·开端」——可达性见档 §2 反证 4（`upgrade_card` 三道闸不查 `is_starter()`）。
+    #[test]
+    fn the_board_row_does_not_print_opening_twice_when_the_starter_is_upgraded() {
+        let v = normal().view();
+        let c = CardView { starter: true, upgrades: 2, trait_label: "开端", flame: 0, ..v.hand[0].clone() };
+        let joined = marks_joined(&card_cell(Rect::new(0, 0, 288, CELL_H), &c, lane::PLAYER_FILL, lane::PLAYER_EDGE)).expect("在场格那串标记没画");
+        assert_eq!(joined, "开端·升级+2", "「开端」在同一串里出现两次（或去重把别的词一起吃掉）：{joined}");
+    }
+
     fn cell_faces(prims: &[Prim]) -> Vec<(i32, i32, i32, i32, String, i32)> {
         prims
             .iter()
